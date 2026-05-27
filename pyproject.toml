@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "freeflix-cli"
+version = "1.0.0"
+description = "Watch movies, series, and anime from your terminal — multi-language, multi-source, no browser required. A maintained fork of autoflix-cli."
+readme = "README.md"
+requires-python = ">=3.9.2"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+    { name = "freedy237", email = "joresdomche@gmail.com" },
+]
+keywords = ["streaming", "anime", "movies", "series", "VOSTFR", "VF", "anime-sama", "haruna", "mpv"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "curl-cffi>=0.13.0",
+    "flask>=3.1.2",
+    "html5lib>=1.1",
+    "jsbeautifier>=1.15.4",
+    "m3u8>=6.0.0",
+    "platformdirs>=4.0.0",
+    "pycryptodome>=3.23.0",
+    "readchar>=4.2.1",
+    "rich>=14.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/freedy237/freeflix-cli"
+Repository = "https://github.com/freedy237/freeflix-cli.git"
+Issues = "https://github.com/freedy237/freeflix-cli/issues"
+"Upstream (autoflix-cli)" = "https://github.com/PaulExplorer/autoflix-cli"
+
+[project.scripts]
+freeflix = "freeflix_cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/freeflix_cli"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"data/source_portal.jsonc" = "share/freeflix-cli/data/source_portal.jsonc"
