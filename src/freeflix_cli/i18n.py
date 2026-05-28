@@ -116,6 +116,13 @@ _FR = {
     # ── Resume / continue-watching banner ───────────────────────
     "▶ Resume:": "▶ Reprendre :",
 
+    # ── Update notifier ─────────────────────────────────────────
+    "A new version of FreeFlix is available!": "Une nouvelle version de FreeFlix est dispo !",
+    "Update available": "Mise à jour disponible",
+    "Installed": "Installée",
+    "Latest": "Dernière",
+    "Upgrade with one of": "Mets à jour avec une de ces commandes",
+
     # ── Misc ────────────────────────────────────────────────────
     "Resuming": "Reprise de",
     "Loading": "Chargement",
