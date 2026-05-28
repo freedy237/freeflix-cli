@@ -141,6 +141,19 @@ That's it. The menu walks you through everything.
 | **ALT + T** | Show track diagnostics |
 | **`i`** | Toggle mpv stats overlay |
 
+### Hybrid laptops (Intel/AMD iGPU + Nvidia dGPU)
+
+If you're on a Linux Optimus laptop, FreeFlix detects the Nvidia card via `nvidia-smi` and routes mpv onto it automatically (no FPS drop with Anime4K). To also have this when launching `mpv` or `haruna` standalone (outside FreeFlix), copy the wrappers :
+
+```bash
+cp scripts/wrappers/mpv    ~/.local/bin/mpv
+cp scripts/wrappers/haruna ~/.local/bin/haruna
+chmod +x ~/.local/bin/{mpv,haruna}
+```
+
+(Make sure `~/.local/bin` is in your `$PATH` before `/usr/bin`.)
+The Linux `install.sh` does this for you when it detects an Nvidia card.
+
 ### Settings menu
 
 `freeflix → ⚙ Settings (AniList)` exposes :

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Haruna wrapper : même offload PRIME que pour mpv. Haruna embarque
+# libmpv dans son propre process, donc les env vars set ici sont
+# bien hérités par le rendu.
+
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q GPU; then
+    export __NV_PRIME_RENDER_OFFLOAD=1
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    export __VK_LAYER_NV_optimus=NVIDIA_only
+fi
+
+exec /usr/bin/haruna "$@"

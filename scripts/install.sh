@@ -123,5 +123,28 @@ install_system_pkgs
 install_freeflix
 install_mpv_config
 
+# ─── 5. Optional : Nvidia PRIME wrappers for hybrid laptops ─────────
+install_nvidia_wrappers() {
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        return 0  # No Nvidia GPU → nothing to do
+    fi
+    log "Nvidia GPU detected. Install PRIME wrappers so mpv/haruna route"
+    log "to the dGPU automatically (faster Anime4K) ?"
+    read -rp "  [Y/n] " ans
+    [[ "${ans:-Y}" =~ ^[Nn] ]] && return 0
+
+    mkdir -p "$HOME/.local/bin"
+    cp "$PROJECT_ROOT/scripts/wrappers/mpv"    "$HOME/.local/bin/mpv"
+    cp "$PROJECT_ROOT/scripts/wrappers/haruna" "$HOME/.local/bin/haruna"
+    chmod +x "$HOME/.local/bin/mpv" "$HOME/.local/bin/haruna"
+
+    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+        warn "$HOME/.local/bin is NOT in PATH — add it to ~/.bashrc / ~/.zshrc :"
+        warn "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+    ok "Nvidia PRIME wrappers installed"
+}
+install_nvidia_wrappers
+
 echo
 ok "Installation complete. Run :  ${GREEN}freeflix${NC}"
