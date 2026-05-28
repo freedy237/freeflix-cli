@@ -47,6 +47,20 @@ def create_session(headers_dict=None):
     # Apply specific DNS options
     session.curl_options.update(DNS_OPTIONS)
 
+    # ─── Slow CDN tolerance ───────────────────────────────────────
+    # By default libcurl aborts a transfer when speed stays below
+    # 1 byte/sec for 15 seconds — that's the "Operation too slow"
+    # error we saw on congested CDNs. We loosen this :
+    #   - LOW_SPEED_LIMIT = 100 bytes/sec
+    #   - LOW_SPEED_TIME  = 60 seconds
+    # Result : we abort only after a full minute of effectively zero
+    # throughput (rather than 15s). The autoflix-style retry layer
+    # then kicks in.
+    session.curl_options.update({
+        CurlOpt.LOW_SPEED_LIMIT: 100,
+        CurlOpt.LOW_SPEED_TIME: 60,
+    })
+
     if headers_dict:
         session.headers.update(headers_dict)
 
@@ -70,12 +84,18 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3):
             if "Range" in request.headers:
                 req_headers["Range"] = request.headers["Range"]
 
+            # For streamed responses (segments), allow a much longer
+            # overall window — slow CDNs may still deliver after a
+            # 30-60 s lull. For non-stream (m3u8 manifests), 15 s is
+            # plenty.
+            effective_timeout = 180 if stream else 15
+
             response = session.request(
                 method=method,
                 url=url,
                 headers=req_headers,
                 stream=stream,
-                timeout=15,  # Reasonable timeout
+                timeout=effective_timeout,
             )
 
             # If 429 error (Rate Limit) or 5xx, retry
