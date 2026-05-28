@@ -105,6 +105,52 @@ def _browse_local_downloads():
         pass
 
 
+def _show_about(version: str):
+    """Render the About panel with version, links, credits."""
+    from rich.panel import Panel
+    from rich.text import Text
+
+    body = Text()
+    body.append("\n  FreeFlix CLI", style="bold cyan")
+    body.append(f"  v{version}\n\n", style="bold yellow")
+    body.append("  " + t("Watch movies, series and anime from your terminal.\n"),
+                style="white")
+    body.append("\n")
+    body.append(f"  GitHub  : ", style="dim")
+    body.append("https://github.com/freedy237/freeflix-cli\n", style="cyan underline")
+    body.append(f"  PyPI    : ", style="dim")
+    body.append("https://pypi.org/project/freeflix-cli/\n", style="cyan underline")
+    body.append(f"  Issues  : ", style="dim")
+    body.append("https://github.com/freedy237/freeflix-cli/issues\n", style="cyan underline")
+    body.append("\n")
+    body.append(f"  {t('License')} : ", style="dim")
+    body.append("GPL-3.0-or-later\n", style="white")
+    body.append(f"  {t('Author')}  : ", style="dim")
+    body.append("freedy237 ", style="white")
+    body.append("<joresdomche@gmail.com>\n", style="dim")
+    body.append("\n")
+    body.append(f"  {t('Based on')} ", style="dim")
+    body.append("autoflix-cli", style="bold white")
+    body.append(f" {t('by')} ", style="dim")
+    body.append("PaulExplorer\n", style="white")
+    body.append("    ", style="dim")
+    body.append("https://github.com/PaulExplorer/autoflix-cli\n", style="cyan underline")
+    body.append(f"\n  {t('Anime4K shaders by')} ", style="dim")
+    body.append("bloc97", style="white")
+    body.append(" — https://github.com/bloc97/Anime4K\n", style="cyan underline")
+    body.append("\n")
+
+    console.print(
+        Panel(
+            body,
+            title=f"[bold cyan]ℹ  {t('About')}[/bold cyan]",
+            subtitle=f"[dim]freeflix v{version}[/dim]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+
 def check_language_setup():
     """Verify if a language is set, if not, prompt for first setup."""
     if not tracker.get_language():
@@ -167,9 +213,16 @@ def main():
     # Start Proxy Server
     proxy.start_proxy_server()
 
+    # Resolve installed version once, for the home header and About panel.
+    try:
+        import importlib.metadata as _im
+        _VERSION = _im.version("freeflix-cli")
+    except Exception:
+        _VERSION = "dev"
+
     while True:
         clear_screen()
-        print_header(t("FreeFlix CLI - Home"))
+        print_header(f"{t('FreeFlix CLI - Home')}  •  v{_VERSION}")
 
         # 1. Continue Watching (History)
         last_watch = tracker.get_last_global()
@@ -291,6 +344,7 @@ def main():
                     f"{t('Parallel Downloads')} ({par_n})",
                     f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})",
                     f"Nvidia GPU offload ({nv_mode})",
+                    f"ℹ {t('About')}",
                     t("Back"),
                 ]
 
@@ -367,6 +421,9 @@ def main():
                     c = select_from_list(nv_opts, t("Nvidia GPU offload:"))
                     tracker.set_nvidia_offload(nv_vals[c])
                     print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
+                    pause()
+                elif s_choice == 8:
+                    _show_about(_VERSION)
                     pause()
                 else:
                     break

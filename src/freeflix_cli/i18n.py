@@ -116,6 +116,16 @@ _FR = {
     # ── Resume / continue-watching banner ───────────────────────
     "▶ Resume:": "▶ Reprendre :",
 
+    # ── About panel ─────────────────────────────────────────────
+    "About": "À propos",
+    "Watch movies, series and anime from your terminal.\n":
+        "Films, séries et anime directement depuis ton terminal.\n",
+    "License": "Licence",
+    "Author": "Auteur",
+    "Based on": "Basé sur",
+    "by": "par",
+    "Anime4K shaders by": "Shaders Anime4K par",
+
     # ── Update notifier ─────────────────────────────────────────
     "A new version of FreeFlix is available!": "Une nouvelle version de FreeFlix est dispo !",
     "Update available": "Mise à jour disponible",
