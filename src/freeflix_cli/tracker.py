@@ -179,6 +179,19 @@ class ProgressTracker:
         self.data["player"] = player_code
         self._save_data()
 
+    # --- Nvidia PRIME offload for hybrid Linux laptops ---
+
+    def get_nvidia_offload(self) -> str:
+        """One of 'auto' (detect via nvidia-smi), 'on', 'off'. Default: auto."""
+        val = self.data.get("nvidia_offload", "auto")
+        return val if val in ("auto", "on", "off") else "auto"
+
+    def set_nvidia_offload(self, val: str):
+        if val not in ("auto", "on", "off"):
+            val = "auto"
+        self.data["nvidia_offload"] = val
+        self._save_data()
+
     # --- Parallel download workers (1..4) ---
 
     def get_parallel_downloads(self) -> int:

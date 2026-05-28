@@ -26,6 +26,50 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0"
 )
 
+# ─── Optimus / PRIME : detect Nvidia dGPU and offload mpv onto it ───
+# On hybrid Linux laptops (Intel iGPU + Nvidia dGPU), launching mpv with
+# these env vars routes rendering through the Nvidia card, which has
+# 5–10× more shader headroom for Anime4K and supports NVDEC for fast
+# hardware decoding. The detection result is cached for the process so
+# we don't shell out to nvidia-smi at every play.
+_nvidia_offload_cache = None
+
+
+def _has_nvidia_dgpu() -> bool:
+    """Return True if `nvidia-smi -L` reports at least one GPU."""
+    global _nvidia_offload_cache
+    if _nvidia_offload_cache is not None:
+        return _nvidia_offload_cache
+    nv = shutil.which("nvidia-smi")
+    if not nv:
+        _nvidia_offload_cache = False
+        return False
+    try:
+        r = subprocess.run([nv, "-L"], capture_output=True, text=True, timeout=2)
+        _nvidia_offload_cache = r.returncode == 0 and "GPU" in r.stdout
+    except Exception:
+        _nvidia_offload_cache = False
+    return _nvidia_offload_cache
+
+
+def _nvidia_env(base_env=None) -> dict:
+    """
+    Return an env dict augmented with the Nvidia PRIME offload variables
+    if the user has the offload toggle enabled (default : auto-detect).
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    setting = tracker.get_nvidia_offload()  # "auto" | "on" | "off"
+    use_nv = False
+    if setting == "on":
+        use_nv = True
+    elif setting == "auto":
+        use_nv = _has_nvidia_dgpu()
+    if use_nv:
+        env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
+        env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
+        env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
+    return env
+
 
 PLAYERS: Dict[str, Dict[str, str]] = {
     "mpv": {"display": "mpv"},
@@ -647,7 +691,8 @@ def play_video(
                     pos_args, pos_file, pos_key = _mpv_position_args(title)
                     cmd.extend(pos_args)
 
-                subprocess.run(cmd, check=True)
+                run_env = _nvidia_env() if player_name in ("mpv", "haruna") else None
+                subprocess.run(cmd, check=True, env=run_env)
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
                 print_success("Playback completed successfully!")
@@ -722,7 +767,7 @@ def play_video(
                     pos_args_d, pos_file_d, pos_key_d = _mpv_position_args(title)
                     cmd.extend(pos_args_d)
                     cmd.append(stream_url)
-                    subprocess.run(cmd, check=True)
+                    subprocess.run(cmd, check=True, env=_nvidia_env())
                     _save_mpv_position(pos_file_d, pos_key_d)
 
                 print_success("Playback completed successfully!")

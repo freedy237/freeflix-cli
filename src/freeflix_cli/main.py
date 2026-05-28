@@ -279,6 +279,7 @@ def main():
                 quality = tracker.get_download_quality()
                 os_key = tracker.get_opensubtitles_key()
                 par_n = tracker.get_parallel_downloads()
+                nv_mode = tracker.get_nvidia_offload()
                 from . import notifications as notif_mod
                 notif_on = notif_mod.is_systemd_timer_installed()
                 opts = [
@@ -289,6 +290,7 @@ def main():
                     f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})",
                     f"{t('Parallel Downloads')} ({par_n})",
                     f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})",
+                    f"Nvidia GPU offload ({nv_mode})",
                     t("Back"),
                 ]
 
@@ -357,6 +359,15 @@ def main():
                                     "and 'libnotify' is installed (sudo dnf install libnotify)."
                                 )
                             pause()
+                elif s_choice == 7:
+                    print_info("On laptops with Intel/AMD iGPU + Nvidia dGPU, route")
+                    print_info("mpv to the Nvidia card for far better Anime4K perf.")
+                    nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
+                    nv_vals = ["auto", "on", "off"]
+                    c = select_from_list(nv_opts, "Nvidia GPU offload:")
+                    tracker.set_nvidia_offload(nv_vals[c])
+                    print_success(f"Nvidia offload: {nv_vals[c]}")
+                    pause()
                 else:
                     break
             continue
