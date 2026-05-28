@@ -12,6 +12,7 @@ from .cli_utils import (
 )
 from .i18n import t
 from .update_checker import check_update
+from . import setup_assistant
 from .tracker import tracker
 from .providers_registry import registry
 from .languages import LANGUAGES, get_language_display, get_all_languages
@@ -171,6 +172,29 @@ def check_language_setup():
 
 
 def main():
+    # ── CLI flags (lightweight, before anything else) ──────────
+    if "--setup" in sys.argv:
+        setup_assistant.run_setup(force=True)
+        return 0
+    if "--version" in sys.argv or "-V" in sys.argv:
+        try:
+            import importlib.metadata as _im
+            print(_im.version("freeflix-cli"))
+        except Exception:
+            print("dev")
+        return 0
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("freeflix — terminal streaming for movies / series / anime\n")
+        print("  freeflix           launch the TUI")
+        print("  freeflix --setup   re-run the first-launch setup wizard")
+        print("  freeflix --version print the installed version")
+        print("  freeflix --help    this message")
+        return 0
+
+    # ── First-launch setup (only if user hasn't declined) ──────
+    if setup_assistant.should_prompt_setup():
+        setup_assistant.run_setup(force=False)
+
     # Register Providers
     registry.register(
         "🎌 Anime-Sama (Anime and animated movies)",

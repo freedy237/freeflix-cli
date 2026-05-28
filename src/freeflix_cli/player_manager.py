@@ -3,6 +3,7 @@ import platform
 import os
 import re
 import subprocess
+import sys
 import json
 import urllib.parse
 import time
@@ -26,49 +27,85 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0"
 )
 
-# ─── Optimus / PRIME : detect Nvidia dGPU and offload mpv onto it ───
-# On hybrid Linux laptops (Intel iGPU + Nvidia dGPU), launching mpv with
-# these env vars routes rendering through the Nvidia card, which has
-# 5–10× more shader headroom for Anime4K and supports NVDEC for fast
-# hardware decoding. The detection result is cached for the process so
-# we don't shell out to nvidia-smi at every play.
-_nvidia_offload_cache = None
+# ─── Optimus / PRIME : detect dGPU and offload mpv onto it ──────────
+# On hybrid Linux laptops (iGPU + dGPU), launching mpv with the right
+# env vars routes rendering to the dedicated card :
+#   - Nvidia : __NV_PRIME_RENDER_OFFLOAD + __GLX_VENDOR_LIBRARY_NAME
+#   - AMD    : DRI_PRIME=1
+# Both give 5-10× shader headroom for Anime4K. Results are cached for
+# the process to avoid shelling out repeatedly.
+_gpu_cache = {"nvidia": None, "amd": None}
 
 
 def _has_nvidia_dgpu() -> bool:
-    """Return True if `nvidia-smi -L` reports at least one GPU."""
-    global _nvidia_offload_cache
-    if _nvidia_offload_cache is not None:
-        return _nvidia_offload_cache
+    if _gpu_cache["nvidia"] is not None:
+        return _gpu_cache["nvidia"]
     nv = shutil.which("nvidia-smi")
     if not nv:
-        _nvidia_offload_cache = False
+        _gpu_cache["nvidia"] = False
         return False
     try:
         r = subprocess.run([nv, "-L"], capture_output=True, text=True, timeout=2)
-        _nvidia_offload_cache = r.returncode == 0 and "GPU" in r.stdout
+        _gpu_cache["nvidia"] = r.returncode == 0 and "GPU" in r.stdout
     except Exception:
-        _nvidia_offload_cache = False
-    return _nvidia_offload_cache
+        _gpu_cache["nvidia"] = False
+    return _gpu_cache["nvidia"]
 
 
-def _nvidia_env(base_env=None) -> dict:
+def _has_amd_dgpu() -> bool:
     """
-    Return an env dict augmented with the Nvidia PRIME offload variables
-    if the user has the offload toggle enabled (default : auto-detect).
+    True if lspci sees an AMD/ATI/Radeon graphics device. We don't
+    distinguish iGPU vs dGPU here ; DRI_PRIME=1 on a system with
+    only one AMD GPU is a no-op anyway.
+    """
+    if _gpu_cache["amd"] is not None:
+        return _gpu_cache["amd"]
+    if not sys.platform.startswith("linux"):
+        _gpu_cache["amd"] = False
+        return False
+    if not shutil.which("lspci"):
+        _gpu_cache["amd"] = False
+        return False
+    try:
+        r = subprocess.run(["lspci"], capture_output=True, text=True, timeout=2)
+        out = (r.stdout or "").lower()
+        _gpu_cache["amd"] = (
+            r.returncode == 0
+            and ("amd" in out or "ati " in out or "radeon" in out)
+            and ("vga" in out or "3d controller" in out or "display" in out)
+        )
+    except Exception:
+        _gpu_cache["amd"] = False
+    return _gpu_cache["amd"]
+
+
+def _gpu_offload_env(base_env=None) -> dict:
+    """
+    Return an env dict augmented with PRIME offload variables when the
+    user setting is auto + a dGPU is detected (Nvidia preferred over AMD
+    if both are present), or 'on'. PRIME is Linux-only ; on macOS and
+    Windows the OS picks the GPU automatically and we return env as-is.
     """
     env = dict(base_env if base_env is not None else os.environ)
+    if not sys.platform.startswith("linux"):
+        return env
+
     setting = tracker.get_nvidia_offload()  # "auto" | "on" | "off"
-    use_nv = False
-    if setting == "on":
-        use_nv = True
-    elif setting == "auto":
-        use_nv = _has_nvidia_dgpu()
-    if use_nv:
+    if setting == "off":
+        return env
+
+    # 'auto' / 'on' : prefer Nvidia (richer feature set), fall back to AMD
+    if _has_nvidia_dgpu():
         env["__NV_PRIME_RENDER_OFFLOAD"] = "1"
         env["__GLX_VENDOR_LIBRARY_NAME"] = "nvidia"
         env["__VK_LAYER_NV_optimus"] = "NVIDIA_only"
+    elif _has_amd_dgpu():
+        env["DRI_PRIME"] = "1"
     return env
+
+
+# Backwards-compat alias — older code paths still call _nvidia_env().
+_nvidia_env = _gpu_offload_env
 
 
 PLAYERS: Dict[str, Dict[str, str]] = {
