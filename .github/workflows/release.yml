@@ -1,0 +1,93 @@
+name: Release
+
+# Triggers on any tag like v1.0.0, v1.0.1, v2.0.0…
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Required by both Trusted Publisher (OIDC) and the release-creation step.
+permissions:
+  id-token: write   # PyPI Trusted Publisher (no token needed)
+  contents: write   # to create the GitHub Release
+
+jobs:
+  build-and-publish:
+    name: Build, publish to PyPI, create GitHub Release
+    runs-on: ubuntu-latest
+    # `environment: pypi` is what the PyPI Trusted Publisher setup looks for.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/freeflix-cli/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # we need git history to generate changelog
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Publish to PyPI (Trusted Publisher OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # No `password:` — OIDC handles auth automatically
+          packages-dir: dist/
+
+      - name: Generate release notes from commits
+        id: notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
+          if [ -z "$PREV" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="$PREV..HEAD"
+          fi
+          {
+            echo "> 📦 \`uv tool install freeflix-cli\` · \`pipx install freeflix-cli\` · \`pip install --user freeflix-cli\`"
+            echo ""
+            echo "# FreeFlix CLI ${GITHUB_REF_NAME}"
+            echo ""
+            if [ -n "$PREV" ]; then
+              echo "## Changes since $PREV"
+            else
+              echo "## Changes"
+            fi
+            echo ""
+            git log "$RANGE" --pretty='- **%s** (%h)' --no-merges
+            echo ""
+            echo "## Install / upgrade"
+            echo ""
+            echo '```bash'
+            echo "uv tool install --upgrade freeflix-cli"
+            echo "# or"
+            echo "pipx upgrade freeflix-cli"
+            echo "# or"
+            echo "pip install --user --upgrade freeflix-cli"
+            echo '```'
+            echo ""
+            echo "## Credits"
+            echo ""
+            echo "Original work : [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer · Anime4K shaders : [bloc97](https://github.com/bloc97/Anime4K)."
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FreeFlix CLI ${{ github.ref_name }}"
+          body_path: release-notes.md
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha → prerelease
