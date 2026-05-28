@@ -89,6 +89,18 @@ _FR = {
     "Enable daily notifications?": "Activer les notifications quotidiennes ?",
     "Notifications enabled (runs daily).": "Notifications activées (exécution quotidienne).",
     "Notifications disabled.": "Notifications désactivées.",
+    "Failed to disable notifications.": "Échec de désactivation des notifications.",
+    "Language updated to:": "Langue mise à jour vers :",
+    "Player updated to:": "Lecteur mis à jour vers :",
+    "Download quality set to:": "Qualité de téléchargement :",
+    "Parallel downloads set to": "Téléchargements parallèles :",
+    "Nvidia offload:": "Offload Nvidia :",
+    "Nvidia GPU offload": "Offload GPU Nvidia",
+    "Nvidia GPU offload:": "Offload GPU Nvidia :",
+    "On laptops with Intel/AMD iGPU + Nvidia dGPU, route":
+        "Sur laptops avec iGPU Intel/AMD + dGPU Nvidia, on route",
+    "mpv to the Nvidia card for far better Anime4K perf.":
+        "mpv vers la carte Nvidia pour de bien meilleurs FPS sur Anime4K.",
 
     # ── Playback feedback ───────────────────────────────────────
     "Try another server/player": "Essayer un autre serveur/lecteur",

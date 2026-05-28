@@ -297,62 +297,62 @@ def main():
                 s_choice = select_from_list(opts, t("Select Setting:"))
 
                 if s_choice == 0:
-                    new_token = get_user_input("Enter new AniList Token")
+                    new_token = get_user_input(t("Enter new AniList Token"))
                     if new_token:
                         tracker.set_anilist_token(new_token)
-                        print_success("Token saved.")
+                        print_success(t("Token saved."))
                         pause()
                 elif s_choice == 1:
                     langs = get_all_languages()
                     l_choice = select_from_list(
-                        [l[1] for l in langs], "Select Language:"
+                        [l[1] for l in langs], t("Select Language:")
                     )
                     tracker.set_language(langs[l_choice][0])
-                    print_success(f"Language updated to: {langs[l_choice][1]}")
+                    print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
                     pause()
                 elif s_choice == 2:
                     players = get_all_players()
                     p_choice = select_from_list(
-                        [p[1] for p in players], "Select default player:"
+                        [p[1] for p in players], t("Select default player:")
                     )
                     tracker.set_player(players[p_choice][0])
-                    print_success(f"Player updated to: {players[p_choice][1]}")
+                    print_success(f"{t('Player updated to:')} {players[p_choice][1]}")
                     pause()
                 elif s_choice == 3:
                     q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
                     q_vals = ["auto", "1080", "720", "480"]
-                    q_choice = select_from_list(q_opts, "Select download quality:")
+                    q_choice = select_from_list(q_opts, t("Select download quality:"))
                     tracker.set_download_quality(q_vals[q_choice])
-                    print_success(f"Download quality set to: {q_opts[q_choice]}")
+                    print_success(f"{t('Download quality set to:')} {q_opts[q_choice]}")
                     pause()
                 elif s_choice == 4:
                     print_info("Register at https://www.opensubtitles.com/en/consumers")
                     print_info("to get a free API key, then paste it here.")
-                    new_key = get_user_input("Enter OpenSubtitles API key")
+                    new_key = get_user_input(t("Enter OpenSubtitles API key"))
                     if new_key:
                         tracker.set_opensubtitles_key(new_key.strip())
-                        print_success("OpenSubtitles key saved.")
+                        print_success(t("OpenSubtitles key saved."))
                         pause()
                 elif s_choice == 5:
                     n_opts = ["1 (sequential)", "2", "3", "4"]
-                    n_choice = select_from_list(n_opts, "Max parallel downloads:")
+                    n_choice = select_from_list(n_opts, t("Max parallel downloads:"))
                     tracker.set_parallel_downloads(n_choice + 1)
-                    print_success(f"Parallel downloads set to {n_choice + 1}")
+                    print_success(f"{t('Parallel downloads set to')} {n_choice + 1}")
                     pause()
                 elif s_choice == 6:
                     if notif_on:
-                        if select_from_list(["Yes", "No"], "Disable daily notifications?") == 0:
+                        if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
                             if notif_mod.uninstall_systemd_timer():
-                                print_success("Notifications disabled.")
+                                print_success(t("Notifications disabled."))
                             else:
-                                print_error("Failed to disable notifications.")
+                                print_error(t("Failed to disable notifications."))
                             pause()
                     else:
                         print_info("This installs a systemd --user timer that runs once a day")
                         print_info("and uses notify-send to alert you about new episodes.")
-                        if select_from_list(["Yes", "No"], "Enable daily notifications?") == 0:
+                        if select_from_list([t("Yes"), t("No")], t("Enable daily notifications?")) == 0:
                             if notif_mod.install_systemd_timer():
-                                print_success("Notifications enabled (runs daily).")
+                                print_success(t("Notifications enabled (runs daily)."))
                             else:
                                 print_error(
                                     "Failed to enable. Make sure systemd --user works "
@@ -360,13 +360,13 @@ def main():
                                 )
                             pause()
                 elif s_choice == 7:
-                    print_info("On laptops with Intel/AMD iGPU + Nvidia dGPU, route")
-                    print_info("mpv to the Nvidia card for far better Anime4K perf.")
+                    print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
+                    print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
                     nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
                     nv_vals = ["auto", "on", "off"]
-                    c = select_from_list(nv_opts, "Nvidia GPU offload:")
+                    c = select_from_list(nv_opts, t("Nvidia GPU offload:"))
                     tracker.set_nvidia_offload(nv_vals[c])
-                    print_success(f"Nvidia offload: {nv_vals[c]}")
+                    print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
                     pause()
                 else:
                     break
