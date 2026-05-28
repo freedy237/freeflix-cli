@@ -1,5 +1,9 @@
 # FreeFlix CLI 🍿
 
+[![PyPI version](https://img.shields.io/pypi/v/freeflix-cli.svg?color=blue)](https://pypi.org/project/freeflix-cli/)
+[![Python](https://img.shields.io/pypi/pyversions/freeflix-cli.svg)](https://pypi.org/project/freeflix-cli/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 > Watch movies, series and anime from your terminal — multi-language, multi-source, no browser, no ads.
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
@@ -45,6 +49,29 @@
 
 ## 📦 Installation
 
+### 🚀 Quickest — one command from PyPI
+
+If you already have the system deps (`mpv`, `yt-dlp`, `ffmpeg`, `aria2`, `libnotify`) :
+
+```bash
+# Recommended — uv installs `freeflix` in an isolated venv and adds it to PATH
+uv tool install freeflix-cli
+
+# Or with pipx
+pipx install freeflix-cli
+
+# Or plain pip (user install)
+pip install --user freeflix-cli
+```
+
+Then :
+
+```bash
+freeflix
+```
+
+If you need the system deps installed for you (mpv, Haruna, yt-dlp, ffmpeg, aria2, libnotify) and the Anime4K shaders auto-fetched, use the OS-specific installer script below — it's the same install + extras.
+
 ### Linux (Fedora, Debian/Ubuntu, Arch, openSUSE, Alpine)
 
 ```bash
@@ -79,18 +106,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 Uses `winget` for system deps. `mpv.net` is installed (the maintained Windows port of mpv).
 
-### Manual / from PyPI source
+### From source (developer mode)
 
 ```bash
-# Pre-requisites (whatever package manager you use) :
-#   mpv  yt-dlp  ffmpeg  aria2  libnotify  python>=3.9
-
-# Then :
-pip install --user .
+git clone https://github.com/freedy237/freeflix-cli.git
+cd freeflix-cli
+# Editable install — changes to source are picked up immediately
+pip install --user -e .
 # OR
-uv tool install .
-# OR
-pipx install .
+uv pip install -e .
 ```
 
 ---
@@ -227,4 +251,10 @@ FreeFlix est un fork stabilisé d'autoflix-cli avec :
 - Config mpv anti-crash + Anime4K déjà préinstallé ;
 - Tous les bugs liés au refacto d'animes-sama.fr de mai 2026 fixés.
 
-Installer : clone le repo, lance `scripts/install.sh` (Linux), `scripts/install-mac.sh` (macOS) ou `scripts/install.ps1` (Windows), puis tape `freeflix`.
+Installer :
+
+```bash
+uv tool install freeflix-cli    # ou pipx install freeflix-cli
+```
+
+…puis tape `freeflix`. Si tu n'as pas encore `mpv`, `yt-dlp`, `ffmpeg`, `aria2` et `libnotify` installés sur ta machine, lance plutôt le script d'install dédié à ton OS (`scripts/install.sh`, `install-mac.sh` ou `install.ps1`) qui prend tout en charge.
