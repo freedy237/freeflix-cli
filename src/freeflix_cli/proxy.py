@@ -252,11 +252,18 @@ def proxy_ts():
     }
 
     # Use stream_with_context to return chunks as they come
-    # This is where memory efficiency happens
+    # This is where memory efficiency happens.
+    # Swallow upstream errors instead of letting them bubble up to werkzeug
+    # which would print a full Python traceback for every failed chunk
+    # (and the client would still see an aborted response either way).
     def generate():
-        for chunk in resp.iter_content(chunk_size=8192):
-            if chunk:
-                yield chunk
+        try:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            print(f"[proxy /ts] upstream chunk failed: {type(e).__name__}: {e}")
+            return  # graceful EOF for the client
 
     return Response(
         stream_with_context(generate()),
@@ -305,11 +312,15 @@ def proxy_video():
     status_code = resp.status_code
 
     def generate():
-        for chunk in resp.iter_content(
-            chunk_size=16384
-        ):  # Slightly larger chunks for MP4
-            if chunk:
-                yield chunk
+        try:
+            for chunk in resp.iter_content(
+                chunk_size=16384
+            ):  # Slightly larger chunks for MP4
+                if chunk:
+                    yield chunk
+        except Exception as e:
+            print(f"[proxy /video] upstream chunk failed: {type(e).__name__}: {e}")
+            return  # graceful EOF for the client
 
     return Response(
         stream_with_context(generate()), status=status_code, headers=response_headers
