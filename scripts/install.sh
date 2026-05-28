@@ -2,8 +2,8 @@
 # FreeFlix CLI — Linux installer
 # Supports : Fedora/RHEL (dnf), Debian/Ubuntu (apt), Arch/Manjaro (pacman),
 #            openSUSE (zypper), Alpine (apk).
-# Installs system dependencies (mpv, haruna, yt-dlp, ffmpeg, aria2,
-# libnotify) then installs the freeflix package via uv (preferred) or pipx.
+# Installs system dependencies (mpv, yt-dlp, ffmpeg, aria2, libnotify)
+# then installs the freeflix package via uv (preferred) or pipx.
 
 set -euo pipefail
 
@@ -27,11 +27,10 @@ DISTRO=$(detect_distro)
 log "Detected distro : ${DISTRO}"
 
 # ─── 2. Install system packages ──────────────────────────────────────
-SYSTEM_PKGS_FEDORA="mpv haruna yt-dlp ffmpeg aria2 libnotify python3 python3-pip curl"
+SYSTEM_PKGS_FEDORA="mpv yt-dlp ffmpeg aria2 libnotify python3 python3-pip curl"
 SYSTEM_PKGS_DEBIAN="mpv yt-dlp ffmpeg aria2 libnotify-bin python3 python3-pip python3-venv curl"
-# Haruna isn't always in Debian repos ; suggest flatpak fallback
-SYSTEM_PKGS_ARCH="mpv haruna yt-dlp ffmpeg aria2 libnotify python python-pip curl"
-SYSTEM_PKGS_OPENSUSE="mpv haruna yt-dlp ffmpeg aria2 libnotify-tools python3 python3-pip curl"
+SYSTEM_PKGS_ARCH="mpv yt-dlp ffmpeg aria2 libnotify python python-pip curl"
+SYSTEM_PKGS_OPENSUSE="mpv yt-dlp ffmpeg aria2 libnotify-tools python3 python3-pip curl"
 SYSTEM_PKGS_ALPINE="mpv yt-dlp ffmpeg aria2 libnotify python3 py3-pip curl"
 
 install_system_pkgs() {
@@ -44,10 +43,6 @@ install_system_pkgs() {
             log "Installing via apt (sudo password may be required)…"
             sudo apt-get update
             sudo apt-get install -y $SYSTEM_PKGS_DEBIAN
-            if ! command -v haruna >/dev/null 2>&1; then
-                warn "Haruna isn't in your apt repos. Install via Flatpak :"
-                warn "  flatpak install -y flathub org.kde.haruna"
-            fi
             ;;
         arch|manjaro|endeavouros)
             log "Installing via pacman (sudo password may be required)…"
@@ -60,11 +55,10 @@ install_system_pkgs() {
         alpine)
             log "Installing via apk (sudo password may be required)…"
             sudo apk add $SYSTEM_PKGS_ALPINE
-            warn "Haruna isn't packaged on Alpine. Use mpv via the CLI."
             ;;
         *)
             err "Unsupported distro : ${DISTRO}"
-            err "Install these packages manually : mpv haruna yt-dlp ffmpeg aria2 libnotify python3 pip"
+            err "Install these packages manually : mpv yt-dlp ffmpeg aria2 libnotify python3 pip"
             exit 1
             ;;
     esac
@@ -89,21 +83,17 @@ install_freeflix() {
     ok "freeflix command installed"
 }
 
-# ─── 4. Wire the shared mpv / Haruna config (optional) ──────────────
+# ─── 4. Wire the shared mpv config (optional) ───────────────────────
 install_mpv_config() {
-    log "Installing default mpv + Haruna config (Anime4K toggle, anti-crash) ?"
+    log "Installing default mpv config (Anime4K toggle, anti-crash) ?"
     read -rp "  [Y/n] " ans
     [[ "${ans:-Y}" =~ ^[Nn] ]] && return 0
 
-    mkdir -p "$HOME/.config/mpv/scripts" "$HOME/.config/mpv/shaders" \
-             "$HOME/.config/haruna"
+    mkdir -p "$HOME/.config/mpv/scripts" "$HOME/.config/mpv/shaders"
 
     cp "$PROJECT_ROOT/config/mpv.conf"               "$HOME/.config/mpv/mpv.conf"
     cp "$PROJECT_ROOT/config/input.conf"             "$HOME/.config/mpv/input.conf"
     cp "$PROJECT_ROOT/config/freeflix_position.lua"  "$HOME/.config/mpv/scripts/freeflix_position.lua"
-    cp "$HOME/.config/mpv/mpv.conf"                  "$HOME/.config/haruna/mpv.conf"
-    cp "$HOME/.config/mpv/input.conf"                "$HOME/.config/haruna/input.conf"
-    ln -sf "$HOME/.config/mpv/shaders"               "$HOME/.config/haruna/shaders"
 
     # Fetch Anime4K shaders (Mode A_VL, ~290 KB total)
     log "Downloading Anime4K shaders…"
@@ -112,7 +102,7 @@ install_mpv_config() {
     curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Restore_CNN_VL.glsl"    "$BASE/Restore/Anime4K_Restore_CNN_VL.glsl"
     curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Upscale_CNN_x2_VL.glsl" "$BASE/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl"
 
-    ok "mpv + Haruna config installed (CTRL+1 toggles Anime4K)"
+    ok "mpv config installed (CTRL+1 toggles Anime4K)"
 }
 
 # ─── Main ────────────────────────────────────────────────────────────
@@ -128,15 +118,14 @@ install_nvidia_wrappers() {
     if ! command -v nvidia-smi >/dev/null 2>&1; then
         return 0  # No Nvidia GPU → nothing to do
     fi
-    log "Nvidia GPU detected. Install PRIME wrappers so mpv/haruna route"
+    log "Nvidia GPU detected. Install PRIME wrapper so mpv routes"
     log "to the dGPU automatically (faster Anime4K) ?"
     read -rp "  [Y/n] " ans
     [[ "${ans:-Y}" =~ ^[Nn] ]] && return 0
 
     mkdir -p "$HOME/.local/bin"
-    cp "$PROJECT_ROOT/scripts/wrappers/mpv"    "$HOME/.local/bin/mpv"
-    cp "$PROJECT_ROOT/scripts/wrappers/haruna" "$HOME/.local/bin/haruna"
-    chmod +x "$HOME/.local/bin/mpv" "$HOME/.local/bin/haruna"
+    cp "$PROJECT_ROOT/scripts/wrappers/mpv" "$HOME/.local/bin/mpv"
+    chmod +x "$HOME/.local/bin/mpv"
 
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
         warn "$HOME/.local/bin is NOT in PATH — add it to ~/.bashrc / ~/.zshrc :"

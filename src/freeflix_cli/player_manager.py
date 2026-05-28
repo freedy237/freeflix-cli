@@ -111,7 +111,6 @@ _nvidia_env = _gpu_offload_env
 PLAYERS: Dict[str, Dict[str, str]] = {
     "mpv": {"display": "mpv"},
     "vlc": {"display": "vlc"},
-    "haruna": {"display": "haruna"},
     "browser": {"display": "browser"},
     "download": {"display": "download"},
     "manual": {"display": "manual"},
@@ -504,7 +503,7 @@ def play_video(
         else:
             player_pref = tracker.get_player()
             if force_manual_mode or not player_pref or player_pref == "manual":
-                players = ["mpv", "vlc", "haruna", "browser", "download", t("← Back")]
+                players = ["mpv", "vlc", "browser", "download", t("← Back")]
                 player_choice = select_from_list(players, t("🎮 Select video player:"))
 
                 if players[player_choice] == t("← Back"):
@@ -717,18 +716,13 @@ def play_video(
                     cmd.append(f"--title={title}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
-                elif player_name == "haruna":
-                    if local_subtitle_path:
-                        print_info(
-                            "Note: Haruna does not accept external subtitles via CLI. Load them manually inside the player (Subtitles → Open)."
-                        )
 
                 pos_args, pos_file, pos_key = ([], None, None)
                 if player_name == "mpv":
                     pos_args, pos_file, pos_key = _mpv_position_args(title)
                     cmd.extend(pos_args)
 
-                run_env = _nvidia_env() if player_name in ("mpv", "haruna") else None
+                run_env = _nvidia_env() if player_name == "mpv" else None
                 subprocess.run(cmd, check=True, env=run_env)
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
@@ -756,16 +750,6 @@ def play_video(
                             "Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead."
                         )
                         cmd.append(f"--sub-file={local_subtitle_path}")
-                    subprocess.run(cmd, check=True)
-                elif player_name == "haruna":
-                    print_info(
-                        "Note: Haruna does not pass HTTP headers (Referer/User-Agent) via CLI. If this stream requires headers, prefer mpv or the proxy mode."
-                    )
-                    if local_subtitle_path:
-                        print_info(
-                            "Note: Haruna does not accept external subtitles via CLI. Load them manually inside the player."
-                        )
-                    cmd = [player_executable, stream_url]
                     subprocess.run(cmd, check=True)
                 else:
                     # MPV Command construction

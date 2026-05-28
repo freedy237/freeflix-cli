@@ -77,7 +77,7 @@ def _browse_local_downloads():
     selected_path = files[choice][1]
 
     preferred = tracker.get_player() or "mpv"
-    candidates = [preferred, "mpv", "haruna", "vlc"]
+    candidates = [preferred, "mpv", "vlc"]
     seen = set()
     player_bin = None
     chosen_name = None
@@ -93,8 +93,8 @@ def _browse_local_downloads():
 
     if not player_bin:
         print_error(
-            "No local player found (tried mpv, haruna, vlc). "
-            "Install one with: sudo dnf install mpv haruna"
+            "No local player found (tried mpv, vlc). "
+            "Install one with: sudo dnf install mpv"
         )
         pause()
         return

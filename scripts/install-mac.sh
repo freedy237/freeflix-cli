@@ -24,8 +24,8 @@ ok "Homebrew available"
 
 # ─── 2. Install system packages ──────────────────────────────────────
 log "Installing system deps via brew…"
-brew install --quiet python yt-dlp ffmpeg aria2 mpv iina
-ok "System packages installed (using IINA as Haruna-equivalent on macOS)"
+brew install --quiet python yt-dlp ffmpeg aria2 mpv
+ok "System packages installed"
 
 # ─── 3. Install freeflix-cli ─────────────────────────────────────────
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -62,4 +62,3 @@ fi
 
 echo
 ok "Installation complete. Run :  ${GREEN}freeflix${NC}"
-warn "On macOS, IINA is the recommended GUI player (Haruna isn't available)."

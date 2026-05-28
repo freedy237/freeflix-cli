@@ -8,7 +8,7 @@
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
 
-- A second player (**Haruna**, the KDE mpv-based GUI) ;
+
 - A complete **download backend** (yt-dlp for HLS, aria2c for direct mp4, with quality selection 480p/720p/1080p) ;
 - **Batch "download whole season"** ;
 - **Position-in-episode resume** (mpv lua hook + tracker) ;
@@ -40,7 +40,7 @@
 | 🔔 | **Daily notifications** when new episodes drop |
 | 🌊 | **Nyaa.si torrents** (high-quality anime releases) |
 | 🌐 | **6 streaming sources** : Anime-Sama, GoldenAnime, GoldenMS, Coflix, French-Stream, Nyaa |
-| 🎮 | **5 player backends** : mpv, Haruna, VLC, browser, download-only |
+| 🎮 | **4 player backends** : mpv, VLC, browser, download-only |
 | 🇫🇷 | **French UI** : the whole CLI is in French when language is set to FR |
 | 🛡 | **Anti-crash mpv config** : ytdl-hook off, gpu renderer, no infinite reconnect |
 | 🎨 | **Anime4K** pre-bundled with runtime toggle CTRL+1 / CTRL+0 |
@@ -70,7 +70,7 @@ Then :
 freeflix
 ```
 
-If you need the system deps installed for you (mpv, Haruna, yt-dlp, ffmpeg, aria2, libnotify) and the Anime4K shaders auto-fetched, use the OS-specific installer script below — it's the same install + extras.
+If you need the system deps installed for you (mpv, yt-dlp, ffmpeg, aria2, libnotify) and the Anime4K shaders auto-fetched, use the OS-specific installer script below — it's the same install + extras.
 
 ### Linux (Fedora, Debian/Ubuntu, Arch, openSUSE, Alpine)
 
@@ -81,7 +81,7 @@ chmod +x scripts/install.sh
 ./scripts/install.sh
 ```
 
-The script detects your distro and installs : `mpv`, `haruna`, `yt-dlp`, `ffmpeg`, `aria2`, `libnotify`, Python deps, then the `freeflix` command via `uv` (preferred) or `pipx`.
+The script detects your distro and installs : `mpv`, `yt-dlp`, `ffmpeg`, `aria2`, `libnotify`, Python deps, then the `freeflix` command via `uv` (preferred) or `pipx`.
 
 ### macOS
 
@@ -92,7 +92,6 @@ chmod +x scripts/install-mac.sh
 ./scripts/install-mac.sh
 ```
 
-Uses Homebrew for system deps. **IINA** is installed in place of Haruna (Haruna isn't on macOS).
 
 ### Windows (10/11)
 
@@ -127,7 +126,7 @@ freeflix
 
 That's it. The menu walks you through everything.
 
-### Common keyboard shortcuts in mpv / Haruna
+### Common keyboard shortcuts in mpv
 
 | Key | Action |
 |---|---|
@@ -143,12 +142,11 @@ That's it. The menu walks you through everything.
 
 ### Hybrid laptops (Intel/AMD iGPU + Nvidia dGPU)
 
-If you're on a Linux Optimus laptop, FreeFlix detects the Nvidia card via `nvidia-smi` and routes mpv onto it automatically (no FPS drop with Anime4K). To also have this when launching `mpv` or `haruna` standalone (outside FreeFlix), copy the wrappers :
+If you're on a Linux Optimus laptop, FreeFlix detects the dGPU (Nvidia via `nvidia-smi`, AMD via `lspci`) and routes mpv onto it automatically (no FPS drop with Anime4K). To also have this when launching `mpv` standalone (outside FreeFlix), copy the wrapper :
 
 ```bash
-cp scripts/wrappers/mpv    ~/.local/bin/mpv
-cp scripts/wrappers/haruna ~/.local/bin/haruna
-chmod +x ~/.local/bin/{mpv,haruna}
+cp scripts/wrappers/mpv ~/.local/bin/mpv
+chmod +x ~/.local/bin/mpv
 ```
 
 (Make sure `~/.local/bin` is in your `$PATH` before `/usr/bin`.)
@@ -160,7 +158,7 @@ The Linux `install.sh` does this for you when it detects an Nvidia card.
 
 - **AniList Token** — paste the OAuth token from anilist.co to enable sync ;
 - **Language** — switches the UI (FR / EN) and default subtitle language ;
-- **Default Player** — mpv / vlc / haruna / browser / download / manual ;
+- **Default Player** — mpv / vlc / browser / download / manual ;
 - **Download Quality** — auto / 1080 / 720 / 480 ;
 - **OpenSubtitles API Key** — register free at [opensubtitles.com/en/consumers](https://www.opensubtitles.com/en/consumers) ;
 - **Parallel Downloads** — number of concurrent batch workers (1–4) ;
@@ -188,7 +186,6 @@ The Linux `install.sh` does this for you when it detects an Nvidia card.
 
 ## 🆕 What's new in v1.0
 
-- 🎮 **Haruna** added as a player option (mpv + GUI = same engine, nicer UX) ;
 - 📥 **Download** option in every player menu — yt-dlp for HLS, aria2c for direct mp4, sane defaults ;
 - 📥 **Batch "Download ALL episodes"** in the anime-sama flow ;
 - ▶️ **Position-in-episode resume** via mpv lua hook ;
@@ -203,7 +200,7 @@ The Linux `install.sh` does this for you when it detects an Nvidia card.
 - 💾 **Portal URL cache** (24 h TTL) ;
 - 🎨 **Anime4K Mode A_VL** pre-bundled (toggle CTRL+1 / CTRL+0) ;
 - 🇫🇷 **French localisation** of the whole UI ;
-- 🛡 Stability-first **mpv.conf** (anti-crash) shared between mpv and Haruna.
+- 🛡 Stability-first **mpv.conf** (anti-crash, anti-buffer-underrun, Anime4K toggle).
 
 ---
 
@@ -214,7 +211,7 @@ freeflix-cli/
 ├── src/freeflix_cli/
 │   ├── main.py                 # entry point (`freeflix` command)
 │   ├── tracker.py              # local progress / settings store
-│   ├── player_manager.py       # mpv/vlc/haruna/download dispatcher
+│   ├── player_manager.py       # mpv/vlc/download dispatcher
 │   ├── i18n.py                 # FR/EN translations
 │   ├── subtitles.py            # OpenSubtitles client
 │   ├── notifications.py        # daily scan + systemd setup
@@ -241,7 +238,7 @@ freeflix-cli/
 
 - **Original project** : [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by [PaulExplorer](https://github.com/PaulExplorer) — all the heavy scraping lift comes from there.
 - **Anime4K shaders** : [bloc97/Anime4K](https://github.com/bloc97/Anime4K).
-- **mpv** & **Haruna** : their respective authors.
+- **mpv** : their respective authors.
 - **GitHub: [@freedy237](https://github.com/freedy237)** — fork maintainer.
 
 ## 📜 License
@@ -254,7 +251,7 @@ GNU General Public License v3.0 — same as upstream. See [LICENSE](./LICENSE).
 
 FreeFlix est un fork stabilisé d'autoflix-cli avec :
 
-- 5 lecteurs (mpv, Haruna, VLC, navigateur, download-only) ;
+- 5 lecteurs (mpv, VLC, navigateur, download-only) ;
 - Téléchargement vidéo (yt-dlp / aria2c, choix qualité, batch saison complète) ;
 - Reprise à la seconde près dans mpv ;
 - Sync AniList, fallback OpenSubtitles ;

@@ -116,11 +116,6 @@ def get_mpv_config_dir() -> Path:
     return Path.home() / ".config" / "mpv"
 
 
-def get_haruna_config_dir() -> Path:
-    """Haruna only exists on Linux/Unix."""
-    return Path.home() / ".config" / "haruna"
-
-
 def get_local_bin_dir() -> Path:
     """Where to drop PRIME wrappers — Linux only."""
     return Path.home() / ".local" / "bin"
@@ -193,35 +188,11 @@ def install_anime4k_shaders() -> bool:
     return ok
 
 
-def mirror_to_haruna() -> bool:
-    """Linux/Unix only : copy mpv config into Haruna's own dir."""
-    if detect_os() == "windows":
-        return True  # Haruna isn't on Windows
-    mpv_cfg = get_mpv_config_dir()
-    har_cfg = get_haruna_config_dir()
-    if not (mpv_cfg / "mpv.conf").exists():
-        return False
-    har_cfg.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copy2(mpv_cfg / "mpv.conf", har_cfg / "mpv.conf")
-        if (mpv_cfg / "input.conf").exists():
-            shutil.copy2(mpv_cfg / "input.conf", har_cfg / "input.conf")
-        # Symlink shaders so we don't duplicate ~290 KB of GLSL
-        har_shaders = har_cfg / "shaders"
-        if har_shaders.exists() or har_shaders.is_symlink():
-            har_shaders.unlink()
-        har_shaders.symlink_to(mpv_cfg / "shaders")
-        return True
-    except Exception as e:
-        print_warning(f"Could not mirror config to Haruna: {e}")
-        return False
-
-
 def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
     """
     Linux only : if a discrete GPU is detected (Nvidia OR AMD), drop
-    ~/.local/bin/mpv and ~/.local/bin/haruna wrappers that set the
-    PRIME render-offload env vars before exec-ing the system binary.
+    a ~/.local/bin/mpv wrapper that sets the PRIME render-offload env
+    vars before exec-ing the system binary.
     """
     if detect_os() != "linux":
         return True
@@ -243,17 +214,16 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
         offload_block = 'export DRI_PRIME=1\n'
         gpu_label = "AMD"
 
-    for binary in ("mpv", "haruna"):
-        target = bindir / binary
-        target.write_text(
-            "#!/usr/bin/env bash\n"
-            f"# FreeFlix PRIME wrapper — routes {binary} to the {gpu_label} dGPU.\n"
-            "# Delete this file (rm ~/.local/bin/" + binary + ") to disable.\n"
-            "\n"
-            + offload_block
-            + f"\nexec /usr/bin/{binary} \"$@\"\n"
-        )
-        target.chmod(0o755)
+    target = bindir / "mpv"
+    target.write_text(
+        "#!/usr/bin/env bash\n"
+        f"# FreeFlix PRIME wrapper — routes mpv to the {gpu_label} dGPU.\n"
+        "# Delete this file (rm ~/.local/bin/mpv) to disable.\n"
+        "\n"
+        + offload_block
+        + "\nexec /usr/bin/mpv \"$@\"\n"
+    )
+    target.chmod(0o755)
 
     # Warn if ~/.local/bin isn't in PATH
     if str(bindir) not in os.environ.get("PATH", "").split(":"):
@@ -262,6 +232,49 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
             f'      export PATH="$HOME/.local/bin:$PATH"'
         )
     return True
+
+
+# ─── Platform-specific guidance ───────────────────────────────────────
+def print_platform_guidance_windows(gpus: Dict[str, bool]):
+    """
+    Windows 10/11 picks the GPU per-app via Settings → Display → Graphics.
+    We can't set this programmatically (it's a UWP setting tied to the
+    user shell). Best we can do is point the user there.
+    """
+    if not (gpus.get("nvidia") or gpus.get("amd_discrete")):
+        return
+    gpu = "Nvidia" if gpus.get("nvidia") else "AMD"
+    print_info("─" * 60)
+    print_info(f"Windows GPU offload : {gpu} dGPU detected")
+    print_info("─" * 60)
+    print_info("Windows handles GPU selection natively — no PRIME wrappers")
+    print_info("needed. To force mpv to use the dGPU, do this ONCE :")
+    print_info("")
+    print_info("  Option A — Windows Graphics Settings (easiest)")
+    print_info("    Settings → System → Display → Graphics")
+    print_info("    Browse → C:\\Program Files\\mpv\\mpv.exe (or mpv.net)")
+    print_info("    Options → High performance → Save")
+    print_info("")
+    if gpus.get("nvidia"):
+        print_info("  Option B — Nvidia Control Panel (per-app profile)")
+        print_info("    Nvidia Control Panel → Manage 3D settings")
+        print_info("    Program Settings tab → Add → pick mpv.exe")
+        print_info("    'Preferred graphics processor' → High-performance Nvidia")
+        print_info("")
+
+
+def print_platform_guidance_macos(gpus: Dict[str, bool]):
+    """macOS picks the GPU automatically per-app based on energy needs."""
+    print_info("─" * 60)
+    if gpus.get("apple_silicon"):
+        print_info("macOS Apple Silicon detected")
+        print_info("─" * 60)
+        print_info("Apple Silicon has a single unified GPU — no offload needed.")
+    else:
+        print_info("macOS Intel detected")
+        print_info("─" * 60)
+        print_info("macOS auto-selects between iGPU and dGPU based on app")
+        print_info("activity (Energy Saver). No manual action required.")
 
 
 # ─── Top-level wizard ─────────────────────────────────────────────────
@@ -284,11 +297,9 @@ def run_setup(force: bool = False) -> bool:
     print_info("This will :")
     print_info("  1. Install tuned mpv.conf + input.conf + position-resume hook")
     print_info("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)")
-    if os_name != "windows":
-        print_info("  3. Mirror the config into Haruna's dir (if you use it)")
     if os_name == "linux" and (gpus["nvidia"] or gpus["amd_discrete"]):
         gpu = "Nvidia" if gpus["nvidia"] else "AMD"
-        print_info(f"  4. Install PRIME wrappers so standalone mpv/haruna use the {gpu} dGPU")
+        print_info(f"  3. Install a PRIME wrapper so standalone mpv uses the {gpu} dGPU")
     print_info("")
 
     try:
@@ -302,16 +313,17 @@ def run_setup(force: bool = False) -> bool:
         tracker._save_data()
         return False
 
-    print_info("\n[1/4] Installing mpv configuration…")
+    print_info("\n[1/3] Installing mpv configuration…")
     install_config_files()
-    print_info("\n[2/4] Downloading Anime4K shaders…")
+    print_info("\n[2/3] Downloading Anime4K shaders…")
     install_anime4k_shaders()
-    if os_name != "windows":
-        print_info("\n[3/4] Mirroring to Haruna…")
-        mirror_to_haruna()
     if os_name == "linux":
-        print_info("\n[4/4] Installing PRIME wrappers…")
+        print_info("\n[3/3] Installing PRIME wrapper…")
         install_prime_wrappers(gpus)
+    elif os_name == "windows":
+        print_platform_guidance_windows(gpus)
+    elif os_name == "macos":
+        print_platform_guidance_macos(gpus)
 
     tracker.data["setup_done"] = True
     tracker.data.pop("setup_declined", None)
