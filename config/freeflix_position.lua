@@ -1,9 +1,9 @@
--- AutoFlix position-tracking helper.
--- mpv is launched by autoflix with:
---   --script-opts=autoflix-key=<key>,autoflix-out=<path>
--- On shutdown / end-of-file, we write the current time-pos and duration
--- to <path>. autoflix reads it back and stores it in its tracker so
--- the next launch of the same episode can resume.
+-- FreeFlix position-tracking helper.
+-- mpv is launched by freeflix with :
+--   --script-opts=freeflix-key=<key>,freeflix-out=<path>
+-- On shutdown / end-of-file, we write the current time-pos and
+-- duration to <path>. freeflix reads it back and stores it in its
+-- tracker so the next launch of the same episode can resume.
 
 local mp = require 'mp'
 
@@ -17,8 +17,8 @@ local function get_opt(name)
     return nil
 end
 
-local key = get_opt("autoflix-key")
-local out_path = get_opt("autoflix-out")
+local key = get_opt("freeflix-key")
+local out_path = get_opt("freeflix-out")
 
 if not key or key == "" or not out_path or out_path == "" then
     return
@@ -27,7 +27,7 @@ end
 local written = false
 
 local function write_position(reason)
-    if written then return end  -- only write once per run
+    if written then return end
     local pos = mp.get_property_number("time-pos")
     local dur = mp.get_property_number("duration")
     if pos == nil then return end
