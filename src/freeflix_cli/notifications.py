@@ -150,7 +150,7 @@ def install_systemd_timer() -> bool:
 
     service_path.write_text(
         f"""[Unit]
-Description=AutoFlix: scan history for new anime episodes
+Description=FreeFlix: scan history for new anime episodes
 After=network-online.target
 Wants=network-online.target
 
@@ -160,14 +160,20 @@ ExecStart={_python_path()} -m freeflix_cli.notifications
 """
     )
 
+    # OnCalendar=daily is the robust idiom for "once a day" : systemd
+    # always computes a concrete next-elapse time (unlike OnBootSec +
+    # OnUnitActiveSec, which could end up with 'Trigger: n/a' and never
+    # fire again). Persistent=true makes it catch up if the machine was
+    # off at the scheduled time. A small randomized delay avoids every
+    # install hammering the sites at the exact same second.
     timer_path.write_text(
         """[Unit]
-Description=Run AutoFlix episode scan once a day
+Description=Run FreeFlix episode scan once a day
 
 [Timer]
-OnBootSec=15min
-OnUnitActiveSec=24h
+OnCalendar=daily
 Persistent=true
+RandomizedDelaySec=1h
 
 [Install]
 WantedBy=timers.target
