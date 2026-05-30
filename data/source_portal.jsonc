@@ -1,6 +1,7 @@
-// Local override for autoflix-cli source portals.
-// This file takes priority over the remote config fetched from GitHub.
-// Update entries here when an upstream URL goes 403 / moves domain.
+// FreeFlix source portal URLs — authoritative list.
+// Fetched at launch from this repo's main branch, so updating a URL
+// here and pushing is enough to fix every user when a site moves.
+// Hardcoded fallbacks live in src/freeflix_cli/defaults.py.
 {
   "anime-sama": "https://animes-sama.fr",
   "coflix":     "https://coflix.dance"
