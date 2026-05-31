@@ -131,6 +131,75 @@ def _mpv_config_args() -> list:
     return []
 
 
+def _get_hls_variants(stream_url: str, headers: dict) -> list:
+    """
+    Fetch an HLS master playlist and return its quality variants, sorted
+    by bandwidth (highest first). Returns [] for a single-quality media
+    playlist or on any error — so the caller silently skips the prompt.
+
+    Each variant : {"label": "1080p", "bandwidth": 5038000, "height": 1080}
+    """
+    if not stream_url or ".m3u8" not in stream_url.lower():
+        return []
+    try:
+        import m3u8 as _m3u8
+        from curl_cffi import requests as _rq
+
+        sess = _rq.Session(impersonate="chrome")
+        try:
+            sess.curl_options.update(proxy.DNS_OPTIONS)
+        except Exception:
+            pass
+        r = sess.get(stream_url, headers=headers or {}, timeout=15)
+        if r.status_code != 200:
+            return []
+        obj = _m3u8.loads(r.text, uri=stream_url)
+        if not obj.playlists:
+            return []  # media playlist → single quality, nothing to choose
+
+        variants = []
+        for p in obj.playlists:
+            si = p.stream_info
+            bw = si.bandwidth or 0
+            res = si.resolution  # (width, height) or None
+            height = res[1] if res else None
+            if height:
+                label = f"{height}p"
+            elif bw:
+                label = f"{bw // 1000} kbps"
+            else:
+                label = "?"
+            variants.append({"label": label, "bandwidth": bw, "height": height})
+
+        # De-dupe identical labels, keep highest bandwidth per label
+        seen = {}
+        for v in variants:
+            key = v["label"]
+            if key not in seen or v["bandwidth"] > seen[key]["bandwidth"]:
+                seen[key] = v
+        variants = sorted(seen.values(), key=lambda v: v["bandwidth"], reverse=True)
+        return variants
+    except Exception:
+        return []
+
+
+def _prompt_hls_quality(variants: list):
+    """
+    Show a quality menu for a multi-variant HLS stream.
+    Returns the chosen max bandwidth (int, for mpv --hls-bitrate) or
+    None for 'Auto (best)'.
+    """
+    opts = []
+    for v in variants:
+        mbps = v["bandwidth"] / 1_000_000 if v["bandwidth"] else 0
+        opts.append(f"{v['label']}  ({mbps:.1f} Mbps)" if mbps else v["label"])
+    opts.append(t("Auto (best)"))
+    idx = select_from_list(opts, t("📺 Choisis la qualité :"))
+    if idx == len(variants):  # Auto
+        return None
+    return variants[idx]["bandwidth"]
+
+
 PLAYERS: Dict[str, Dict[str, str]] = {
     "mpv": {"display": "mpv"},
     "vlc": {"display": "vlc"},
@@ -517,6 +586,19 @@ def play_video(
         except Exception as e:
             print_info(f"OpenSubtitles lookup skipped: {e}")
 
+    # Quality selection : if the resolved stream is a multi-variant HLS
+    # master (e.g. vidmoly's 1080p+480p), let the user pick a quality.
+    # The chosen max bitrate is applied to mpv via --hls-bitrate. Skipped
+    # for non-interactive callers (batch download).
+    selected_hls_bitrate = None
+    if not force_player:
+        try:
+            _variants = _get_hls_variants(stream_url, headers)
+            if len(_variants) > 1:
+                selected_hls_bitrate = _prompt_hls_quality(_variants)
+        except Exception:
+            selected_hls_bitrate = None
+
     force_manual_mode = False
     while True:  # Loop to allow retrying with another player
         if force_player:
@@ -738,6 +820,8 @@ def play_video(
                 elif player_name == "mpv":
                     cmd.extend(_mpv_config_args())  # FreeFlix-only mpv config
                     cmd.append(f"--title={title}")
+                    if selected_hls_bitrate:
+                        cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
 
@@ -808,6 +892,8 @@ def play_video(
                         f'--http-header-fields="{headers_mpv}"',
                         f'--title="{title}"',
                     ]
+                    if selected_hls_bitrate:
+                        cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
                     pos_args_d, pos_file_d, pos_key_d = _mpv_position_args(title)

@@ -50,6 +50,8 @@ _FR = {
     "🌍 Select Language:": "🌍 Choisis la langue :",
     "📺 Select Episode:": "📺 Choisis l'épisode :",
     "🎮 Select video player:": "🎮 Choisis le lecteur :",
+    "📺 Choisis la qualité :": "📺 Choisis la qualité :",
+    "Auto (best)": "Auto (meilleure)",
     "🎮 Select Player:": "🎮 Choisis le lecteur :",
     "No results found.": "Aucun résultat trouvé.",
     "No seasons found.": "Aucune saison trouvée.",
