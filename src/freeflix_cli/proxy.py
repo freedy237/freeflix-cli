@@ -41,53 +41,82 @@ def get_base_url(url):
     return url.rsplit("/", 1)[0] + "/"
 
 
-def create_session(headers_dict=None):
-    """Creates a curl_cffi session optimized for anonymity."""
-    session = requests.Session(impersonate="chrome")
-    # Apply specific DNS options
-    session.curl_options.update(DNS_OPTIONS)
+# ─── Thread-local session reuse (BIG throughput win) ──────────────
+# Previously a brand-new curl_cffi Session was created for EVERY
+# segment fetch. Each new session re-did the DoH DNS resolution (an
+# HTTPS round-trip to 1.1.1.1) AND a fresh TLS handshake to the CDN —
+# ~200-600 ms of pure overhead per segment. On a 24-min HLS stream
+# (~240 segments) that overhead dominates and caps effective
+# throughput far below the real bandwidth, so the buffer can never
+# get ahead of playback.
+#
+# Now each werkzeug worker thread keeps ONE persistent session. curl
+# reuses the connection (HTTP keep-alive) and caches the DoH result,
+# so the DNS + TLS cost is paid once per thread, then amortized over
+# every segment. DoH is kept (it bypasses ISP DNS blocking of the
+# streaming domains) — we just stop paying for it 240 times.
+_thread_local = threading.local()
 
-    # ─── Slow CDN tolerance ───────────────────────────────────────
-    # By default libcurl aborts a transfer when speed stays below
-    # 1 byte/sec for 15 seconds — that's the "Operation too slow"
-    # error we saw on congested CDNs. We loosen this :
-    #   - LOW_SPEED_LIMIT = 100 bytes/sec
-    #   - LOW_SPEED_TIME  = 60 seconds
-    # Result : we abort only after a full minute of effectively zero
-    # throughput (rather than 15s). The autoflix-style retry layer
-    # then kicks in.
+
+def _build_session():
+    session = requests.Session(impersonate="chrome")
+    session.curl_options.update(DNS_OPTIONS)
+    # Loosen libcurl's low-speed cutoff so congested CDNs aren't dropped
+    # after 15 s of slow traffic (see the 'Operation too slow' issue).
     session.curl_options.update({
         CurlOpt.LOW_SPEED_LIMIT: 100,
         CurlOpt.LOW_SPEED_TIME: 60,
     })
+    return session
 
+
+def get_session():
+    """Return this thread's persistent session, creating it on first use."""
+    sess = getattr(_thread_local, "session", None)
+    if sess is None:
+        sess = _build_session()
+        _thread_local.session = sess
+    return sess
+
+
+def _reset_session():
+    """Drop the thread's session so the next call builds a fresh one
+    (used after a hard connection error to avoid reusing a dead handle)."""
+    sess = getattr(_thread_local, "session", None)
+    if sess is not None:
+        try:
+            sess.close()
+        except Exception:
+            pass
+    _thread_local.session = None
+
+
+def create_session(headers_dict=None):
+    """Back-compat shim : some callers still expect a fresh session."""
+    session = _build_session()
     if headers_dict:
         session.headers.update(headers_dict)
-
     return session
 
 
 def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3):
     """
-    Performs a request with an automatic retry system.
-    Handles timeouts and network errors to avoid breaking the stream.
+    Performs a request with an automatic retry system, reusing the
+    thread-local session for connection + DNS reuse.
     """
     attempt = 0
-    session = create_session(headers)
 
     while attempt < max_retries:
         try:
+            session = get_session()
+
             # Forward the Range header if present (for MP4 seeking)
             req_headers = headers.copy() if headers else {}
-
-            # Handle the Range header coming from the client (VLC)
             if "Range" in request.headers:
                 req_headers["Range"] = request.headers["Range"]
 
-            # For streamed responses (segments), allow a much longer
-            # overall window — slow CDNs may still deliver after a
-            # 30-60 s lull. For non-stream (m3u8 manifests), 15 s is
-            # plenty.
+            # Streamed segments may legitimately take a while on a slow
+            # CDN ; manifests should resolve quickly.
             effective_timeout = 180 if stream else 15
 
             response = session.request(
@@ -98,7 +127,7 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3):
                 timeout=effective_timeout,
             )
 
-            # If 429 error (Rate Limit) or 5xx, retry
+            # If 429 (rate limit) or 5xx, retry
             if response.status_code == 429 or response.status_code >= 500:
                 raise requests.RequestsError(f"Status {response.status_code}")
 
@@ -106,7 +135,9 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3):
 
         except Exception as e:
             attempt += 1
-            # Simple backoff: waits 0.5s, then 1s, etc.
+            # A transport error may have killed the kept-alive connection ;
+            # rebuild the session before retrying.
+            _reset_session()
             time.sleep(0.5 * attempt)
             if attempt >= max_retries:
                 print(
