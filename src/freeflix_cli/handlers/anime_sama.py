@@ -14,7 +14,6 @@ from ..player_manager import play_video
 from ..tracker import tracker
 from ..anilist import anilist_client
 from .playback import play_episode_flow
-from ..i18n import t
 import re
 
 
@@ -123,21 +122,21 @@ def handle_anime_sama():
     """Handle Anime-Sama provider flow."""
     anime_sama.get_website_url()
 
-    print_header(t("🎌 Anime-Sama"))
-    query = get_user_input(t("Search query (or 'exit' to back)"))
+    print_header("🎌 Anime-Sama")
+    query = get_user_input("Search query (or 'exit' to back)")
     if not query or query.lower() == "exit":
         return
 
-    print_info(f"{t('Searching for')}: [cyan]{query}[/cyan]")
+    print_info(f"Searching for: [cyan]{query}[/cyan]")
     results = anime_sama.search(query)
 
     if not results:
-        print_warning(t("No results found."))
+        print_warning("No results found.")
         pause()
         return
 
     choice_idx = select_from_list(
-        [f"{r.title} ({', '.join(r.genres)})" for r in results], t("📺 Search Results:")
+        [f"{r.title} ({', '.join(r.genres)})" for r in results], "📺 Search Results:"
     )
     selection = results[choice_idx]
 
@@ -145,7 +144,7 @@ def handle_anime_sama():
     series = anime_sama.get_series(selection.url)
 
     if not series.seasons:
-        print_warning(t("No seasons found."))
+        print_warning("No seasons found.")
         pause()
         return
 
@@ -164,7 +163,7 @@ def handle_anime_sama():
             return
 
     season_idx = select_from_list(
-        [s.title for s in series.seasons], t("📺 Select Season:")
+        [s.title for s in series.seasons], "📺 Select Season:"
     )
     selected_season_access = series.seasons[season_idx]
 
@@ -174,60 +173,15 @@ def handle_anime_sama():
     # episodes is dict {lang: [Episode]}
     langs = list(season.episodes.keys())
     if not langs:
-        print_warning(t("No episodes found."))
+        print_warning("No episodes found.")
         pause()
         return
 
-    lang_idx = select_from_list(langs, t("🌍 Select Language:"))
+    lang_idx = select_from_list(langs, "🌍 Select Language:")
     selected_lang = langs[lang_idx]
     episodes = season.episodes[selected_lang]
 
-    BATCH_LABEL = f"📥 {t('Download ALL episodes')} ({len(episodes)})"
-    MARK_LABEL = t("✓ Mark an episode as watched (no play)")
-    ep_options = [BATCH_LABEL, MARK_LABEL] + [e.title for e in episodes]
-    ep_choice = select_from_list(ep_options, t("📺 Select Episode:"))
-
-    if ep_choice == 0:
-        from .playback import download_episodes_batch
-        download_episodes_batch(
-            provider_name="Anime-Sama",
-            series_title=series.title,
-            season_title=season.title,
-            episodes=episodes,
-            series_url=series.url,
-            season_url=selected_season_access.url,
-            logo_url=series.img,
-            headers={"Referer": anime_sama.website_origin},
-        )
-        pause()
-        return
-
-    if ep_choice == 1:
-        mark_options = [e.title for e in episodes] + [t("← Cancel")]
-        mark_choice = select_from_list(mark_options, t("Mark which episode as watched?"))
-        if mark_choice == len(episodes):
-            return
-        marked = episodes[mark_choice]
-        tracker.save_progress(
-            provider="Anime-Sama",
-            series_title=series.title,
-            season_title=season.title,
-            episode_title=marked.title,
-            series_url=series.url,
-            season_url=selected_season_access.url,
-            episode_url=marked.url if hasattr(marked, "url") else "",
-            logo_url=series.img,
-        )
-        # Also push to AniList if user is logged in (same logic as real playback)
-        try:
-            _update_anilist_progress(series, season, marked)
-        except Exception as e:
-            print_warning(f"AniList sync skipped: {e}")
-        print_success(f"Marked '{marked.title}' as watched.")
-        pause()
-        return
-
-    ep_idx = ep_choice - 2  # Adjust for batch + mark options
+    ep_idx = select_from_list([e.title for e in episodes], "📺 Select Episode:")
 
     while True:
         selected_episode = episodes[ep_idx]
@@ -282,12 +236,6 @@ def resume_anime_sama(data):
 
     langs = list(season.episodes.keys())
     if not langs:
-        print_error(
-            "No episodes could be loaded from this season — the site layout "
-            "may have changed or the history entry has a stale URL."
-        )
-        print_info(f"URL tried: {season_url}")
-        pause()
         return
 
     # If only one language, pick it. If multiple, ask.

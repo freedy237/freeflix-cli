@@ -25,20 +25,8 @@ def parse_episodes_from_js(js_code: str) -> List[Episode]:
 
     lecteurs = {}
     for lecteur_num, content in matches:
-        # Support both single quotes (legacy episodes.js) and double quotes
-        # (new inline JS embedded in the season HTML page).
-        urls = re.findall(r"['\"](https?://.*?)['\"]", content)
-        # Skip empty players (var epsN = []; with no URLs) — they would
-        # otherwise contribute a zero-length list and, if ALL of them are
-        # empty, crash max() below with 'empty iterable'.
-        if urls:
-            lecteurs[int(lecteur_num)] = urls
-
-    # No players at all (page without episode JS, or all players empty) :
-    # return an empty list so the caller can show "no episodes" cleanly
-    # instead of raising ValueError.
-    if not lecteurs:
-        return []
+        urls = re.findall(r"'(https?://.*?)'", content)
+        lecteurs[int(lecteur_num)] = urls
 
     lecteurs = dict(sorted(lecteurs.items()))
 

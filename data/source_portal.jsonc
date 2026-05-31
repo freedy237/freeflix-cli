@@ -1,8 +1,7 @@
 // FreeFlix source portal URLs — authoritative list.
-// Fetched at launch from this repo's main branch, so updating a URL
-// here and pushing is enough to fix every user when a site moves.
-// Hardcoded fallbacks live in src/freeflix_cli/defaults.py.
+// anime-sama uses the .pw portal which self-heals to the current mirror
+// via its btn-primary link (same mechanism as autoflix-cli).
 {
-  "anime-sama": "https://animes-sama.fr",
+  "anime-sama": "https://anime-sama.pw",
   "coflix":     "https://coflix.dance"
 }
