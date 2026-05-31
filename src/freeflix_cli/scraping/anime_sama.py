@@ -188,24 +188,42 @@ def get_season(url: str) -> SamaSeason:
             base = base[: -len("/" + lc)]
             break
 
-    for lang_code in lang_codes:
-        # New layout : the season page HTML at <base>/<lang> contains the
-        # episode JS inline (var eps1 = [...]; var eps2 = [...]).
-        page_url = f"{base}/{lang_code}"
-        response = scraper.get(page_url)
-        if response.status_code == 404:
-            # Try legacy episodes.js as a fallback for older mirrors.
-            legacy = f"{base}/{lang_code}/episodes.js?filever={randint(1, 100000)}"
-            response = scraper.get(legacy)
-            if response.status_code == 404:
-                continue
-        response.raise_for_status()
+    # Probe all candidate languages IN PARALLEL. The old sequential loop
+    # did up to 9 round-trips back-to-back (~900 ms+). A thread pool cuts
+    # that to roughly one round-trip — but each worker MUST use its own
+    # curl_cffi session : a curl handle is not safe to share across
+    # threads (concurrent use on the shared `scraper` serializes/errors).
+    from concurrent.futures import ThreadPoolExecutor
 
-        parsed = parse_episodes_from_js(response.text)
-        if not parsed:
-            continue
-        episodes[lang_code] = parsed
-        valid_lang.append(lang_code)
+    def _probe(lang_code):
+        sess = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
+        try:
+            page_url = f"{base}/{lang_code}"
+            response = sess.get(page_url, timeout=15)
+            if response.status_code == 404:
+                legacy = f"{base}/{lang_code}/episodes.js?filever={randint(1, 100000)}"
+                response = sess.get(legacy, timeout=15)
+                if response.status_code == 404:
+                    return lang_code, None
+            response.raise_for_status()
+            parsed = parse_episodes_from_js(response.text)
+            return lang_code, (parsed or None)
+        except Exception:
+            return lang_code, None
+        finally:
+            try:
+                sess.close()
+            except Exception:
+                pass
+
+    with ThreadPoolExecutor(max_workers=len(lang_codes)) as ex:
+        results = list(ex.map(_probe, lang_codes))
+
+    # Preserve the lang_codes order for a stable language menu.
+    for lang_code, parsed in results:
+        if parsed:
+            episodes[lang_code] = parsed
+            valid_lang.append(lang_code)
 
     # Clean up the title based on the URL
     parts = url.removesuffix("/").split("/")

@@ -89,18 +89,18 @@ install_mpv_config() {
     read -rp "  [Y/n] " ans
     [[ "${ans:-Y}" =~ ^[Nn] ]] && return 0
 
-    mkdir -p "$HOME/.config/mpv/scripts" "$HOME/.config/mpv/shaders"
+    mkdir -p "$HOME/.config/freeflix/mpv/scripts" "$HOME/.config/freeflix/mpv/shaders"
 
-    cp "$PROJECT_ROOT/config/mpv.conf"               "$HOME/.config/mpv/mpv.conf"
-    cp "$PROJECT_ROOT/config/input.conf"             "$HOME/.config/mpv/input.conf"
-    cp "$PROJECT_ROOT/config/freeflix_position.lua"  "$HOME/.config/mpv/scripts/freeflix_position.lua"
+    cp "$PROJECT_ROOT/config/mpv.conf"               "$HOME/.config/freeflix/mpv/mpv.conf"
+    cp "$PROJECT_ROOT/config/input.conf"             "$HOME/.config/freeflix/mpv/input.conf"
+    cp "$PROJECT_ROOT/config/freeflix_position.lua"  "$HOME/.config/freeflix/mpv/scripts/freeflix_position.lua"
 
     # Fetch Anime4K shaders (Mode A_VL, ~290 KB total)
     log "Downloading Anime4K shaders…"
     BASE="https://raw.githubusercontent.com/bloc97/Anime4K/master/glsl"
-    curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Clamp_Highlights.glsl"  "$BASE/Restore/Anime4K_Clamp_Highlights.glsl"
-    curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Restore_CNN_VL.glsl"    "$BASE/Restore/Anime4K_Restore_CNN_VL.glsl"
-    curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Upscale_CNN_x2_VL.glsl" "$BASE/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Clamp_Highlights.glsl"  "$BASE/Restore/Anime4K_Clamp_Highlights.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Restore_CNN_VL.glsl"    "$BASE/Restore/Anime4K_Restore_CNN_VL.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Upscale_CNN_x2_VL.glsl" "$BASE/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl"
 
     ok "mpv config installed (CTRL+1 toggles Anime4K)"
 }

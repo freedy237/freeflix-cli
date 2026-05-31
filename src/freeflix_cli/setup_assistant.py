@@ -109,11 +109,19 @@ def detect_gpus() -> Dict[str, bool]:
 
 # ─── Paths ────────────────────────────────────────────────────────────
 def get_mpv_config_dir() -> Path:
-    """Return the canonical mpv config dir for the current OS."""
+    """
+    Return FreeFlix's DEDICATED mpv config dir (not the global one).
+    mpv is launched by FreeFlix with --config-dir pointing here, so our
+    tuned config (Anime4K, big cache, position hook) applies ONLY to
+    FreeFlix playback — the user's normal `mpv file.mkv` stays vanilla.
+
+    Linux/macOS : ~/.config/freeflix/mpv
+    Windows     : %APPDATA%/freeflix/mpv
+    """
     if detect_os() == "windows":
         appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
-        return Path(appdata) / "mpv"
-    return Path.home() / ".config" / "mpv"
+        return Path(appdata) / "freeflix" / "mpv"
+    return Path.home() / ".config" / "freeflix" / "mpv"
 
 
 def get_local_bin_dir() -> Path:

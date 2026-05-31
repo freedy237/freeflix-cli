@@ -108,6 +108,29 @@ def _gpu_offload_env(base_env=None) -> dict:
 _nvidia_env = _gpu_offload_env
 
 
+def get_freeflix_mpv_config_dir() -> str:
+    """
+    Dedicated mpv config dir for FreeFlix, so our tuned config (Anime4K,
+    big cache, position-resume hook) applies ONLY when mpv is launched by
+    FreeFlix — never to the user's normal `mpv file.mkv` usage.
+
+    Linux/macOS : ~/.config/freeflix/mpv
+    Windows     : %APPDATA%/freeflix/mpv
+    """
+    if sys.platform in ("win32", "cygwin"):
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+        return os.path.join(base, "freeflix", "mpv")
+    return os.path.expanduser("~/.config/freeflix/mpv")
+
+
+def _mpv_config_args() -> list:
+    """Return ['--config-dir=...'] if the FreeFlix mpv config dir exists."""
+    cfg = get_freeflix_mpv_config_dir()
+    if os.path.isdir(cfg) and os.path.isfile(os.path.join(cfg, "mpv.conf")):
+        return [f"--config-dir={cfg}"]
+    return []
+
+
 PLAYERS: Dict[str, Dict[str, str]] = {
     "mpv": {"display": "mpv"},
     "vlc": {"display": "vlc"},
@@ -713,6 +736,7 @@ def play_video(
                     if local_subtitle_path:
                         cmd.append(f"--sub-file={local_subtitle_path}")
                 elif player_name == "mpv":
+                    cmd.extend(_mpv_config_args())  # FreeFlix-only mpv config
                     cmd.append(f"--title={title}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
@@ -778,6 +802,7 @@ def play_video(
 
                     cmd = [
                         player_executable,
+                        *_mpv_config_args(),  # FreeFlix-only mpv config
                         f'--referrer="{referer}"',
                         f'--user-agent="{user_agent}"',
                         f'--http-header-fields="{headers_mpv}"',
