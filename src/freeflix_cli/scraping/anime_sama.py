@@ -112,11 +112,21 @@ def get_series(url: str) -> SamaSeries:
 
     soup = BeautifulSoup(response.text, "html5lib")
 
-    title: str = soup.find("h4", {"id": "titreOeuvre"}).text
-    img: str = soup.find("img", {"id": "coverOeuvre"}).attrs["src"]
-    genres: list[str] = soup.find("a", {"class": "text-sm text-gray-300"}).text.split(
-        ", "
-    )
+    # Title : newer anime-sama layout dropped <h4 id="titreOeuvre"> in
+    # favour of a plain <h1>. Try the old id, then h1, then the URL slug.
+    title_el = soup.find("h4", {"id": "titreOeuvre"}) or soup.find("h1")
+    if title_el:
+        title = title_el.get_text(strip=True)
+    else:
+        title = url.rstrip("/").split("/")[-1].replace("-", " ").title()
+
+    # Cover (optional)
+    img_el = soup.find("img", {"id": "coverOeuvre"})
+    img = img_el.attrs.get("src", "") if img_el else ""
+
+    # Genres (optional — missing on some pages)
+    genres_el = soup.find("a", {"class": "text-sm text-gray-300"})
+    genres = genres_el.get_text(strip=True).split(", ") if genres_el else []
 
     seasons: list[SeasonAccess] = []
 
