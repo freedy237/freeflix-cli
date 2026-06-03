@@ -198,6 +198,7 @@ def handle_anime_sama():
             anilist_callback=lambda: _update_anilist_progress(
                 series, season, selected_episode
             ),
+            genres=getattr(series, "genres", None),
         )
 
         if success:

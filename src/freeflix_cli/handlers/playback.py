@@ -21,6 +21,7 @@ def play_episode_flow(
     logo_url: str = None,
     headers: dict = None,
     anilist_callback: callable = None,
+    genres=None,
 ) -> bool:
     """
     Handle the playback flow for a single episode:
@@ -87,6 +88,12 @@ def play_episode_flow(
                 episode_url=episode.url if hasattr(episode, "url") else "",
                 logo_url=logo_url,
             )
+
+            # Stats event (episodes/day, by provider, by genre)
+            try:
+                tracker.record_watch(provider_name, series_title, genres)
+            except Exception:
+                pass
 
             # AniList Hook
             if anilist_callback:

@@ -179,6 +179,93 @@ class ProgressTracker:
         self.data["player"] = player_code
         self._save_data()
 
+    # --- Theme preference ---
+
+    def get_theme(self) -> str:
+        return self.data.get("theme", "default")
+
+    def set_theme(self, name: str):
+        self.data["theme"] = name
+        self._save_data()
+
+    # --- Watch stats (episodes/day, by provider, by genre) ---
+
+    def record_watch(self, provider: str, series_title: str, genres=None):
+        """Append a lightweight watch event for the stats dashboard."""
+        if "watch_events" not in self.data:
+            self.data["watch_events"] = []
+        self.data["watch_events"].append(
+            {
+                "ts": datetime.now().isoformat(),
+                "provider": provider,
+                "series": series_title,
+                "genres": list(genres) if genres else [],
+            }
+        )
+        # Keep the log bounded (last 5000 events is plenty).
+        if len(self.data["watch_events"]) > 5000:
+            self.data["watch_events"] = self.data["watch_events"][-5000:]
+        self._save_data()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Compute aggregate viewing stats from the watch event log."""
+        events = self.data.get("watch_events", [])
+        total = len(events)
+        stats = {
+            "total": total,
+            "today": 0,
+            "this_week": 0,
+            "this_month": 0,
+            "by_provider": {},
+            "by_genre": {},
+            "by_day": {},
+            "top_series": {},
+            "streak": 0,
+        }
+        if not events:
+            return stats
+
+        now = datetime.now()
+        today = now.date()
+        days_seen = set()
+
+        for e in events:
+            try:
+                ts = datetime.fromisoformat(e["ts"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            d = ts.date()
+            days_seen.add(d)
+            delta = (today - d).days
+            if delta == 0:
+                stats["today"] += 1
+            if delta < 7:
+                stats["this_week"] += 1
+            if delta < 30:
+                stats["this_month"] += 1
+
+            prov = e.get("provider", "?")
+            stats["by_provider"][prov] = stats["by_provider"].get(prov, 0) + 1
+            for g in e.get("genres", []):
+                g = g.strip()
+                if g:
+                    stats["by_genre"][g] = stats["by_genre"].get(g, 0) + 1
+            ser = e.get("series", "?")
+            stats["top_series"][ser] = stats["top_series"].get(ser, 0) + 1
+            stats["by_day"][d.isoformat()] = stats["by_day"].get(d.isoformat(), 0) + 1
+
+        # Current consecutive-day streak ending today (or yesterday).
+        streak = 0
+        from datetime import timedelta
+        cur = today
+        if cur not in days_seen:
+            cur = today - timedelta(days=1)
+        while cur in days_seen:
+            streak += 1
+            cur = cur - timedelta(days=1)
+        stats["streak"] = streak
+        return stats
+
     # --- Nvidia PRIME offload for hybrid Linux laptops ---
 
     def get_nvidia_offload(self) -> str:

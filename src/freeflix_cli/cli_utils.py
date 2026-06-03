@@ -7,6 +7,8 @@ from rich.text import Text
 from rich.live import Live
 from rich import print as rprint
 
+from .themes import color
+
 console = Console()
 
 
@@ -26,14 +28,14 @@ def get_user_input(prompt: str, default: str = None) -> str:
     Returns:
         The user's input as a string
     """
-    styled_prompt = Text(f"\n❯ {prompt}: ", style="bold cyan")
+    styled_prompt = Text(f"\n❯ {prompt}: ", style=f"bold {color('accent')}")
     console.print(styled_prompt, end="")
     return input().strip() or default
 
 
 def pause():
     """Wait for user input before continuing."""
-    console.input("\n[dim]Press Enter to continue...[/dim]")
+    console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
 
 
 def select_from_list(options: list[str], prompt: str, default_index: int = 0) -> int:
@@ -71,22 +73,22 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
         start_index = max(0, min(start_index, len(options) - window_size))
         end_index = min(len(options), start_index + window_size)
 
-        lines = [Text(f"\n❯ {prompt}", style="bold cyan")]
+        lines = [Text(f"\n❯ {prompt}", style=f"bold {color('accent')}")]
 
         # Up arrow indicator
         if start_index > 0:
-            lines.append(Text("  ↑ ...", style="dim"))
+            lines.append(Text("  ↑ ...", style=color("dim")))
 
         for idx in range(start_index, end_index):
             option = options[idx]
             if idx == selected_index:
-                lines.append(Text(f"  ● {option}", style="green bold"))
+                lines.append(Text(f"  ● {option}", style=f"{color('success')} bold"))
             else:
                 lines.append(Text(f"    {option}", style="white"))
 
         # Down arrow indicator
         if end_index < len(options):
-            lines.append(Text("  ↓ ...", style="dim"))
+            lines.append(Text("  ↓ ...", style=color("dim")))
 
         return Group(*lines)
 
@@ -106,7 +108,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
                 raise KeyboardInterrupt("Menu cancelled by user")
 
     console.print(
-        f"\n[bold cyan]❯ {prompt}[/bold cyan] [green]{options[selected_index]}[/green]"
+        f"\n[bold {color('accent')}]❯ {prompt}[/bold {color('accent')}] "
+        f"[{color('success')}]{options[selected_index]}[/{color('success')}]"
     )
     return selected_index
 
@@ -120,52 +123,32 @@ def print_header(text: str):
     """
     console.print()
     panel = Panel(
-        Text(text, style="bold white", justify="center"),
-        style="cyan",
-        border_style="bright_cyan",
+        Text(text, style=color("header"), justify="center"),
+        style=color("accent"),
+        border_style=color("border"),
         padding=(0, 2),
     )
     console.print(panel)
 
 
 def print_success(message: str):
-    """
-    Print a success message with a green checkmark.
-
-    Args:
-        message: Success message to display
-    """
-    console.print(f"[green]✓[/green] {message}")
+    """Print a success message with a checkmark."""
+    console.print(f"[{color('success')}]✓[/{color('success')}] {message}")
 
 
 def print_error(message: str):
-    """
-    Print an error message with a red X.
-
-    Args:
-        message: Error message to display
-    """
-    console.print(f"[red]✗[/red] {message}")
+    """Print an error message with an X."""
+    console.print(f"[{color('error')}]✗[/{color('error')}] {message}")
 
 
 def print_info(message: str):
-    """
-    Print an info message with a blue icon.
-
-    Args:
-        message: Info message to display
-    """
-    console.print(f"[blue]ℹ[/blue] {message}")
+    """Print an info message."""
+    console.print(f"[{color('info')}]ℹ[/{color('info')}] {message}")
 
 
 def print_warning(message: str):
-    """
-    Print a warning message with a yellow icon.
-
-    Args:
-        message: Warning message to display
-    """
-    console.print(f"[yellow]⚠[/yellow] {message}")
+    """Print a warning message."""
+    console.print(f"[{color('warning')}]⚠[/{color('warning')}] {message}")
 
 
 def clean_title(title: str) -> str:

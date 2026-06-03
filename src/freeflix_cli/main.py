@@ -106,6 +106,60 @@ def _browse_local_downloads():
         pass
 
 
+def _show_stats():
+    """Render the viewing-stats dashboard."""
+    from rich.panel import Panel
+    from rich.text import Text
+    from .themes import color
+
+    clear_screen()
+    print_header(t("📊 My Stats"))
+    stats = tracker.get_stats()
+
+    if stats["total"] == 0:
+        print_info(t("No viewing history yet — watch something first!"))
+        pause()
+        return
+
+    body = Text()
+    body.append(f"\n  {t('Total watched')} : ", style="white")
+    body.append(f"{stats['total']}\n", style=f"bold {color('success')}")
+    body.append(f"  {t('Today')} : ", style="white")
+    body.append(f"{stats['today']}", style=f"bold {color('accent')}")
+    body.append(f"   {t('This week')} : ", style="white")
+    body.append(f"{stats['this_week']}", style=f"bold {color('accent')}")
+    body.append(f"   {t('This month')} : ", style="white")
+    body.append(f"{stats['this_month']}\n", style=f"bold {color('accent')}")
+    body.append(f"  🔥 {t('Day streak')} : ", style="white")
+    body.append(f"{stats['streak']}\n\n", style=f"bold {color('warning')}")
+
+    def _top(d, n=5):
+        return sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]
+
+    if stats["by_provider"]:
+        body.append(f"  {t('By source')} :\n", style=f"bold {color('info')}")
+        for name, cnt in _top(stats["by_provider"]):
+            body.append(f"    {name:20s} {cnt}\n", style="white")
+        body.append("\n")
+
+    if stats["by_genre"]:
+        body.append(f"  {t('Favorite genres')} :\n", style=f"bold {color('info')}")
+        for name, cnt in _top(stats["by_genre"]):
+            body.append(f"    {name:20s} {cnt}\n", style="white")
+        body.append("\n")
+
+    if stats["top_series"]:
+        body.append(f"  {t('Most watched')} :\n", style=f"bold {color('info')}")
+        for name, cnt in _top(stats["top_series"]):
+            body.append(f"    {name:30s} {cnt}\n", style="white")
+
+    console.print(
+        Panel(body, border_style=color("border"), expand=False,
+              title=f"[{color('header')}]{t('Viewing statistics')}[/]")
+    )
+    pause()
+
+
 def _show_about(version: str):
     """Render the About panel with version, links, credits."""
     from rich.panel import Panel
@@ -194,6 +248,15 @@ def main():
     # ── First-launch setup (only if user hasn't declined) ──────
     if setup_assistant.should_prompt_setup():
         setup_assistant.run_setup(force=False)
+
+    # ── Splash screen ──────────────────────────────────────────
+    try:
+        import importlib.metadata as _im
+        _v = _im.version("freeflix-cli")
+    except Exception:
+        _v = ""
+    from . import splash
+    splash.show_splash(version=_v)
 
     # Register Providers
     registry.register(
@@ -301,6 +364,10 @@ def main():
         menu_items.append(t("📁 My Downloads"))
         downloads_idx = len(menu_items) - 1
 
+        # 4b. My Stats
+        menu_items.append(t("📊 My Stats"))
+        stats_idx = len(menu_items) - 1
+
         # 5. Providers
         menu_items.append(t("🌍 Browse Providers"))
         providers_idx = len(menu_items) - 1
@@ -327,6 +394,10 @@ def main():
 
         if choice_idx == downloads_idx:
             _browse_local_downloads()
+            continue
+
+        if choice_idx == stats_idx:
+            _show_stats()
             continue
 
         if choice_idx == providers_idx:
@@ -358,10 +429,13 @@ def main():
                 par_n = tracker.get_parallel_downloads()
                 nv_mode = tracker.get_nvidia_offload()
                 from . import notifications as notif_mod
+                from . import themes as themes_mod
+                theme_label = themes_mod.active_theme().get("label", "?")
                 notif_on = notif_mod.is_systemd_timer_installed()
                 opts = [
                     f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})",
                     f"{t('Update Language')} ({lang_display})",
+                    f"🎨 {t('Theme')} ({theme_label})",
                     f"{t('Choose default Player')} ({player_display})",
                     f"{t('Download Quality')} ({quality})",
                     f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})",
@@ -389,6 +463,14 @@ def main():
                     print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
                     pause()
                 elif s_choice == 2:
+                    tlist = themes_mod.list_themes()
+                    t_choice = select_from_list(
+                        [lbl for _, lbl in tlist], t("Select theme:")
+                    )
+                    tracker.set_theme(tlist[t_choice][0])
+                    print_success(f"{t('Theme set to:')} {tlist[t_choice][1]}")
+                    pause()
+                elif s_choice == 3:
                     players = get_all_players()
                     p_choice = select_from_list(
                         [p[1] for p in players], t("Select default player:")
@@ -396,14 +478,14 @@ def main():
                     tracker.set_player(players[p_choice][0])
                     print_success(f"{t('Player updated to:')} {players[p_choice][1]}")
                     pause()
-                elif s_choice == 3:
+                elif s_choice == 4:
                     q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
                     q_vals = ["auto", "1080", "720", "480"]
                     q_choice = select_from_list(q_opts, t("Select download quality:"))
                     tracker.set_download_quality(q_vals[q_choice])
                     print_success(f"{t('Download quality set to:')} {q_opts[q_choice]}")
                     pause()
-                elif s_choice == 4:
+                elif s_choice == 5:
                     print_info("Register at https://www.opensubtitles.com/en/consumers")
                     print_info("to get a free API key, then paste it here.")
                     new_key = get_user_input(t("Enter OpenSubtitles API key"))
@@ -411,13 +493,13 @@ def main():
                         tracker.set_opensubtitles_key(new_key.strip())
                         print_success(t("OpenSubtitles key saved."))
                         pause()
-                elif s_choice == 5:
+                elif s_choice == 6:
                     n_opts = ["1 (sequential)", "2", "3", "4"]
                     n_choice = select_from_list(n_opts, t("Max parallel downloads:"))
                     tracker.set_parallel_downloads(n_choice + 1)
                     print_success(f"{t('Parallel downloads set to')} {n_choice + 1}")
                     pause()
-                elif s_choice == 6:
+                elif s_choice == 7:
                     if notif_on:
                         if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
                             if notif_mod.uninstall_systemd_timer():
@@ -437,7 +519,7 @@ def main():
                                     "and 'libnotify' is installed (sudo dnf install libnotify)."
                                 )
                             pause()
-                elif s_choice == 7:
+                elif s_choice == 8:
                     print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
                     print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
                     nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
@@ -446,7 +528,7 @@ def main():
                     tracker.set_nvidia_offload(nv_vals[c])
                     print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
                     pause()
-                elif s_choice == 8:
+                elif s_choice == 9:
                     _show_about(_VERSION)
                     pause()
                 else:
