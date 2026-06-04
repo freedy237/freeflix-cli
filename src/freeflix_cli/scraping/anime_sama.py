@@ -120,9 +120,27 @@ def get_series(url: str) -> SamaSeries:
     else:
         title = url.rstrip("/").split("/")[-1].replace("-", " ").title()
 
-    # Cover (optional)
-    img_el = soup.find("img", {"id": "coverOeuvre"})
-    img = img_el.attrs.get("src", "") if img_el else ""
+    # Cover : the <img id="coverOeuvre"> tag is missing on many catalogue
+    # pages (One Piece, Frieren…), which left the poster empty "when it
+    # felt like it". The og:image meta tag is ALWAYS present though, so try
+    # it first and fall back to coverOeuvre / a lazy-load attribute.
+    img = ""
+    og = soup.find("meta", {"property": "og:image"})
+    if og and og.attrs.get("content"):
+        img = og.attrs["content"].strip()
+    if not img:
+        img_el = soup.find("img", {"id": "coverOeuvre"})
+        if img_el:
+            img = (
+                img_el.attrs.get("src")
+                or img_el.attrs.get("data-src")
+                or img_el.attrs.get("data-lazy-src")
+                or ""
+            ).strip()
+    if img and img.startswith("//"):
+        img = "https:" + img
+    elif img and not img.startswith("http"):
+        img = website_origin.rstrip("/") + "/" + img.lstrip("/")
 
     # Genres (optional — missing on some pages)
     genres_el = soup.find("a", {"class": "text-sm text-gray-300"})

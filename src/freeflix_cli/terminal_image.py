@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 
 from .tracker import tracker
 
@@ -73,26 +74,37 @@ def _poster_size():
     return width, height
 
 
-def _download(url: str):
-    """Download `url` to a temp file. Returns the path or None."""
+def _download(url: str, attempts: int = 3):
+    """
+    Download `url` to a temp file. Returns the path or None.
+
+    Retries a couple of times because some cover hosts (e.g. Anime-Sama's
+    covers on raw.githubusercontent.com) rate-limit / time out
+    intermittently, which made posters appear "only when they felt like it".
+    """
     if not url or _rq is None:
         return None
-    try:
-        r = _rq.get(url, impersonate="chrome", timeout=12)
-        if r.status_code != 200 or not r.content:
-            return None
-        suffix = ".jpg"
-        low = url.lower()
-        for ext in (".png", ".webp", ".jpeg", ".jpg", ".gif"):
-            if ext in low:
-                suffix = ext
-                break
-        fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=suffix)
-        with os.fdopen(fd, "wb") as f:
-            f.write(r.content)
-        return path
-    except Exception:
-        return None
+
+    suffix = ".jpg"
+    low = url.lower()
+    for ext in (".png", ".webp", ".jpeg", ".jpg", ".gif"):
+        if ext in low:
+            suffix = ext
+            break
+
+    for i in range(attempts):
+        try:
+            r = _rq.get(url, impersonate="chrome", timeout=12)
+            if r.status_code == 200 and r.content:
+                fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=suffix)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(r.content)
+                return path
+        except Exception:
+            pass
+        if i < attempts - 1:
+            time.sleep(0.4)
+    return None
 
 
 def render_url(url: str, width: int = None, height: int = None) -> bool:
