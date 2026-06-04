@@ -148,6 +148,17 @@ def handle_anime_sama():
         pause()
         return
 
+    # Anime poster + summary at selection.
+    from .. import terminal_image
+    terminal_image.show_poster(
+        getattr(series, "img", ""),
+        title=series.title,
+        info_lines=[
+            f"{len(series.seasons)} season(s)",
+            ", ".join(getattr(series, "genres", []) or []),
+        ],
+    )
+
     # Check for saved progress for this specific series
     saved_progress = tracker.get_series_progress("Anime-Sama", series.title)
     if saved_progress:

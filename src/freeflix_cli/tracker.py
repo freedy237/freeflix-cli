@@ -180,6 +180,17 @@ class ProgressTracker:
         self.data["anime_language"] = lang_code
         self._save_data()
 
+    # Poster display mode for anime covers in the terminal (via chafa) :
+    #   "auto"  → chafa picks the best format the terminal supports
+    #   "sixel" → force sixel (photo quality ; needs Konsole Sixel enabled)
+    #   "off"   → never draw posters
+    def get_poster_mode(self) -> str:
+        return self.data.get("poster_mode", "auto")
+
+    def set_poster_mode(self, mode: str):
+        self.data["poster_mode"] = mode
+        self._save_data()
+
     # --- Player Preferences ---
 
     def get_player(self) -> Optional[str]:

@@ -97,6 +97,8 @@ _FR = {
     "Update AniList Token": "Modifier le jeton AniList",
     "Update Language": "Modifier la langue",
     "Update Anime Language": "Modifier la langue des animes",
+    "Languages": "Langues",
+    "Show Posters": "Afficher les pochettes",
     "Anime language:": "Langue des animes :",
     "Anime language updated to:": "Langue des animes mise à jour vers :",
     "Choose default Player": "Choisir le lecteur par défaut",

@@ -26,17 +26,28 @@ def show_splash(version: str = "", duration: float = 1.2):
     pause briefly. Skipped silently on tiny terminals.
     """
     try:
-        if console.size.height < 14 or console.size.width < 64:
-            return  # too small — don't garble the screen
+        w, h = console.size.width, console.size.height
+        if h < 10 or w < 26:
+            return  # genuinely too small — don't garble the screen
+
         clear_screen()
         console.print()
-        console.print(Align.center(Text(_LOGO, style=f"bold {color('accent')}")))
 
-        tagline = Text(
-            "Movies · Series · Anime — straight from your terminal",
-            style=color("info"),
-        )
-        console.print(Align.center(tagline))
+        # Responsive logo : full ANSI-shadow wordmark on wide terminals,
+        # a compact one when the big one (≈60 cols) wouldn't fit.
+        if w >= 64 and h >= 14:
+            console.print(Align.center(Text(_LOGO, style=f"bold {color('accent')}")))
+        else:
+            console.print(
+                Align.center(Text("🍿 FREEFLIX", style=f"bold {color('accent')}"))
+            )
+
+        # Tagline adapts to width too (full vs short).
+        if w >= 56:
+            tag = "Movies · Series · Anime — straight from your terminal"
+        else:
+            tag = "Movies · Series · Anime"
+        console.print(Align.center(Text(tag, style=color("info"))))
 
         if version:
             console.print(

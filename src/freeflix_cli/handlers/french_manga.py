@@ -93,6 +93,15 @@ def handle_french_manga():
         pause()
         return
 
+    # Show the anime poster + a quick summary at selection.
+    from .. import terminal_image
+    title_disp = data.get("title") or selection.title
+    terminal_image.show_poster(
+        data.get("cover"),
+        title=title_disp,
+        info_lines=[f"{t('Languages')}: {', '.join(l.upper() for l in langs)}"],
+    )
+
     if len(langs) == 1:
         selected_lang = langs[0]
     else:

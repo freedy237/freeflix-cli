@@ -108,6 +108,14 @@ def handle_goldenanime():
                 max_episodes = match.get("episodes")
                 cover_url = match.get("coverImage", {}).get("medium")
 
+    # Anime poster + summary at selection (cover from AniList).
+    from .. import terminal_image
+    terminal_image.show_poster(
+        cover_url,
+        title=title,
+        info_lines=[f"{max_episodes} episode(s)" if max_episodes else ""],
+    )
+
     # Episode Selection
     episode = 1
     if max_episodes:

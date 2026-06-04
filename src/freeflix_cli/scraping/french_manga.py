@@ -68,6 +68,33 @@ def _abs_url(url: str) -> str:
     return website_origin + "/" + url.lstrip("/")
 
 
+def _extract_cover(html: str) -> str:
+    """Grab the poster URL from the series page (og:image, TMDB, or fposter)."""
+    # 1. og:image meta (some DLE skins have it)
+    m = re.search(
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+        html,
+    )
+    if m:
+        return _abs_url(m.group(1))
+    # 2. TMDB poster (this skin uses image.tmdb.org/t/p/wNNN/…)
+    m = re.search(
+        r'https?://image\.tmdb\.org/t/p/w\d+/[^"\'\s>]+\.(?:jpg|jpeg|png)',
+        html,
+    )
+    if m:
+        return m.group(0)
+    # 3. First <img> inside the .fposter block
+    m = re.search(
+        r'class=["\']fposter["\'][^>]*>\s*<img[^>]+src=["\']([^"\']+)',
+        html,
+        re.DOTALL,
+    )
+    if m:
+        return _abs_url(m.group(1))
+    return ""
+
+
 def _extract_news_id(html: str):
     for pat in (r'data-newsid="(\d+)"', r'data-news-id="(\d+)"', r'newsid=(\d+)'):
         m = re.search(pat, html)
@@ -81,10 +108,11 @@ def get_episodes(url: str) -> dict:
     Return {"title": str, "vf": {ep_num: [Player,…]}, "vostfr": {…}}.
     Episode numbers are strings ("1", "2", …) as returned by the API.
     """
-    out = {"title": "", "vf": {}, "vostfr": {}}
+    out = {"title": "", "cover": "", "vf": {}, "vostfr": {}}
     url = _abs_url(url)
     try:
         page = scraper.get(url, timeout=20)
+        out["cover"] = _extract_cover(page.text)
         news_id = _extract_news_id(page.text)
         if not news_id:
             return out

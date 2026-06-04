@@ -517,6 +517,7 @@ def main():
                     f"{t('Parallel Downloads')} ({par_n})",
                     f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})",
                     f"Nvidia GPU offload ({nv_mode})",
+                    f"🖼 {t('Show Posters')} ({tracker.get_poster_mode()})",
                     f"ℹ {t('About')}",
                     t("Back"),
                 ]
@@ -614,6 +615,25 @@ def main():
                     print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
                     pause()
                 elif s_choice == 10:
+                    from . import terminal_image
+                    has_chafa = terminal_image.chafa_available()
+                    p_opts = [
+                        "auto (chafa picks best format)",
+                        "sixel (photo quality — needs terminal Sixel)",
+                        "off (no posters)",
+                    ]
+                    p_vals = ["auto", "sixel", "off"]
+                    if not has_chafa:
+                        print_warning(
+                            "chafa is not installed — posters won't show until you "
+                            "install it (e.g. sudo dnf install chafa)."
+                        )
+                    c = select_from_list(p_opts, t("Show Posters:"))
+                    tracker.set_poster_mode(p_vals[c])
+                    terminal_image.reset_cache()
+                    print_success(f"{t('Show Posters')}: {p_vals[c]}")
+                    pause()
+                elif s_choice == 11:
                     _show_about(_VERSION)
                     pause()
                 else:

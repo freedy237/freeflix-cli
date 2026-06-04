@@ -53,6 +53,16 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
     selected_index = max(0, min(default_index, len(options) - 1))
     start_index = 0
 
+    def _fit(text: str) -> str:
+        """Truncate an option to the terminal width so it never wraps and
+        breaks the Live render on narrow terminals (responsive)."""
+        # Reserve room for the "  ● " prefix; subtract a margin for wide
+        # glyphs (emoji count as 2 columns) to stay safe.
+        max_w = max(8, console.size.width - 6)
+        if len(text) <= max_w:
+            return text
+        return text[: max_w - 1] + "…"
+
     def generate_renderable():
         nonlocal start_index
 
@@ -80,7 +90,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
             lines.append(Text("  ↑ ...", style=color("dim")))
 
         for idx in range(start_index, end_index):
-            option = options[idx]
+            option = _fit(options[idx])
             if idx == selected_index:
                 lines.append(Text(f"  ● {option}", style=f"{color('success')} bold"))
             else:
