@@ -822,7 +822,14 @@ def play_video(
                 return False
 
             endpoint = "stream"
-            if ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4:
+            # /video is for direct MP4 (range seeking). But if the resolved
+            # stream is actually an HLS playlist (e.g. uqload now returns
+            # m3u8 despite an ext:mp4 config), force /stream so segments get
+            # proxied/rewritten.
+            is_hls_stream = ".m3u8" in stream_url.lower() or ".txt" in stream_url.lower()
+            if not is_hls_stream and (
+                ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4
+            ):
                 endpoint = "video"
 
             local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
@@ -904,7 +911,14 @@ def play_video(
                 return False
 
             endpoint = "stream"
-            if ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4:
+            # /video is for direct MP4 (range seeking). But if the resolved
+            # stream is actually an HLS playlist (e.g. uqload now returns
+            # m3u8 despite an ext:mp4 config), force /stream so segments get
+            # proxied/rewritten.
+            is_hls_stream = ".m3u8" in stream_url.lower() or ".txt" in stream_url.lower()
+            if not is_hls_stream and (
+                ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4
+            ):
                 endpoint = "video"
 
             local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"

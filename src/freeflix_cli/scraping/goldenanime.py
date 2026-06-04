@@ -181,27 +181,24 @@ class AnimeExtractor:
         """Extraction from Anizone (Updated Search and DOM selection)."""
         base_url = self.anizone_base
         try:
-            # 1. Search (New endpoint)
+            # 1. Search. anizone migrated to a Livewire app : the search
+            #    is /anime?search=… and result links are now ABSOLUTE with
+            #    short opaque slugs (…/anime/bmwdgxhk), not title slugs.
             r = scraper.get(
-                f"{base_url}/search?keyword={title}",
+                f"{base_url}/anime?search={title}",
                 headers=self.headers,
                 timeout=10,
             )
 
-            # Match slug logic
-            matches = re.finditer(r'href="/anime/([^"]+)"', r.text)
-            best_slug = None
-            t_slug = title.lower().replace(" ", "-")
-
-            for m in matches:
-                slug = m.group(1)
-                if not best_slug:
-                    best_slug = slug
-                if slug == t_slug:
-                    best_slug = slug
-                    break
-                if t_slug in slug and "season" not in slug:
-                    best_slug = slug
+            slugs = re.findall(
+                r'href="' + re.escape(base_url) + r'/anime/([a-z0-9]+)"',
+                r.text,
+            )
+            # de-dupe, keep order
+            slugs = list(dict.fromkeys(slugs))
+            # Slugs are opaque now, so we can't title-match — the first
+            # result is anizone's best relevance match.
+            best_slug = slugs[0] if slugs else None
 
             if not best_slug:
                 return []

@@ -61,11 +61,19 @@ def get_hls_link_default(url: str, headers: dict) -> str:
     """
     global actual_player_config
 
+    use_headers = headers
     if actual_player_config.get("m3u8-extractor"):
         if actual_player_config.get("m3u8-extractor").get("no-header"):
-            headers = {}
+            use_headers = {}
 
-    response = scraper.get(url, headers=headers, impersonate="chrome")
+    response = scraper.get(url, headers=use_headers, impersonate="chrome")
+
+    # Some hosts (e.g. fsvid) now REQUIRE the page referer despite the
+    # 'no-header' config flag and return 403 without it. Retry once with
+    # the original headers before giving up.
+    if response.status_code == 403 and use_headers is not headers and headers:
+        response = scraper.get(url, headers=headers, impersonate="chrome")
+
     response.raise_for_status()
 
     code = deobfuscate(response.text)
@@ -141,9 +149,27 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     )
     response.raise_for_status()
 
-    link = response.text.split('sources: ["')[1].split('"')[0]
+    text = response.text
+    # uqload now ships the player JS packed (dean-edwards). Unpack first.
+    try:
+        code = deobfuscate(text)
+    except Exception:
+        code = text
+    haystack = (code or "") + "\n" + text
 
-    return link
+    # Current layout : sources: [{ file: "https://…/master.m3u8?…" }]
+    # Legacy layout  : sources: ["https://…"]
+    for pat in (
+        r'file:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"',
+        r'sources:\s*\[\s*"([^"]+)"',
+        r'(https?://[^\s"\']+\.m3u8[^\s"\']*)',
+        r'(https?://[^\s"\']+\.mp4[^\s"\']*)',
+    ):
+        m = re.search(pat, haystack)
+        if m:
+            return m.group(1)
+
+    return None  # graceful : caller shows 'try another player'
 
 
 def get_hls_link_sendvid(url: str) -> str:
@@ -265,27 +291,37 @@ def get_hls_link_filemoon(url: str, headers: dict) -> str:
         return None
 
     code = url.split("/")[-1]
-    response = scraper.get(
-        "https://9n8o.com/api/videos/" + code + "/embed/playback",
-        impersonate="chrome",
-        headers={
-            "Referer": "https://9n8o.com/g1x/" + code + "/",
-            "X-Embed-Origin": headers["Referer"]
-            .removeprefix("https://")
-            .removesuffix("/"),
-            "X-Embed-Parent": "https://filemoon.sx/e/" + code,
-            "X-Embed-Referer": headers["Referer"],
-        },
-    )
-    response.raise_for_status()
+    try:
+        response = scraper.get(
+            "https://9n8o.com/api/videos/" + code + "/embed/playback",
+            impersonate="chrome",
+            headers={
+                "Referer": "https://9n8o.com/g1x/" + code + "/",
+                "X-Embed-Origin": headers.get("Referer", "")
+                .removeprefix("https://")
+                .removesuffix("/"),
+                "X-Embed-Parent": "https://filemoon.sx/e/" + code,
+                "X-Embed-Referer": headers.get("Referer", ""),
+            },
+        )
+    except Exception:
+        return None
+
+    # filemoon migrated to a client-side SPA ('Byse Frontend') ; the old
+    # 9n8o.com playback API now returns 405. Until/unless a new server-side
+    # path is found, fail gracefully so the caller offers another player
+    # instead of dumping an HTTP 405 traceback.
+    if response.status_code != 200:
+        return None
 
     decrypted_json_str = solve_decryption(response.text)
     if decrypted_json_str:
-        video_data = json.loads(decrypted_json_str)
-        video_url = video_data["sources"][0]["url"]
-        return video_url
-    else:
-        return get_hls_link(url, headers)
+        try:
+            video_data = json.loads(decrypted_json_str)
+            return video_data["sources"][0]["url"]
+        except Exception:
+            return None
+    return None
 
 
 def get_hls_link_vidoza(url: str, headers: dict) -> str:

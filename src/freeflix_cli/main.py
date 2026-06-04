@@ -274,11 +274,15 @@ def main():
         goldenms.handle_goldenms,
         supported_languages=None,
     )
-    registry.register(
-        "🎬 Coflix (Series and movies)",
-        coflix.handle_coflix,
-        supported_languages=["fr"],
-    )
+    # Coflix is disabled : its player aggregator (lecteurvideo.com) is
+    # Cloudflare-protected, so nothing it lists is playable from the
+    # terminal. The handler/scraper stay in the tree in case the host
+    # changes ; just not registered as a selectable source.
+    # registry.register(
+    #     "🎬 Coflix (Series and movies)",
+    #     coflix.handle_coflix,
+    #     supported_languages=["fr"],
+    # )
     registry.register(
         "🇫🇷 French-Stream (Series and movies)",
         french_stream.handle_french_stream,

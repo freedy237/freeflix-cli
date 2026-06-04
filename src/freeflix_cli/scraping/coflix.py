@@ -83,9 +83,21 @@ def get_players(players_url: str) -> list[Player]:
     }
 
     response = scraper.get(players_url, headers=headers)
+
+    content = response.text or ""
+    # coflix's player aggregator (lecteurvideo.com) sits behind Cloudflare
+    # and returns a 403 challenge page no terminal can pass. Surface a
+    # clear message instead of a raw HTTPError.
+    head = content[:1500].lower()
+    if response.status_code != 200 and (
+        "cloudflare" in head or "cf-ray" in head or "attention required" in head
+    ):
+        raise RuntimeError(
+            "Source coflix protégée par Cloudflare (lecteurvideo.com) — "
+            "non lisible depuis le terminal."
+        )
     response.raise_for_status()
 
-    content = response.text
     soup = BeautifulSoup(content, "html5lib")
 
     players = []
@@ -186,18 +198,25 @@ def get_series(url: str) -> CoflixSeries:
         for genre_link in genres_container.find_all("a"):
             genres.append(genre_link.text)
 
-    seasons_container = soup.find("ul", {"class": "sub-menu"})
+    # Seasons are radio inputs : <input name="seasons" data-season="1"
+    # post-id="12468" ...>. (The old code read <ul class="sub-menu">,
+    # which is the site nav — the theme moved seasons into a
+    # section.sc-seasons block.) The episode API endpoint is unchanged :
+    #   /wp-json/apiflix/v1/series/{post-id}/{data-season}
     seasons: list[SeasonAccess] = []
-
-    if seasons_container:
-        for season in seasons_container.find_all("li"):
-            input_element = season.find("input")
-            if input_element:
-                element_id = input_element.attrs["post-id"]
-                season_id = input_element.attrs["data-season"]
-
-                link = f"{website_origin}/wp-json/apiflix/v1/series/{element_id}/{season_id}"
-                seasons.append(SeasonAccess(season.text.strip(), link))
+    for inp in soup.find_all("input", attrs={"name": "seasons"}):
+        post_id = inp.attrs.get("post-id")
+        data_season = inp.attrs.get("data-season")
+        if not post_id or not data_season:
+            continue
+        link = f"{website_origin}/wp-json/apiflix/v1/series/{post_id}/{data_season}"
+        # Label : the <span> next to the radio (e.g. "From - Season 1"),
+        # falling back to "Season N".
+        parent = inp.find_parent()
+        label = parent.get_text(strip=True) if parent else ""
+        if not label:
+            label = f"Season {data_season}"
+        seasons.append(SeasonAccess(label, link))
 
     return CoflixSeries(title, url, img, genres, seasons)
 
