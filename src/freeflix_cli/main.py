@@ -207,15 +207,16 @@ def _show_about(version: str):
     )
 
 
-def _prompt_anime_language():
+def _prompt_anime_language(force=False):
     """
     First-launch step 1 : ask which language the user wants their anime in,
-    BEFORE the interface language is chosen. Runs only once.
+    BEFORE the interface language is chosen. Runs once, unless ``force`` is
+    set (e.g. from ``freeflix --setup``) to let the user redo the choice.
 
     The interface language isn't set yet at this point, so the prompt is
     intentionally bilingual (FR + EN).
     """
-    if tracker.get_anime_language():
+    if tracker.get_anime_language() and not force:
         return
 
     clear_screen()
@@ -240,17 +241,21 @@ def _prompt_anime_language():
     pause()
 
 
-def check_language_setup():
+def check_language_setup(force=False):
     """
     First-launch setup wizard. Two ordered steps :
       1. anime content language (English VO vs French VF) — asked first
       2. interface language (English / Français)
+
+    Normally each step runs only if unset. With ``force=True`` (from
+    ``freeflix --setup``) both steps are asked again so the user can redo
+    the choices they made on first launch.
     """
     # Step 1 — anime content language (before interface language).
-    _prompt_anime_language()
+    _prompt_anime_language(force=force)
 
     # Step 2 — interface language.
-    if not tracker.get_language():
+    if force or not tracker.get_language():
         clear_screen()
         print_header(t("First Launch Setup"))
         print_info(t("Please select your preferred language."))
@@ -270,6 +275,10 @@ def check_language_setup():
 def main():
     # ── CLI flags (lightweight, before anything else) ──────────
     if "--setup" in sys.argv:
+        # Redo the full first-launch experience : the language wizard
+        # (anime language, then interface language) AND the dependency
+        # setup assistant.
+        check_language_setup(force=True)
         setup_assistant.run_setup(force=True)
         return 0
     if "--version" in sys.argv or "-V" in sys.argv:
@@ -282,7 +291,7 @@ def main():
     if "--help" in sys.argv or "-h" in sys.argv:
         print("freeflix — terminal streaming for movies / series / anime\n")
         print("  freeflix           launch the TUI")
-        print("  freeflix --setup   re-run the first-launch setup wizard")
+        print("  freeflix --setup   re-run setup : anime + interface language, then deps")
         print("  freeflix --version print the installed version")
         print("  freeflix --help    this message")
         return 0
