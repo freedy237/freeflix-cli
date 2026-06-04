@@ -2,6 +2,7 @@
 // anime-sama uses the .pw portal which self-heals to the current mirror
 // via its btn-primary link (same mechanism as autoflix-cli).
 {
-  "anime-sama": "https://anime-sama.pw",
-  "coflix":     "https://coflix.dance"
+  "anime-sama":   "https://anime-sama.pw",
+  "french-manga": "https://w16.french-manga.net",
+  "coflix":       "https://coflix.dance"
 }

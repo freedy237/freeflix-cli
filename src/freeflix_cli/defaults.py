@@ -57,6 +57,11 @@ DEFAULT_PLAYERS = {
     "dingtezuni": {"type": "default"},
     "bingezove": {"type": "default"},
     "vidzy": {"type": "default"},
+    # luluvid (french-manga). Rotating domain ; packed-JS like the
+    # default extractor. May be unreachable when its domain rotates —
+    # users fall back to vidzy in that case.
+    "vidhsareup": {"type": "default"},
+    "luluvid": {"type": "default"},
     "ok.ru": {"type": "default"},
     "videzz": {
         "type": "vidoza",
@@ -129,6 +134,7 @@ DEFAULT_KAKAFLIX_PLAYERS = {
 
 DEFAULT_SOURCE_PORTAL = {
     "french-stream": "https://french-stream.one",
+    "french-manga": "https://w16.french-manga.net",
     "anime-sama": "https://anime-sama.pw",
     "coflix": "https://coflix.fans",
     "sudatchi": "https://sudatchi.com",

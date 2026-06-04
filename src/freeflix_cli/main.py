@@ -21,6 +21,7 @@ from .handlers import (
     anime_sama,
     coflix,
     french_stream,
+    french_manga,
     wiflix,
     anilist,
     goldenanime,
@@ -286,6 +287,11 @@ def main():
     registry.register(
         "🇫🇷 French-Stream (Series and movies)",
         french_stream.handle_french_stream,
+        supported_languages=["fr"],
+    )
+    registry.register(
+        "🎴 French-Manga (Anime VF/VOSTFR)",
+        french_manga.handle_french_manga,
         supported_languages=["fr"],
     )
     registry.register(

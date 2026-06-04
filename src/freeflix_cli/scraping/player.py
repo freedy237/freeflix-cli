@@ -21,6 +21,13 @@ players = load_remote_jsonc(
     DEFAULT_PLAYERS,
 )
 
+# FreeFlix-only players that the upstream autoflix players_info.jsonc does
+# not know about (french-manga's luluvid / vidzy). The remote list REPLACES
+# DEFAULT_PLAYERS when reachable, so we re-inject our extras here to make
+# sure they are always registered, online or offline.
+for _name, _cfg in DEFAULT_PLAYERS.items():
+    players.setdefault(_name, _cfg)
+
 # URL replacements for compatibility
 new_url = load_remote_jsonc(
     "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/new_url.jsonc",
