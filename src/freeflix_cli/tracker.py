@@ -170,6 +170,16 @@ class ProgressTracker:
         self.data["language"] = lang_code
         self._save_data()
 
+    # Anime content language ('fr' = VF/VOSTFR sources, 'en' = VO/sub
+    # sources). Chosen first on the very first launch, before the
+    # interface language, and used to filter the anime sources.
+    def get_anime_language(self) -> Optional[str]:
+        return self.data.get("anime_language")
+
+    def set_anime_language(self, lang_code: str):
+        self.data["anime_language"] = lang_code
+        self._save_data()
+
     # --- Player Preferences ---
 
     def get_player(self) -> Optional[str]:

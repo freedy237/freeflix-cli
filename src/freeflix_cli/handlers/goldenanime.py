@@ -181,7 +181,9 @@ def _flow_goldenanime_stream(
 
     # Subtitles logic
     subtitle_url = None
-    user_lang = tracker.get_language() or "fr"
+    # Subtitles follow the chosen content (anime) language : English pick →
+    # English subs, French pick → French subs. Fall back to interface lang.
+    user_lang = tracker.get_anime_language() or tracker.get_language() or "en"
     lang_name = get_language_label(user_lang)
 
     want_subs = select_from_list(["Yes", "No"], f"Search for {lang_name} subtitles?")

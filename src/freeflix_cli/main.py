@@ -207,8 +207,49 @@ def _show_about(version: str):
     )
 
 
+def _prompt_anime_language():
+    """
+    First-launch step 1 : ask which language the user wants their anime in,
+    BEFORE the interface language is chosen. Runs only once.
+
+    The interface language isn't set yet at this point, so the prompt is
+    intentionally bilingual (FR + EN).
+    """
+    if tracker.get_anime_language():
+        return
+
+    clear_screen()
+    print_header("🎴 Anime language  /  Langue des animes")
+    print_info(
+        "Do you want anime in English (VO/sub) or in French (VF/VOSTFR)?"
+    )
+    print_info(
+        "Voulez-vous les animes en anglais (VO/sous-titres) "
+        "ou en français (VF/VOSTFR) ?"
+    )
+
+    # Order: English first, then French (codes map to anime_language).
+    options = [
+        ("en", "🇺🇸 English  (VO / Subtitles)"),
+        ("fr", "🇫🇷 Français  (VF / VOSTFR)"),
+    ]
+    choice = select_from_list([label for _, label in options], "Choice / Choix:")
+    code, label = options[choice]
+    tracker.set_anime_language(code)
+    print_success(f"Anime language set to / Langue des animes : {label}")
+    pause()
+
+
 def check_language_setup():
-    """Verify if a language is set, if not, prompt for first setup."""
+    """
+    First-launch setup wizard. Two ordered steps :
+      1. anime content language (English VO vs French VF) — asked first
+      2. interface language (English / Français)
+    """
+    # Step 1 — anime content language (before interface language).
+    _prompt_anime_language()
+
+    # Step 2 — interface language.
     if not tracker.get_language():
         clear_screen()
         print_header(t("First Launch Setup"))
@@ -260,20 +301,37 @@ def main():
     splash.show_splash(version=_v)
 
     # Register Providers
+    #
+    # Order matters : it is the order shown in the source menu. Anime
+    # sources are listed first, then movie/series sources at the bottom.
+
+    # ── Anime sources (top) ────────────────────────────────────
     registry.register(
         "🎌 Anime-Sama (Anime and animated movies)",
         anime_sama.handle_anime_sama,
-        supported_languages=["fr"],
+        supported_languages=["en", "fr"],
     )
     registry.register(
         "✨ GoldenAnime (VO and Subtitles)",
         goldenanime.handle_goldenanime,
-        supported_languages=None,
+        supported_languages=["en", "fr"],
     )
+    registry.register(
+        "🎴 French-Manga (Anime VF/VOSTFR)",
+        french_manga.handle_french_manga,
+        supported_languages=["fr"],
+    )
+
+    # ── Movie / series sources (middle) ────────────────────────
     registry.register(
         "🌟 GoldenMS (Movies & Series)",
         goldenms.handle_goldenms,
-        supported_languages=None,
+        supported_languages=["en"],
+    )
+    registry.register(
+        "🇫🇷 French-Stream (Series and movies)",
+        french_stream.handle_french_stream,
+        supported_languages=["fr"],
     )
     # Coflix is disabled : its player aggregator (lecteurvideo.com) is
     # Cloudflare-protected, so nothing it lists is playable from the
@@ -284,20 +342,12 @@ def main():
     #     coflix.handle_coflix,
     #     supported_languages=["fr"],
     # )
-    registry.register(
-        "🇫🇷 French-Stream (Series and movies)",
-        french_stream.handle_french_stream,
-        supported_languages=["fr"],
-    )
-    registry.register(
-        "🎴 French-Manga (Anime VF/VOSTFR)",
-        french_manga.handle_french_manga,
-        supported_languages=["fr"],
-    )
+
+    # ── Torrent sources (very bottom) ──────────────────────────
     registry.register(
         "🌊 Nyaa (Torrents — high-quality anime releases)",
         nyaa_handler.handle_nyaa,
-        supported_languages=None,
+        supported_languages=["en", "fr"],
     )
 
     # Check for updates
@@ -411,8 +461,11 @@ def main():
             continue
 
         if choice_idx == providers_idx:
-            user_lang = tracker.get_language()
-            available_providers = registry.get_providers(user_lang)
+            # Sources are filtered by the chosen content (anime) language,
+            # not the interface language. Fall back to interface language,
+            # then to all sources, if it was never set.
+            content_lang = tracker.get_anime_language() or tracker.get_language()
+            available_providers = registry.get_providers(content_lang)
 
             p_items = [p["name"] for p in available_providers] + [t("← Back")]
             p_idx = select_from_list(p_items, t("Select a Provider:"))
@@ -433,6 +486,8 @@ def main():
 
                 lang_display = get_language_display(lang)
                 player_display = get_player_display(player)
+                anime_lang = tracker.get_anime_language()
+                anime_lang_display = get_language_display(anime_lang)
 
                 quality = tracker.get_download_quality()
                 os_key = tracker.get_opensubtitles_key()
@@ -445,6 +500,7 @@ def main():
                 opts = [
                     f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})",
                     f"{t('Update Language')} ({lang_display})",
+                    f"{t('Update Anime Language')} ({anime_lang_display})",
                     f"🎨 {t('Theme')} ({theme_label})",
                     f"{t('Choose default Player')} ({player_display})",
                     f"{t('Download Quality')} ({quality})",
@@ -473,6 +529,16 @@ def main():
                     print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
                     pause()
                 elif s_choice == 2:
+                    langs = get_all_languages()
+                    a_choice = select_from_list(
+                        [l[1] for l in langs], t("Anime language:")
+                    )
+                    tracker.set_anime_language(langs[a_choice][0])
+                    print_success(
+                        f"{t('Anime language updated to:')} {langs[a_choice][1]}"
+                    )
+                    pause()
+                elif s_choice == 3:
                     tlist = themes_mod.list_themes()
                     t_choice = select_from_list(
                         [lbl for _, lbl in tlist], t("Select theme:")
@@ -480,7 +546,7 @@ def main():
                     tracker.set_theme(tlist[t_choice][0])
                     print_success(f"{t('Theme set to:')} {tlist[t_choice][1]}")
                     pause()
-                elif s_choice == 3:
+                elif s_choice == 4:
                     players = get_all_players()
                     p_choice = select_from_list(
                         [p[1] for p in players], t("Select default player:")
@@ -488,14 +554,14 @@ def main():
                     tracker.set_player(players[p_choice][0])
                     print_success(f"{t('Player updated to:')} {players[p_choice][1]}")
                     pause()
-                elif s_choice == 4:
+                elif s_choice == 5:
                     q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
                     q_vals = ["auto", "1080", "720", "480"]
                     q_choice = select_from_list(q_opts, t("Select download quality:"))
                     tracker.set_download_quality(q_vals[q_choice])
                     print_success(f"{t('Download quality set to:')} {q_opts[q_choice]}")
                     pause()
-                elif s_choice == 5:
+                elif s_choice == 6:
                     print_info("Register at https://www.opensubtitles.com/en/consumers")
                     print_info("to get a free API key, then paste it here.")
                     new_key = get_user_input(t("Enter OpenSubtitles API key"))
@@ -503,13 +569,13 @@ def main():
                         tracker.set_opensubtitles_key(new_key.strip())
                         print_success(t("OpenSubtitles key saved."))
                         pause()
-                elif s_choice == 6:
+                elif s_choice == 7:
                     n_opts = ["1 (sequential)", "2", "3", "4"]
                     n_choice = select_from_list(n_opts, t("Max parallel downloads:"))
                     tracker.set_parallel_downloads(n_choice + 1)
                     print_success(f"{t('Parallel downloads set to')} {n_choice + 1}")
                     pause()
-                elif s_choice == 7:
+                elif s_choice == 8:
                     if notif_on:
                         if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
                             if notif_mod.uninstall_systemd_timer():
@@ -529,7 +595,7 @@ def main():
                                     "and 'libnotify' is installed (sudo dnf install libnotify)."
                                 )
                             pause()
-                elif s_choice == 8:
+                elif s_choice == 9:
                     print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
                     print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
                     nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
@@ -538,7 +604,7 @@ def main():
                     tracker.set_nvidia_offload(nv_vals[c])
                     print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
                     pause()
-                elif s_choice == 9:
+                elif s_choice == 10:
                     _show_about(_VERSION)
                     pause()
                 else:

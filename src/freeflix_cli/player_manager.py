@@ -659,9 +659,16 @@ def play_video(
     if not local_subtitle_path and tracker.get_opensubtitles_key():
         try:
             from . import subtitles as os_subs
-            user_lang = tracker.get_language() or "en"
-            print_info("No source subtitles; trying OpenSubtitles fallback…")
-            fetched = os_subs.fetch_best_subtitle(title, languages=user_lang)
+            # Subtitles follow the chosen *content* (anime) language : pick
+            # English → English subs, French → French subs. Fall back to the
+            # interface language, then English.
+            sub_lang = (
+                tracker.get_anime_language()
+                or tracker.get_language()
+                or "en"
+            )
+            print_info(f"No source subtitles; trying OpenSubtitles fallback ({sub_lang})…")
+            fetched = os_subs.fetch_best_subtitle(title, languages=sub_lang)
             if fetched:
                 local_subtitle_path = fetched
                 print_success(f"OpenSubtitles match downloaded: {fetched}")
