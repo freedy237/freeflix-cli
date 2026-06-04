@@ -10,6 +10,7 @@ from ..cli_utils import (
     print_success,
     get_user_input,
     pause,
+    spinner,
 )
 from ..player_manager import play_video
 from ..tracker import tracker
@@ -99,8 +100,8 @@ def handle_goldenms():
     imdb_id = selected_meta.get("id", "")
 
     # Fetch full details to get TMDB ID
-    print_info("Fetching full metadata...")
-    full_meta = get_cinemeta_details(imdb_id, is_movie)
+    with spinner("Fetching metadata…"):
+        full_meta = get_cinemeta_details(imdb_id, is_movie)
 
     tmdb_id = full_meta.get("moviedb_id")
     if not tmdb_id:
@@ -188,15 +189,15 @@ def handle_goldenms():
 def _flow_goldenms_stream(
     title, tmdb_id, imdb_id, year, season, episode, is_movie, logo_url
 ):
-    print_info("Searching for streams (this may take a moment)...")
-    results = goldenms_extractor.extract(
-        title=title,
-        tmdb_id=tmdb_id,
-        imdb_id=imdb_id,
-        year=year if is_movie else None,
-        season=season,
-        episode=episode,
-    )
+    with spinner("Searching for streams… (this may take a moment)"):
+        results = goldenms_extractor.extract(
+            title=title,
+            tmdb_id=tmdb_id,
+            imdb_id=imdb_id,
+            year=year if is_movie else None,
+            season=season,
+            episode=episode,
+        )
 
     valid_results = [r for r in results if _is_valid(r)]
 

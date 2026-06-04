@@ -191,6 +191,15 @@ class ProgressTracker:
         self.data["poster_mode"] = mode
         self._save_data()
 
+    # Icon style : "emoji" (default, universal) or "nerd" (needs a Nerd Font
+    # selected in the terminal). Used by icons.icon().
+    def get_icon_style(self) -> str:
+        return self.data.get("icon_style", "emoji")
+
+    def set_icon_style(self, style: str):
+        self.data["icon_style"] = style
+        self._save_data()
+
     # --- Player Preferences ---
 
     def get_player(self) -> Optional[str]:

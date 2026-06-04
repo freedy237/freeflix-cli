@@ -9,6 +9,7 @@ from ..cli_utils import (
     get_user_input,
     pause,
     console,
+    spinner,
 )
 from ..player_manager import play_video
 from ..tracker import tracker
@@ -142,10 +143,10 @@ def _flow_goldenanime_stream(
     title: str, anilist_id: int, episode: int, cover_url: str = None
 ):
     """Common logic for searching streams, subtitles, and playing."""
-    print_info("Searching for streams...")
-    results = goldenanime.extract_vo(
-        title=title, anilist_id=anilist_id, episode=episode
-    )
+    with spinner("Searching for streams…"):
+        results = goldenanime.extract_vo(
+            title=title, anilist_id=anilist_id, episode=episode
+        )
 
     if not results:
         print_warning("No results found.")

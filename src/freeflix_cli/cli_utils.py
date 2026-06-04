@@ -5,9 +5,11 @@ from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 from rich.live import Live
+from rich.cells import cell_len
 from rich import print as rprint
 
 from .themes import color
+from .icons import iconify
 
 console = Console()
 
@@ -28,7 +30,7 @@ def get_user_input(prompt: str, default: str = None) -> str:
     Returns:
         The user's input as a string
     """
-    styled_prompt = Text(f"\n❯ {prompt}: ", style=f"bold {color('accent')}")
+    styled_prompt = Text(f"\n❯ {iconify(prompt)}: ", style=f"bold {color('accent')}")
     console.print(styled_prompt, end="")
     return input().strip() or default
 
@@ -54,14 +56,18 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
     start_index = 0
 
     def _fit(text: str) -> str:
-        """Truncate an option to the terminal width so it never wraps and
-        breaks the Live render on narrow terminals (responsive)."""
-        # Reserve room for the "  ● " prefix; subtract a margin for wide
-        # glyphs (emoji count as 2 columns) to stay safe.
-        max_w = max(8, console.size.width - 6)
-        if len(text) <= max_w:
+        """Truncate an option to the terminal width (in DISPLAY columns, so
+        wide emoji are counted as 2) so it never wraps and breaks the Live
+        render — leaving room for the selection-bar prefix."""
+        max_w = max(8, console.size.width - 8)
+        if cell_len(text) <= max_w:
             return text
-        return text[: max_w - 1] + "…"
+        out = ""
+        for ch in text:
+            if cell_len(out + ch) > max_w - 1:
+                break
+            out += ch
+        return out + "…"
 
     def generate_renderable():
         nonlocal start_index
@@ -83,18 +89,26 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
         start_index = max(0, min(start_index, len(options) - window_size))
         end_index = min(len(options), start_index + window_size)
 
-        lines = [Text(f"\n❯ {prompt}", style=f"bold {color('accent')}")]
+        lines = [Text(f"\n❯ {iconify(prompt)}", style=f"bold {color('accent')}")]
 
         # Up arrow indicator
         if start_index > 0:
             lines.append(Text("  ↑ ...", style=color("dim")))
 
+        bar_width = max(20, console.size.width)
         for idx in range(start_index, end_index):
-            option = _fit(options[idx])
+            option = _fit(iconify(options[idx]))
             if idx == selected_index:
-                lines.append(Text(f"  ● {option}", style=f"{color('success')} bold"))
+                # Full-width selection bar : reverse video follows the theme
+                # accent. Pad with cell_len (handles wide emoji) so the bar
+                # spans the row without wrapping.
+                label = f"  ▌  {option}"
+                pad = max(1, bar_width - cell_len(label) - 1)
+                lines.append(
+                    Text(label + " " * pad, style=f"bold {color('accent')} reverse")
+                )
             else:
-                lines.append(Text(f"    {option}", style="white"))
+                lines.append(Text(f"     {option}", style="white"))
 
         # Down arrow indicator
         if end_index < len(options):
@@ -118,10 +132,25 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0) ->
                 raise KeyboardInterrupt("Menu cancelled by user")
 
     console.print(
-        f"\n[bold {color('accent')}]❯ {prompt}[/bold {color('accent')}] "
-        f"[{color('success')}]{options[selected_index]}[/{color('success')}]"
+        f"\n[bold {color('accent')}]❯ {iconify(prompt)}[/bold {color('accent')}] "
+        f"[{color('success')}]{iconify(options[selected_index])}[/{color('success')}]"
     )
     return selected_index
+
+
+def spinner(message: str):
+    """
+    Animated spinner shown while a slow operation (scraping, resolving a
+    stream…) runs. Use as a context manager :
+
+        with spinner("Searching…"):
+            results = scraper.search(query)
+
+    Only wrap pure work — don't prompt or start another Live inside it.
+    """
+    return console.status(
+        f"[{color('info')}]{iconify(message)}[/{color('info')}]", spinner="dots"
+    )
 
 
 def print_header(text: str):
@@ -133,7 +162,7 @@ def print_header(text: str):
     """
     console.print()
     panel = Panel(
-        Text(text, style=color("header"), justify="center"),
+        Text(iconify(text), style=color("header"), justify="center"),
         style=color("accent"),
         border_style=color("border"),
         padding=(0, 2),
@@ -143,22 +172,22 @@ def print_header(text: str):
 
 def print_success(message: str):
     """Print a success message with a checkmark."""
-    console.print(f"[{color('success')}]✓[/{color('success')}] {message}")
+    console.print(f"[{color('success')}]✓[/{color('success')}] {iconify(message)}")
 
 
 def print_error(message: str):
     """Print an error message with an X."""
-    console.print(f"[{color('error')}]✗[/{color('error')}] {message}")
+    console.print(f"[{color('error')}]✗[/{color('error')}] {iconify(message)}")
 
 
 def print_info(message: str):
     """Print an info message."""
-    console.print(f"[{color('info')}]ℹ[/{color('info')}] {message}")
+    console.print(f"[{color('info')}]ℹ[/{color('info')}] {iconify(message)}")
 
 
 def print_warning(message: str):
     """Print a warning message."""
-    console.print(f"[{color('warning')}]⚠[/{color('warning')}] {message}")
+    console.print(f"[{color('warning')}]⚠[/{color('warning')}] {iconify(message)}")
 
 
 def clean_title(title: str) -> str:

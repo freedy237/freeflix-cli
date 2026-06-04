@@ -11,6 +11,7 @@ from .cli_utils import (
     console,
 )
 from .i18n import t
+from .icons import icon
 from .update_checker import check_update
 from . import setup_assistant
 from .tracker import tracker
@@ -43,7 +44,7 @@ def _browse_local_downloads():
     from .player_manager import DOWNLOAD_DIR
 
     clear_screen()
-    print_header("📁 My Downloads")
+    print_header(f"{icon('folder')} My Downloads")
 
     if not os.path.isdir(DOWNLOAD_DIR):
         print_info(f"No downloads folder yet ({DOWNLOAD_DIR}).")
@@ -114,7 +115,7 @@ def _show_stats():
     from .themes import color
 
     clear_screen()
-    print_header(t("📊 My Stats"))
+    print_header(f"{icon('stats')} {t('My Stats')}")
     stats = tracker.get_stats()
 
     if stats["total"] == 0:
@@ -131,7 +132,7 @@ def _show_stats():
     body.append(f"{stats['this_week']}", style=f"bold {color('accent')}")
     body.append(f"   {t('This month')} : ", style="white")
     body.append(f"{stats['this_month']}\n", style=f"bold {color('accent')}")
-    body.append(f"  🔥 {t('Day streak')} : ", style="white")
+    body.append(f"  {icon('fire')} {t('Day streak')} : ", style="white")
     body.append(f"{stats['streak']}\n\n", style=f"bold {color('warning')}")
 
     def _top(d, n=5):
@@ -199,7 +200,7 @@ def _show_about(version: str):
     console.print(
         Panel(
             body,
-            title=f"[bold cyan]ℹ  {t('About')}[/bold cyan]",
+            title=f"[bold cyan]{icon('info')}  {t('About')}[/bold cyan]",
             subtitle=f"[dim]freeflix v{version}[/dim]",
             border_style="cyan",
             expand=False,
@@ -316,29 +317,29 @@ def main():
 
     # ── Anime sources (top) ────────────────────────────────────
     registry.register(
-        "🎌 Anime-Sama (Anime and animated movies)",
+        f"{icon('anime')} Anime-Sama (Anime and animated movies)",
         anime_sama.handle_anime_sama,
         supported_languages=["en", "fr"],
     )
     registry.register(
-        "✨ GoldenAnime (VO and Subtitles)",
+        f"{icon('sparkle')} GoldenAnime (VO and Subtitles)",
         goldenanime.handle_goldenanime,
         supported_languages=["en", "fr"],
     )
     registry.register(
-        "🎴 French-Manga (Anime VF/VOSTFR)",
+        f"{icon('manga')} French-Manga (Anime VF/VOSTFR)",
         french_manga.handle_french_manga,
         supported_languages=["fr"],
     )
 
     # ── Movie / series sources (middle) ────────────────────────
     registry.register(
-        "🌟 GoldenMS (Movies & Series)",
+        f"{icon('star')} GoldenMS (Movies & Series)",
         goldenms.handle_goldenms,
         supported_languages=["en"],
     )
     registry.register(
-        "🇫🇷 French-Stream (Series and movies)",
+        f"{icon('flag_fr')} French-Stream (Series and movies)",
         french_stream.handle_french_stream,
         supported_languages=["fr"],
     )
@@ -354,7 +355,7 @@ def main():
 
     # ── Torrent sources (very bottom) ──────────────────────────
     registry.register(
-        "🌊 Nyaa (Torrents — high-quality anime releases)",
+        f"{icon('wave')} Nyaa (Torrents — high-quality anime releases)",
         nyaa_handler.handle_nyaa,
         supported_languages=["en", "fr"],
     )
@@ -378,7 +379,7 @@ def main():
 
     while True:
         clear_screen()
-        print_header(f"{t('FreeFlix CLI - Home')}  •  v{_VERSION}")
+        print_header(f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}")
 
         # 1. Continue Watching (History)
         last_watch = tracker.get_last_global()
@@ -422,30 +423,30 @@ def main():
 
         # 2. Continue from AniList
         if tracker.get_anilist_token():
-            menu_items.append(t("▶ Continue from AniList"))
+            menu_items.append(f"{icon('play')} {t('Continue from AniList')}")
             anilist_resume_idx = len(menu_items) - 1
 
         # 3. My History
-        menu_items.append(t("📜 My History"))
+        menu_items.append(f"{icon('history')} {t('My History')}")
         history_idx = len(menu_items) - 1
 
         # 4. My Downloads (local files in ~/Downloads/FreeFlix/)
-        menu_items.append(t("📁 My Downloads"))
+        menu_items.append(f"{icon('folder')} {t('My Downloads')}")
         downloads_idx = len(menu_items) - 1
 
         # 4b. My Stats
-        menu_items.append(t("📊 My Stats"))
+        menu_items.append(f"{icon('stats')} {t('My Stats')}")
         stats_idx = len(menu_items) - 1
 
         # 5. Providers
-        menu_items.append(t("🌍 Browse Providers"))
+        menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
         providers_idx = len(menu_items) - 1
 
         # 6. Settings / Exit
-        menu_items.append(t("⚙ Settings (AniList)"))
+        menu_items.append(f"{icon('settings')} {t('Settings (AniList)')}")
         settings_idx = len(menu_items) - 1
 
-        menu_items.append(t("❌ Exit"))
+        menu_items.append(f"{icon('exit')} {t('Exit')}")
 
         choice_idx = select_from_list(menu_items, t("What would you like to do?"))
 
@@ -487,7 +488,7 @@ def main():
             # Settings menu
             while True:
                 clear_screen()
-                print_header(t("Settings"))
+                print_header(f"{icon('settings')} {t('Settings')}")
                 token = tracker.get_anilist_token()
                 lang = tracker.get_language()
                 player = tracker.get_player()
@@ -510,15 +511,16 @@ def main():
                     f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})",
                     f"{t('Update Language')} ({lang_display})",
                     f"{t('Update Anime Language')} ({anime_lang_display})",
-                    f"🎨 {t('Theme')} ({theme_label})",
+                    f"{icon('theme')} {t('Theme')} ({theme_label})",
                     f"{t('Choose default Player')} ({player_display})",
                     f"{t('Download Quality')} ({quality})",
                     f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})",
                     f"{t('Parallel Downloads')} ({par_n})",
                     f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})",
                     f"Nvidia GPU offload ({nv_mode})",
-                    f"🖼 {t('Show Posters')} ({tracker.get_poster_mode()})",
-                    f"ℹ {t('About')}",
+                    f"{icon('poster')} {t('Show Posters')} ({tracker.get_poster_mode()})",
+                    f"{icon('theme')} {t('Icon Style')} ({tracker.get_icon_style()})",
+                    f"{icon('info')} {t('About')}",
                     t("Back"),
                 ]
 
@@ -634,6 +636,18 @@ def main():
                     print_success(f"{t('Show Posters')}: {p_vals[c]}")
                     pause()
                 elif s_choice == 11:
+                    print_info(t("Nerd Font needs a Nerd Font selected in your terminal."))
+                    i_opts = [
+                        "emoji (works everywhere)",
+                        "nerd (crisp icons, needs a Nerd Font)",
+                    ]
+                    i_vals = ["emoji", "nerd"]
+                    c = select_from_list(i_opts, t("Icon Style:"))
+                    tracker.set_icon_style(i_vals[c])
+                    print_success(f"{t('Icon Style')}: {i_vals[c]}")
+                    print_info(t("Restart FreeFlix to apply icons everywhere."))
+                    pause()
+                elif s_choice == 12:
                     _show_about(_VERSION)
                     pause()
                 else:

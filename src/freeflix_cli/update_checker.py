@@ -14,6 +14,7 @@ from rich.text import Text
 
 from .tracker import tracker
 from .i18n import t
+from .icons import icon
 
 console = Console()
 
@@ -91,7 +92,7 @@ def check_update(package_name: str = "freeflix-cli") -> bool:
         return False
 
     body = Text()
-    body.append(f"\n  ⬆  {t('A new version of FreeFlix is available!')}\n\n",
+    body.append(f"\n  {icon('up')}  {t('A new version of FreeFlix is available!')}\n\n",
                 style="bold yellow")
     body.append(f"     {t('Installed')}:  ", style="white")
     body.append(f"{current}\n", style="bold red")
@@ -106,7 +107,7 @@ def check_update(package_name: str = "freeflix-cli") -> bool:
     console.print(
         Panel(
             body,
-            title=f"[bold yellow]🎉 {t('Update available')}[/bold yellow]",
+            title=f"[bold yellow]{icon('party')} {t('Update available')}[/bold yellow]",
             subtitle=f"[dim]{current} → {latest}[/dim]",
             border_style="yellow",
             expand=False,

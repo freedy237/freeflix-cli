@@ -9,6 +9,7 @@ from ..cli_utils import (
     get_user_input,
     console,
     pause,
+    spinner,
 )
 from ..player_manager import play_video
 from ..tracker import tracker
@@ -127,8 +128,8 @@ def handle_anime_sama():
     if not query or query.lower() == "exit":
         return
 
-    print_info(f"Searching for: [cyan]{query}[/cyan]")
-    results = anime_sama.search(query)
+    with spinner(f"Searching for {query}…"):
+        results = anime_sama.search(query)
 
     if not results:
         print_warning("No results found.")
@@ -140,8 +141,8 @@ def handle_anime_sama():
     )
     selection = results[choice_idx]
 
-    print_info(f"Loading [cyan]{selection.title}[/cyan]...")
-    series = anime_sama.get_series(selection.url)
+    with spinner(f"Loading {selection.title}…"):
+        series = anime_sama.get_series(selection.url)
 
     if not series.seasons:
         print_warning("No seasons found.")

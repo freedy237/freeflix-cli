@@ -8,6 +8,7 @@ from ..cli_utils import (
     print_warning,
     get_user_input,
     pause,
+    spinner,
 )
 from .playback import play_episode_flow
 from ..i18n import t
@@ -69,8 +70,8 @@ def handle_french_manga():
     if not query or query.lower() == "exit":
         return
 
-    print_info(f"{t('Searching for')}: [cyan]{query}[/cyan]")
-    results = french_manga.search(query)
+    with spinner(f"{t('Searching for')} {query}…"):
+        results = french_manga.search(query)
     if not results:
         print_warning(t("No results found."))
         pause()
@@ -83,8 +84,8 @@ def handle_french_manga():
         return
     selection = results[choice]
 
-    print_info(f"{t('Loading')} [cyan]{selection.title}[/cyan]...")
-    data = french_manga.get_episodes(selection.url)
+    with spinner(f"{t('Loading')} {selection.title}…"):
+        data = french_manga.get_episodes(selection.url)
 
     # Languages that actually have episodes
     langs = [lng for lng in ("vf", "vostfr") if data.get(lng)]
@@ -135,8 +136,8 @@ def resume_french_manga(data):
         pause()
         return
 
-    print_info(f"{t('Loading')} [cyan]{series_title}[/cyan]...")
-    epdata = french_manga.get_episodes(series_url)
+    with spinner(f"{t('Loading')} {series_title}…"):
+        epdata = french_manga.get_episodes(series_url)
     episodes = epdata.get(lang) or {}
     if not episodes:
         # The stored language has no episodes anymore — fall back to the other.

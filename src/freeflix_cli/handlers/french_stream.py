@@ -8,6 +8,7 @@ from ..cli_utils import (
     get_user_input,
     console,
     pause,
+    spinner,
 )
 from ..tracker import tracker
 from .playback import play_episode_flow
@@ -29,8 +30,8 @@ def handle_french_stream():
     if not query or query.lower() == "exit":
         return
 
-    print_info(f"Searching for: [cyan]{query}[/cyan]")
-    results = french_stream.search(query)
+    with spinner(f"Searching for {query}…"):
+        results = french_stream.search(query)
 
     if not results:
         print_warning("No results found.")
@@ -40,8 +41,8 @@ def handle_french_stream():
     choice_idx = select_from_list([f"{r.title}" for r in results], "📺 Search Results:")
     selection = results[choice_idx]
 
-    print_info(f"Loading [cyan]{selection.title}[/cyan]...")
-    content = french_stream.get_content(selection.url)
+    with spinner(f"Loading {selection.title}…"):
+        content = french_stream.get_content(selection.url)
 
     # Poster at selection (movie thumbnail, or the search-result image).
     from .. import terminal_image
