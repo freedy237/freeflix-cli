@@ -671,11 +671,15 @@ def play_video(
             print_info(f"OpenSubtitles lookup skipped: {e}")
 
     # Quality selection : if the resolved stream is a multi-variant HLS
-    # master (e.g. vidmoly's 1080p+480p), let the user pick a quality.
-    # We swap stream_url to the chosen variant's own playlist URL, so the
-    # selection works for EVERY player (mpv, vlc, download) — not just
-    # mpv's --hls-bitrate. 'Auto (best)' keeps the master untouched.
-    # Skipped for non-interactive callers (batch download).
+    # master (e.g. vidmoly 1080p/480p, anizone 1080p…360p), let the user
+    # pick. We apply the choice via mpv's --hls-bitrate on the MASTER
+    # rather than swapping stream_url to a single variant playlist :
+    # masters with a SEPARATE audio rendition (EXT-X-MEDIA TYPE=AUDIO,
+    # e.g. anizone) would otherwise lose their audio track when reduced
+    # to a video-only variant. Keeping the master preserves audio for
+    # both muxed and split-audio streams.
+    # Also doubles as a Cloudflare-block probe. Skipped for batch.
+    selected_hls_bitrate = None
     if not force_player:
         try:
             probe_headers = _proxy_request_headers(
@@ -695,8 +699,8 @@ def play_video(
             _variants = probe.get("variants", [])
             if len(_variants) > 1:
                 chosen = _prompt_hls_quality(_variants)
-                if chosen and chosen.get("uri"):
-                    stream_url = chosen["uri"]
+                if chosen and chosen.get("bandwidth"):
+                    selected_hls_bitrate = chosen["bandwidth"]
                     print_info(f"Quality: [cyan]{chosen['label']}[/cyan]")
         except Exception:
             pass
@@ -936,6 +940,10 @@ def play_video(
                 elif player_name == "mpv":
                     cmd.extend(_mpv_config_args())  # FreeFlix-only mpv config
                     cmd.append(f"--title={title}")
+                    if selected_hls_bitrate:
+                        # Cap to the chosen variant ; mpv keeps the master's
+                        # audio rendition.
+                        cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
 
@@ -1006,6 +1014,8 @@ def play_video(
                         f'--http-header-fields="{headers_mpv}"',
                         f'--title="{title}"',
                     ]
+                    if selected_hls_bitrate:
+                        cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
                     pos_args_d, pos_file_d, pos_key_d = _mpv_position_args(title)
