@@ -55,6 +55,19 @@ def search(query: str) -> list:
     return results
 
 
+def _abs_url(url: str) -> str:
+    """Make a possibly-relative URL absolute against website_origin.
+
+    Older history entries stored relative URLs (e.g. '/1498-foo.html'),
+    which curl can't fetch directly. Normalise them here so resume works.
+    """
+    if not url:
+        return url
+    if url.startswith("http"):
+        return url
+    return website_origin + "/" + url.lstrip("/")
+
+
 def _extract_news_id(html: str):
     for pat in (r'data-newsid="(\d+)"', r'data-news-id="(\d+)"', r'newsid=(\d+)'):
         m = re.search(pat, html)
@@ -69,6 +82,7 @@ def get_episodes(url: str) -> dict:
     Episode numbers are strings ("1", "2", …) as returned by the API.
     """
     out = {"title": "", "vf": {}, "vostfr": {}}
+    url = _abs_url(url)
     try:
         page = scraper.get(url, timeout=20)
         news_id = _extract_news_id(page.text)

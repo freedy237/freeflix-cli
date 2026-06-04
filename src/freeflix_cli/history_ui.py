@@ -6,7 +6,15 @@ from .cli_utils import (
     select_from_list,
     print_success,
 )
-from .handlers import anime_sama, coflix, french_stream, wiflix, goldenanime, goldenms
+from .handlers import (
+    anime_sama,
+    coflix,
+    french_stream,
+    french_manga,
+    wiflix,
+    goldenanime,
+    goldenms,
+)
 from .i18n import t
 
 
@@ -19,6 +27,8 @@ def handle_resume(data):
         coflix.resume_coflix(data)
     elif provider == "French-Stream":
         french_stream.resume_french_stream(data)
+    elif provider == "French-Manga":
+        french_manga.resume_french_manga(data)
     elif provider == "Wiflix":
         print_warning(
             "Resume for Wiflix not manually implemented here (usually direct)."
