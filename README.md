@@ -39,7 +39,7 @@
 | ⚡ | **Parallel downloads** (up to 4 concurrent episodes) |
 | 🔔 | **Daily notifications** when new episodes drop |
 | 🌊 | **Nyaa.si torrents** (high-quality anime releases) |
-| 🌐 | **6 streaming sources** : Anime-Sama, GoldenAnime, GoldenMS, Coflix, French-Stream, Nyaa |
+| 🌐 | **6 streaming sources** : Anime-Sama, GoldenAnime, French-Manga, GoldenMS, French-Stream, Nyaa |
 | 🎮 | **4 player backends** : mpv, VLC, browser, download-only |
 | 🇫🇷 | **French UI** : the whole CLI is in French when language is set to FR |
 | 🛡 | **Anti-crash mpv config** : ytdl-hook off, gpu renderer, no infinite reconnect |
@@ -184,6 +184,19 @@ The Linux `install.sh` does this for you when it detects an Nvidia card.
 | Vulkan/`gpu-next` instability on Mesa | `vo=gpu` (stable renderer) |
 | DNS-over-HTTPS timeouts (1.1.1.1) | Automatic fallback to system DNS |
 
+## 🆕 What's new in v1.5.6
+
+- 🎴 **New source : French-Manga** (anime VF/VOSTFR) with the vidzy & luluvid players ;
+- 🌍 **First-launch wizard now asks your anime language first** (English VO/sub vs French VF/VOSTFR), *before* the interface language ;
+- 🎯 **Content-language source filtering** : picking **English** shows Anime-Sama, GoldenAnime, GoldenMS and Nyaa ; picking **French** shows Anime-Sama, GoldenAnime, French-Manga, French-Stream and Nyaa ;
+- 📝 **Subtitles follow your anime language** : choose English → English subtitles are fetched, French → French subtitles ;
+- 🔀 **Source menu reordered** : anime sources on top, movies/series in the middle, torrents (Nyaa) at the very bottom ;
+- ⚙️ New **"Update Anime Language"** entry in Settings ;
+- 🔊 **Audio fix** : selecting a quality on HLS streams (GoldenAnime/anizone) no longer drops the audio track ;
+- 🧹 **Coflix removed** (its player aggregator is Cloudflare-protected and unplayable from the terminal).
+
+---
+
 ## 🆕 What's new in v1.0
 
 - 📥 **Download** option in every player menu — yt-dlp for HLS, aria2c for direct mp4, sane defaults ;
@@ -220,7 +233,7 @@ freeflix-cli/
 ├── config/
 │   ├── mpv.conf                # anti-crash + Anime4K config (shared)
 │   ├── input.conf              # CTRL+1 / CTRL+0 Anime4K toggles
-│   └── autoflix_position.lua   # position-resume mpv script
+│   └── freeflix_position.lua   # position-resume mpv script
 ├── scripts/
 │   ├── install.sh              # Linux multi-distro
 │   ├── install-mac.sh          # macOS (Homebrew)
@@ -241,6 +254,19 @@ freeflix-cli/
 - **mpv** : their respective authors.
 - **GitHub: [@freedy237](https://github.com/freedy237)** — fork maintainer.
 
+## ⚠️ Disclaimer
+
+This notice is to inform you that **FreeFlix** functions strictly as an automated search tool and specialized browser. It fetches video file metadata and links from the internet in a manner similar to any standard web browser.
+
+- **No Hosting:** FreeFlix does not host, store, or distribute any media files or copyrighted content. All content accessed through this tool is hosted by independent third-party websites.
+- **DMCA Compliance:** This software does not violate the provisions of the Digital Millennium Copyright Act (DMCA) as it only provides access to publicly available links and does not store copies of any content on its own servers.
+- **User Responsibility:** The use of this software and the legality of streaming content are the sole responsibility of the user, based on their respective country's or state's laws.
+- **Copyright Holders:** If you believe any content accessed through this tool violates your intellectual property, please contact the actual file hosts or the websites providing the streams, as the developers of this repository have no control over or access to the hosted content.
+
+This project is for **educational purposes only**.
+
+---
+
 ## 📜 License
 
 GNU General Public License v3.0 — same as upstream. See [LICENSE](./LICENSE).
@@ -257,6 +283,9 @@ FreeFlix est un fork stabilisé d'autoflix-cli avec :
 - Sync AniList, fallback OpenSubtitles ;
 - Téléchargements parallèles + notifications quotidiennes ;
 - Source Nyaa torrents en plus ;
+- Nouvelle source **French-Manga** (anime VF/VOSTFR, lecteurs vidzy & luluvid) ;
+- **Au premier lancement, on te demande d'abord la langue des animes** (anglais VO/sous-titres ou français VF/VOSTFR), puis la langue de l'interface ;
+- Les sources et les sous-titres téléchargés **suivent la langue des animes choisie** (anglais → sous-titres anglais, etc.) ;
 - UI 100 % traduite en français ;
 - Config mpv anti-crash + Anime4K déjà préinstallé ;
 - Tous les bugs liés au refacto d'animes-sama.fr de mai 2026 fixés.
