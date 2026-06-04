@@ -196,6 +196,73 @@ def install_anime4k_shaders() -> bool:
     return ok
 
 
+def _linux_chafa_cmd():
+    """Return the install command for chafa for the detected package manager."""
+    candidates = [
+        ("dnf", ["sudo", "dnf", "install", "-y", "chafa"]),
+        ("apt-get", ["sudo", "apt-get", "install", "-y", "chafa"]),
+        ("pacman", ["sudo", "pacman", "-S", "--needed", "--noconfirm", "chafa"]),
+        ("zypper", ["sudo", "zypper", "install", "-y", "chafa"]),
+        ("apk", ["sudo", "apk", "add", "chafa"]),
+    ]
+    for binname, cmd in candidates:
+        if shutil.which(binname):
+            return cmd
+    return None
+
+
+def install_chafa() -> bool:
+    """
+    Install chafa (anime posters in the terminal) using the OS package
+    manager. Interactive : asks before touching the system. Returns True
+    if chafa ends up available.
+    """
+    if shutil.which("chafa"):
+        print_success("chafa already installed — anime posters enabled")
+        return True
+
+    os_name = detect_os()
+    if os_name == "linux":
+        cmd = _linux_chafa_cmd()
+    elif os_name == "macos":
+        cmd = ["brew", "install", "chafa"] if shutil.which("brew") else None
+    elif os_name == "windows":
+        cmd = (
+            ["winget", "install", "--silent", "--accept-source-agreements",
+             "--accept-package-agreements", "--id", "hpjansson.Chafa"]
+            if shutil.which("winget") else None
+        )
+    else:
+        cmd = None
+
+    if not cmd:
+        print_warning(
+            "Could not find a package manager for chafa. Install it manually "
+            "to enable anime posters (https://hpjansson.org/chafa/)."
+        )
+        return False
+
+    print_info("chafa draws anime cover art inside the terminal (optional).")
+    try:
+        ans = input(f"Install chafa now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if ans in ("n", "no"):
+        return False
+
+    try:
+        subprocess.run(cmd, check=False)
+    except Exception as e:
+        print_warning(f"chafa install failed ({type(e).__name__}: {e})")
+        return False
+
+    if shutil.which("chafa"):
+        print_success("  ✓ chafa installed — anime posters enabled")
+        return True
+    print_warning("  ! chafa still not found — posters will stay off for now")
+    return False
+
+
 def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
     """
     Linux only : if a discrete GPU is detected (Nvidia OR AMD), drop
@@ -239,6 +306,53 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
             f"  ! {bindir} is not in your PATH — add this to ~/.bashrc / ~/.zshrc :\n"
             f'      export PATH="$HOME/.local/bin:$PATH"'
         )
+    return True
+
+
+# ─── Windows : install the media players ──────────────────────────────
+def install_windows_players() -> bool:
+    """
+    Windows : install mpv (mpv.net) and VLC via winget so FreeFlix can
+    actually launch them. Users who installed FreeFlix with `uv` never ran
+    install.ps1, so the players may be missing. The tuned mpv config is
+    applied separately by install_config_files() into %APPDATA%/freeflix/mpv.
+
+    mpv.net's binary is mpvnet.exe ; player_manager.get_mpv_path() resolves
+    both that and the winget shim, so FreeFlix can call it.
+    """
+    if detect_os() != "windows":
+        return True
+    if not shutil.which("winget"):
+        print_warning(
+            "winget not found. Install 'App Installer' from the Microsoft "
+            "Store, or install mpv.net and VLC manually, so FreeFlix can "
+            "launch them."
+        )
+        return False
+
+    wanted = [
+        ("mpv.net", "mpv.net (mpv for Windows)", ("mpv", "mpvnet")),
+        ("VideoLAN.VLC", "VLC media player", ("vlc",)),
+    ]
+    for pkg_id, label, bins in wanted:
+        if any(shutil.which(b) for b in bins):
+            print_success(f"  ✓ {label} already installed")
+            continue
+        print_info(f"Installing {label} via winget…")
+        try:
+            subprocess.run(
+                ["winget", "install", "--silent",
+                 "--accept-source-agreements", "--accept-package-agreements",
+                 "--id", pkg_id],
+                check=False,
+            )
+        except Exception as e:
+            print_warning(f"  ! {label} install failed ({type(e).__name__}: {e})")
+
+    print_info(
+        "If mpv/VLC aren't found immediately, open a NEW terminal so the "
+        "PATH refreshes, then run `freeflix` again."
+    )
     return True
 
 
@@ -305,6 +419,7 @@ def run_setup(force: bool = False) -> bool:
     print_info("This will :")
     print_info("  1. Install tuned mpv.conf + input.conf + position-resume hook")
     print_info("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)")
+    print_info("  3. Offer to install chafa (anime posters in the terminal)")
     if os_name == "linux" and (gpus["nvidia"] or gpus["amd_discrete"]):
         gpu = "Nvidia" if gpus["nvidia"] else "AMD"
         print_info(f"  3. Install a PRIME wrapper so standalone mpv uses the {gpu} dGPU")
@@ -325,10 +440,14 @@ def run_setup(force: bool = False) -> bool:
     install_config_files()
     print_info("\n[2/3] Downloading Anime4K shaders…")
     install_anime4k_shaders()
+    print_info("\n[+] Anime posters (chafa)…")
+    install_chafa()
     if os_name == "linux":
         print_info("\n[3/3] Installing PRIME wrapper…")
         install_prime_wrappers(gpus)
     elif os_name == "windows":
+        print_info("\n[3/3] Installing media players (mpv + VLC)…")
+        install_windows_players()
         print_platform_guidance_windows(gpus)
     elif os_name == "macos":
         print_platform_guidance_macos(gpus)

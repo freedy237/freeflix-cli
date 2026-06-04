@@ -24,7 +24,7 @@ ok "Homebrew available"
 
 # ─── 2. Install system packages ──────────────────────────────────────
 log "Installing system deps via brew…"
-brew install --quiet python yt-dlp ffmpeg aria2 mpv
+brew install --quiet python yt-dlp ffmpeg aria2 mpv chafa
 ok "System packages installed"
 
 # ─── 3. Install freeflix-cli ─────────────────────────────────────────

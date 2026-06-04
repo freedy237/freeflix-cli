@@ -27,11 +27,12 @@ DISTRO=$(detect_distro)
 log "Detected distro : ${DISTRO}"
 
 # ─── 2. Install system packages ──────────────────────────────────────
-SYSTEM_PKGS_FEDORA="mpv yt-dlp ffmpeg aria2 libnotify python3 python3-pip curl"
-SYSTEM_PKGS_DEBIAN="mpv yt-dlp ffmpeg aria2 libnotify-bin python3 python3-pip python3-venv curl"
-SYSTEM_PKGS_ARCH="mpv yt-dlp ffmpeg aria2 libnotify python python-pip curl"
-SYSTEM_PKGS_OPENSUSE="mpv yt-dlp ffmpeg aria2 libnotify-tools python3 python3-pip curl"
-SYSTEM_PKGS_ALPINE="mpv yt-dlp ffmpeg aria2 libnotify python3 py3-pip curl"
+# chafa renders anime posters inline in the terminal.
+SYSTEM_PKGS_FEDORA="mpv yt-dlp ffmpeg aria2 libnotify chafa python3 python3-pip curl"
+SYSTEM_PKGS_DEBIAN="mpv yt-dlp ffmpeg aria2 libnotify-bin chafa python3 python3-pip python3-venv curl"
+SYSTEM_PKGS_ARCH="mpv yt-dlp ffmpeg aria2 libnotify chafa python python-pip curl"
+SYSTEM_PKGS_OPENSUSE="mpv yt-dlp ffmpeg aria2 libnotify-tools chafa python3 python3-pip curl"
+SYSTEM_PKGS_ALPINE="mpv yt-dlp ffmpeg aria2 libnotify chafa python3 py3-pip curl"
 
 install_system_pkgs() {
     case "$DISTRO" in

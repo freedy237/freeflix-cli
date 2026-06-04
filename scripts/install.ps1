@@ -19,11 +19,13 @@ Ok "winget available"
 
 # ─── 2. System dependencies via winget ───────────────────────────────
 $packages = @(
-    @{ id = "Python.Python.3.12"; name = "Python 3.12" },
+    @{ id = "Python.Python.3.12";  name = "Python 3.12" },
     @{ id = "mpv.net";             name = "mpv.net (mpv for Windows)" },
+    @{ id = "VideoLAN.VLC";        name = "VLC media player" },
     @{ id = "yt-dlp.yt-dlp";       name = "yt-dlp" },
     @{ id = "Gyan.FFmpeg";         name = "FFmpeg" },
-    @{ id = "aria2.aria2";         name = "aria2" }
+    @{ id = "aria2.aria2";         name = "aria2" },
+    @{ id = "hpjansson.Chafa";     name = "chafa (anime posters)" }
 )
 
 foreach ($pkg in $packages) {

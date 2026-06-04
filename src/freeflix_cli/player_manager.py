@@ -349,6 +349,36 @@ def get_vlc_path():
     return None
 
 
+def get_mpv_path():
+    """
+    Find the mpv executable. On Windows the package most people install
+    is mpv.net, whose binary is `mpvnet.exe` (not `mpv.exe`), so a plain
+    shutil.which("mpv") misses it. Resolve PATH names then known install
+    locations.
+
+    Returns the executable path, or None if not found.
+    """
+    # PATH : try mpv first, then mpv.net's binary name.
+    for name in ("mpv", "mpvnet"):
+        p = shutil.which(name)
+        if p:
+            return p
+
+    if platform.system() == "Windows":
+        candidates = [
+            os.path.expandvars(r"%ProgramFiles%\mpv.net\mpvnet.exe"),
+            os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\mpv.net\mpvnet.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpvnet.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpv.exe"),
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+
+    return None
+
+
 def handle_player_error(context: str = "player") -> int:
     """
     Handle player errors and ask user what they want to do.
@@ -766,7 +796,11 @@ def play_video(
                 force_manual_mode = True
                 continue
         else:
-            player_executable = shutil.which(player_name)
+            # mpv needs the Windows-aware resolver (mpv.net → mpvnet.exe).
+            if player_name == "mpv":
+                player_executable = get_mpv_path()
+            else:
+                player_executable = shutil.which(player_name)
             if not player_executable:
                 print_error(f"{player_name} is not installed or not in PATH.")
                 retry = handle_player_error(player_name)
