@@ -70,6 +70,10 @@ _FR = {
     "🎮 Select video player:": "🎮 Choisis le lecteur :",
     "📺 Choisis la qualité :": "📺 Choisis la qualité :",
     "Auto (best)": "Auto (meilleure)",
+    "This source is Cloudflare-protected and can't be played from the terminal.":
+        "Cette source est protégée par Cloudflare et ne peut pas être lue depuis le terminal.",
+    "→ Pick ANOTHER source from the list (e.g. Vidlink, another server), or try again later.":
+        "→ Choisis une AUTRE source dans la liste (ex: Vidlink, un autre serveur), ou réessaie plus tard.",
     "🎮 Select Player:": "🎮 Choisis le lecteur :",
     "No results found.": "Aucun résultat trouvé.",
     "No seasons found.": "Aucune saison trouvée.",

@@ -131,16 +131,73 @@ def _mpv_config_args() -> list:
     return []
 
 
-def _get_hls_variants(stream_url: str, headers: dict) -> list:
+def _proxy_request_headers(url: str, player_config: dict, is_direct: bool,
+                           headers: dict) -> dict:
     """
-    Fetch an HLS master playlist and return its quality variants, sorted
-    by bandwidth (highest first). Returns [] for a single-quality media
-    playlist or on any error — so the caller silently skips the prompt.
+    Build the exact header set the proxy uses to fetch a stream from a
+    given player host : the per-host Referer (most CDNs reject a fetch
+    without their own embed domain as referer), plus Alt-Used and any
+    sec_headers from the player config. Used by the quality/block probe
+    so it sees the SAME thing the proxy will — otherwise hosts like
+    embed4me / minochinos reject the probe (wrong referer) and the
+    quality menu never appears for them.
+    """
+    out = dict(headers) if headers else {}
+    # Referer (same logic as the proxy-mode block)
+    if not is_direct:
+        try:
+            domain = url.split("/")[2].lower()
+            referer = f"https://{domain}"
+            rc = player_config.get("referrer")
+            if rc == "full":
+                referer = url
+            elif rc == "path":
+                referer = f"https://{domain}/"
+            elif isinstance(rc, str):
+                referer = rc
+            referer = f"{referer}/"
+        except IndexError:
+            referer = ""
+    else:
+        referer = (headers or {}).get("Referer", "")
+    if referer:
+        out["Referer"] = referer
 
-    Each variant : {"label": "1080p", "bandwidth": 5038000, "height": 1080}
+    if player_config.get("alt-used") is True:
+        try:
+            out["Alt-Used"] = url.split("/")[2].lower()
+        except Exception:
+            pass
+
+    sec_headers = player_config.get("sec_headers")
+    if isinstance(sec_headers, str):
+        for part in sec_headers.split(";"):
+            if ":" in part:
+                k, v = part.split(":", 1)
+                out[k.strip()] = v.strip()
+    return out
+
+
+def _probe_stream(stream_url: str, headers: dict) -> dict:
     """
-    if not stream_url or ".m3u8" not in stream_url.lower():
-        return []
+    One fetch of the resolved stream that serves two purposes :
+      1. detect an upstream block (Cloudflare 403, etc.) so we can warn
+         the user clearly instead of letting mpv fail cryptically ;
+      2. parse HLS quality variants for the quality-selection menu.
+
+    Returns {"variants": [...], "blocked": "cloudflare" | "httpNNN" | None}.
+    Each variant : {"label","bandwidth","height","uri"}.
+    """
+    result = {"variants": [], "blocked": None}
+    if not stream_url:
+        return result
+    # Skip obvious direct video files (no HLS master to parse). We do NOT
+    # gate on ".m3u8" : some CDNs serve the master with a .txt / extension-
+    # less / .urlset name (e.g. Smoothpre's '…/master.txt'), so we detect
+    # HLS by content (#EXTM3U) instead.
+    path_lower = stream_url.split("?")[0].lower()
+    if path_lower.endswith((".mp4", ".mkv", ".avi", ".webm", ".mov")):
+        return result
     try:
         import m3u8 as _m3u8
         from curl_cffi import requests as _rq
@@ -150,18 +207,38 @@ def _get_hls_variants(stream_url: str, headers: dict) -> list:
             sess.curl_options.update(proxy.DNS_OPTIONS)
         except Exception:
             pass
-        r = sess.get(stream_url, headers=headers or {}, timeout=15)
+        # Plain GET (HLS playlists — incl. .txt / .urlset masters — are
+        # small text files ; we already skipped obvious direct video files
+        # by extension above). A non-stream GET is reliable ; curl_cffi's
+        # stream=True + early break can hang.
+        r = sess.get(stream_url, headers=headers or {}, timeout=12)
+        text = r.text or ""
+
         if r.status_code != 200:
-            return []
-        obj = _m3u8.loads(r.text, uri=stream_url)
+            hl = text[:1500].lower()
+            if r.status_code == 403 and (
+                "cloudflare" in hl
+                or "attention required" in hl
+                or "cf-ray" in hl
+                or "/cdn-cgi/" in hl
+            ):
+                result["blocked"] = "cloudflare"
+            else:
+                result["blocked"] = f"http{r.status_code}"
+            return result
+
+        if "#EXTM3U" not in text[:256]:
+            return result  # not an HLS playlist (direct video, etc.)
+
+        obj = _m3u8.loads(text, uri=stream_url)
         if not obj.playlists:
-            return []  # media playlist → single quality, nothing to choose
+            return result  # media playlist → single quality, nothing to choose
 
         variants = []
         for p in obj.playlists:
             si = p.stream_info
             bw = si.bandwidth or 0
-            res = si.resolution  # (width, height) or None
+            res = si.resolution
             height = res[1] if res else None
             if height:
                 label = f"{height}p"
@@ -169,25 +246,32 @@ def _get_hls_variants(stream_url: str, headers: dict) -> list:
                 label = f"{bw // 1000} kbps"
             else:
                 label = "?"
-            variants.append({"label": label, "bandwidth": bw, "height": height})
+            try:
+                uri = p.absolute_uri
+            except Exception:
+                uri = p.uri
+            variants.append({
+                "label": label, "bandwidth": bw, "height": height, "uri": uri,
+            })
 
-        # De-dupe identical labels, keep highest bandwidth per label
         seen = {}
         for v in variants:
             key = v["label"]
             if key not in seen or v["bandwidth"] > seen[key]["bandwidth"]:
                 seen[key] = v
-        variants = sorted(seen.values(), key=lambda v: v["bandwidth"], reverse=True)
-        return variants
+        result["variants"] = sorted(
+            seen.values(), key=lambda v: v["bandwidth"], reverse=True
+        )
+        return result
     except Exception:
-        return []
+        return result
 
 
 def _prompt_hls_quality(variants: list):
     """
     Show a quality menu for a multi-variant HLS stream.
-    Returns the chosen max bandwidth (int, for mpv --hls-bitrate) or
-    None for 'Auto (best)'.
+    Returns the chosen variant dict (with its 'uri'), or None for
+    'Auto (best)' which keeps the original master playlist.
     """
     opts = []
     for v in variants:
@@ -197,7 +281,7 @@ def _prompt_hls_quality(variants: list):
     idx = select_from_list(opts, t("📺 Choisis la qualité :"))
     if idx == len(variants):  # Auto
         return None
-    return variants[idx]["bandwidth"]
+    return variants[idx]
 
 
 PLAYERS: Dict[str, Dict[str, str]] = {
@@ -588,16 +672,34 @@ def play_video(
 
     # Quality selection : if the resolved stream is a multi-variant HLS
     # master (e.g. vidmoly's 1080p+480p), let the user pick a quality.
-    # The chosen max bitrate is applied to mpv via --hls-bitrate. Skipped
-    # for non-interactive callers (batch download).
-    selected_hls_bitrate = None
+    # We swap stream_url to the chosen variant's own playlist URL, so the
+    # selection works for EVERY player (mpv, vlc, download) — not just
+    # mpv's --hls-bitrate. 'Auto (best)' keeps the master untouched.
+    # Skipped for non-interactive callers (batch download).
     if not force_player:
         try:
-            _variants = _get_hls_variants(stream_url, headers)
+            probe_headers = _proxy_request_headers(
+                url, player_config, is_direct, headers
+            )
+            probe = _probe_stream(stream_url, probe_headers)
+            if probe.get("blocked") == "cloudflare":
+                print_error(t(
+                    "This source is Cloudflare-protected and can't be played "
+                    "from the terminal."
+                ))
+                print_info(t(
+                    "→ Pick ANOTHER source from the list (e.g. Vidlink, another "
+                    "server), or try again later."
+                ))
+                return False
+            _variants = probe.get("variants", [])
             if len(_variants) > 1:
-                selected_hls_bitrate = _prompt_hls_quality(_variants)
+                chosen = _prompt_hls_quality(_variants)
+                if chosen and chosen.get("uri"):
+                    stream_url = chosen["uri"]
+                    print_info(f"Quality: [cyan]{chosen['label']}[/cyan]")
         except Exception:
-            selected_hls_bitrate = None
+            pass
 
     force_manual_mode = False
     while True:  # Loop to allow retrying with another player
@@ -820,8 +922,6 @@ def play_video(
                 elif player_name == "mpv":
                     cmd.extend(_mpv_config_args())  # FreeFlix-only mpv config
                     cmd.append(f"--title={title}")
-                    if selected_hls_bitrate:
-                        cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
 
@@ -892,8 +992,6 @@ def play_video(
                         f'--http-header-fields="{headers_mpv}"',
                         f'--title="{title}"',
                     ]
-                    if selected_hls_bitrate:
-                        cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
                     if local_subtitle_path:
                         cmd.append(f"--sub-files={local_subtitle_path}")
                     pos_args_d, pos_file_d, pos_key_d = _mpv_position_args(title)
