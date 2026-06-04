@@ -110,6 +110,17 @@ def handle_goldenms():
         "year", selected_meta.get("releaseInfo", "").split("-")[0]
     )
 
+    # Poster + summary at selection (Cinemeta/TMDB cover).
+    from .. import terminal_image
+    terminal_image.show_poster(
+        full_meta.get("poster") or selected_meta.get("poster"),
+        title=media_title,
+        info_lines=[
+            f"{release_year}" if release_year else "",
+            (full_meta.get("genres") and ", ".join(full_meta["genres"][:4])) or "",
+        ],
+    )
+
     season = None
     episode = None
 

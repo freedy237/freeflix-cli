@@ -43,6 +43,14 @@ def handle_french_stream():
     print_info(f"Loading [cyan]{selection.title}[/cyan]...")
     content = french_stream.get_content(selection.url)
 
+    # Poster at selection (movie thumbnail, or the search-result image).
+    from .. import terminal_image
+    terminal_image.show_poster(
+        getattr(content, "img", "") or getattr(selection, "img", ""),
+        title=getattr(content, "title", selection.title),
+        info_lines=[", ".join(getattr(selection, "genres", []) or [])],
+    )
+
     if isinstance(content, FrenchStreamMovie):
         console.print(f"\n[bold]🎬 Movie:[/bold] [cyan]{content.title}[/cyan]")
         if not content.players:

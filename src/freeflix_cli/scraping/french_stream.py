@@ -19,6 +19,16 @@ if not website_origin.startswith("http"):
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
+def _abs_img(src: str) -> str:
+    """Resolve an <img> src : leave absolute URLs (e.g. TMDB) untouched,
+    prefix the site origin only for relative paths."""
+    if not src:
+        return ""
+    if src.startswith("http") or src.startswith("//"):
+        return src
+    return website_origin + "/" + src.lstrip("/")
+
+
 def search(query: str) -> list[SearchResult]:
     page_search = "/engine/ajax/search.php"
 
@@ -55,7 +65,7 @@ def search(query: str) -> list[SearchResult]:
             + result.attrs["onclick"].split("location.href='")[1].split("'")[0]
         )
         try:
-            img: str = website_origin + result.find("img").attrs["src"]
+            img: str = _abs_img(result.find("img").attrs["src"])
         except AttributeError:
             img: str = ""  # no image
 
@@ -73,9 +83,7 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
 
     img: str = ""
     try:
-        img: str = (
-            website_origin + soup.find("img", {"class": "dvd-thumbnail"}).attrs["src"]
-        )
+        img: str = _abs_img(soup.find("img", {"class": "dvd-thumbnail"}).attrs["src"])
     except AttributeError:
         img: str = ""
     genres: list[str] = []
