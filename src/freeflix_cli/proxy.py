@@ -18,6 +18,32 @@ _server_instance = None  # To store the server for shutdown
 player_finished_event = threading.Event()
 player_heartbeat_time = 0
 
+# ── Data-usage meter ──────────────────────────────────────────────────
+# Counts the bytes streamed to the player (HLS segments + MP4) so FreeFlix
+# can show live data usage during playback and a total at the end.
+_bytes_lock = threading.Lock()
+_bytes_served = 0
+
+
+def reset_bytes_counter():
+    """Zero the data-usage meter (call right before a playback)."""
+    global _bytes_served
+    with _bytes_lock:
+        _bytes_served = 0
+
+
+def add_bytes(n: int):
+    global _bytes_served
+    with _bytes_lock:
+        _bytes_served += n
+
+
+def get_bytes_served() -> int:
+    """Total bytes streamed to the player since the last reset."""
+    with _bytes_lock:
+        return _bytes_served
+
+
 app = Flask(__name__)
 
 # Requested Google DNS Options
@@ -291,6 +317,7 @@ def proxy_ts():
         try:
             for chunk in resp.iter_content(chunk_size=8192):
                 if chunk:
+                    add_bytes(len(chunk))
                     yield chunk
         except Exception as e:
             print(f"[proxy /ts] upstream chunk failed: {type(e).__name__}: {e}")
@@ -348,6 +375,7 @@ def proxy_video():
                 chunk_size=16384
             ):  # Slightly larger chunks for MP4
                 if chunk:
+                    add_bytes(len(chunk))
                     yield chunk
         except Exception as e:
             print(f"[proxy /video] upstream chunk failed: {type(e).__name__}: {e}")

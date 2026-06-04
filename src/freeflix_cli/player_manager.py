@@ -407,6 +407,36 @@ def _resolve_or_install(player_name: str):
     return exe
 
 
+def _run_with_data_meter(cmd, env=None):
+    """
+    Launch the player (proxy mode) and show a LIVE data-usage counter that
+    grows as the proxy streams segments, then the total consumed at the end.
+    Raises CalledProcessError on a non-zero exit to preserve the previous
+    check=True behaviour.
+    """
+    proxy.reset_bytes_counter()
+    proc = subprocess.Popen(cmd, env=env)
+    rc = 0
+    try:
+        while True:
+            try:
+                rc = proc.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                mb = proxy.get_bytes_served() / (1024 * 1024)
+                print(f"\r  📊 Data used: {mb:8.1f} MB", end="", flush=True)
+    except KeyboardInterrupt:
+        proc.terminate()
+        rc = proc.wait()
+
+    total = proxy.get_bytes_served() / (1024 * 1024)
+    # Clear the live line and print the final total.
+    print(f"\r  📊 Data used: {total:8.1f} MB (total){' ' * 8}")
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd)
+    return rc
+
+
 def handle_player_error(context: str = "player") -> int:
     """
     Handle player errors and ask user what they want to do.
@@ -779,13 +809,24 @@ def play_video(
         else:
             player_pref = tracker.get_player()
             if force_manual_mode or not player_pref or player_pref == "manual":
-                players = ["mpv", "vlc", "browser", "download", t("← Back")]
-                player_choice = select_from_list(players, t("🎮 Select video player:"))
+                # Separate display labels from the internal values so the
+                # "(recommended)" tag on mpv doesn't leak into player_name.
+                player_values = ["mpv", "vlc", "browser", "download"]
+                player_labels = [
+                    f"mpv ({t('recommended')})",
+                    "vlc",
+                    "browser",
+                    "download",
+                    t("← Back"),
+                ]
+                player_choice = select_from_list(
+                    player_labels, t("🎮 Select video player:")
+                )
 
-                if players[player_choice] == t("← Back"):
+                if player_choice == len(player_values):  # Back
                     return False
 
-                player_name = players[player_choice]
+                player_name = player_values[player_choice]
                 player_executable = None
             else:
                 player_name = player_pref
@@ -1021,7 +1062,8 @@ def play_video(
                     cmd.extend(pos_args)
 
                 run_env = _nvidia_env() if player_name == "mpv" else None
-                subprocess.run(cmd, check=True, env=run_env)
+                # Proxy mode : show live data usage and the total at the end.
+                _run_with_data_meter(cmd, env=run_env)
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
                 print_success("Playback completed successfully!")
