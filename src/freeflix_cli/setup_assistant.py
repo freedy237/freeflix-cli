@@ -196,19 +196,90 @@ def install_anime4k_shaders() -> bool:
     return ok
 
 
-def _linux_chafa_cmd():
-    """Return the install command for chafa for the detected package manager."""
+def _linux_pkg_cmd(pkg: str):
+    """Return the install command for `pkg` for the detected package manager."""
     candidates = [
-        ("dnf", ["sudo", "dnf", "install", "-y", "chafa"]),
-        ("apt-get", ["sudo", "apt-get", "install", "-y", "chafa"]),
-        ("pacman", ["sudo", "pacman", "-S", "--needed", "--noconfirm", "chafa"]),
-        ("zypper", ["sudo", "zypper", "install", "-y", "chafa"]),
-        ("apk", ["sudo", "apk", "add", "chafa"]),
+        ("dnf", ["sudo", "dnf", "install", "-y", pkg]),
+        ("apt-get", ["sudo", "apt-get", "install", "-y", pkg]),
+        ("pacman", ["sudo", "pacman", "-S", "--needed", "--noconfirm", pkg]),
+        ("zypper", ["sudo", "zypper", "install", "-y", pkg]),
+        ("apk", ["sudo", "apk", "add", pkg]),
     ]
     for binname, cmd in candidates:
         if shutil.which(binname):
             return cmd
     return None
+
+
+def _linux_chafa_cmd():
+    """Return the install command for chafa for the detected package manager."""
+    return _linux_pkg_cmd("chafa")
+
+
+# Per-OS install command for the media players FreeFlix can launch.
+_PLAYER_PACKAGES = {
+    "mpv": {"linux": "mpv", "macos": "mpv", "winget": "mpv.net"},
+    "vlc": {"linux": "vlc", "macos": "vlc", "winget": "VideoLAN.VLC"},
+}
+
+
+def install_media_player(name: str) -> bool:
+    """
+    Install a media player (mpv / vlc) via the OS package manager. Interactive
+    (asks first). Returns True if the player ends up available afterwards.
+
+    Used both by the first-run wizard and on-demand at playback time when the
+    chosen player turns out to be missing.
+    """
+    spec = _PLAYER_PACKAGES.get(name)
+    if not spec:
+        return False
+
+    os_name = detect_os()
+    if os_name == "linux":
+        cmd = _linux_pkg_cmd(spec["linux"])
+    elif os_name == "macos":
+        cmd = ["brew", "install", spec["macos"]] if shutil.which("brew") else None
+    elif os_name == "windows":
+        cmd = (
+            ["winget", "install", "--silent", "--accept-source-agreements",
+             "--accept-package-agreements", "--id", spec["winget"]]
+            if shutil.which("winget") else None
+        )
+    else:
+        cmd = None
+
+    if not cmd:
+        print_warning(
+            f"No package manager found to install {name}. Install it manually, "
+            "then try again."
+        )
+        return False
+
+    try:
+        ans = input(f"Install {name} now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if ans in ("n", "no"):
+        return False
+
+    print_info(f"Installing {name}…")
+    try:
+        subprocess.run(cmd, check=False)
+    except Exception as e:
+        print_warning(f"{name} install failed ({type(e).__name__}: {e})")
+        return False
+
+    # Windows winget often needs a fresh shell for PATH ; mpv.net is mpvnet.exe.
+    ok = bool(shutil.which(name) or (name == "mpv" and shutil.which("mpvnet")))
+    if ok:
+        print_success(f"  ✓ {name} installed")
+    else:
+        print_warning(
+            f"  ! {name} installed but not yet on PATH — open a NEW terminal "
+            "and relaunch freeflix."
+        )
+    return ok
 
 
 def install_chafa() -> bool:

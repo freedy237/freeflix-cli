@@ -379,6 +379,34 @@ def get_mpv_path():
     return None
 
 
+def _resolve_or_install(player_name: str):
+    """
+    Resolve a player's executable. If it's missing, offer to install it
+    (mpv / vlc) via the OS package manager, then re-resolve. Returns the
+    path or None.
+    """
+    def _resolve():
+        if player_name == "vlc":
+            return get_vlc_path()
+        if player_name == "mpv":
+            return get_mpv_path()
+        return shutil.which(player_name)
+
+    exe = _resolve()
+    if exe:
+        return exe
+
+    if player_name in ("mpv", "vlc"):
+        print_warning(f"{player_name} is not installed.")
+        try:
+            from . import setup_assistant
+            if setup_assistant.install_media_player(player_name):
+                exe = _resolve()
+        except Exception:
+            pass
+    return exe
+
+
 def handle_player_error(context: str = "player") -> int:
     """
     Handle player errors and ask user what they want to do.
@@ -787,7 +815,8 @@ def play_video(
         if player_name in ("browser", "download"):
             pass  # No specific executable needed at this stage
         elif player_name == "vlc":
-            player_executable = get_vlc_path()
+            # Resolve VLC, offering to install it if missing.
+            player_executable = _resolve_or_install("vlc")
             if not player_executable:
                 print_error("VLC not found. Please install it or add it to your PATH.")
                 retry = handle_player_error("VLC")
@@ -796,11 +825,9 @@ def play_video(
                 force_manual_mode = True
                 continue
         else:
-            # mpv needs the Windows-aware resolver (mpv.net → mpvnet.exe).
-            if player_name == "mpv":
-                player_executable = get_mpv_path()
-            else:
-                player_executable = shutil.which(player_name)
+            # mpv (Windows-aware: mpv.net → mpvnet.exe) and others, with an
+            # install offer when the binary is missing.
+            player_executable = _resolve_or_install(player_name)
             if not player_executable:
                 print_error(f"{player_name} is not installed or not in PATH.")
                 retry = handle_player_error(player_name)
