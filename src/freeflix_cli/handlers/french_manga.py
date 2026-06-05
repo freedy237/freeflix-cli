@@ -3,6 +3,8 @@
 from ..scraping import french_manga
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_header,
     print_info,
     print_warning,
@@ -12,6 +14,7 @@ from ..cli_utils import (
 )
 from .playback import play_episode_flow
 from ..i18n import t
+from ..icons import icon
 
 
 def _episode_sort_key(ep_num):
@@ -30,7 +33,7 @@ class _Ep:
         self.url = url
 
 
-def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx):
+def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx, cover=""):
     """
     Play episode at index ``ep_idx`` and chain into the next ones on request.
     Shared by the normal flow and the resume-from-history flow.
@@ -47,6 +50,7 @@ def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx):
             episode=ep_obj,
             series_url=series_url,
             season_url=series_url,
+            logo_url=cover,
             headers=headers,
         )
 
@@ -64,9 +68,10 @@ def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx):
 
 def handle_french_manga():
     """French-Manga provider flow : search → series → lang → episode → play."""
-    print_header(t("🎴 French-Manga"))
-
-    query = get_user_input(t("Search query (or 'exit' to back)"))
+    query = get_user_input(
+        t("Search query (or 'exit' to back)"),
+        header=f"{icon('manga')} French-Manga",
+    )
     if not query or query.lower() == "exit":
         return
 
@@ -77,10 +82,19 @@ def handle_french_manga():
         pause()
         return
 
-    choice = select_from_list(
-        [r.title for r in results] + [t("← Back")], t("📺 Search Results:")
+    # Preview pane : poster (TMDB thumbnail) beside the result list.
+    previews = [
+        make_preview(
+            cover=getattr(r, "img", ""),
+            title=r.title,
+            panel_title="French-Manga",
+        )
+        for r in results
+    ]
+    choice = select_with_preview(
+        [r.title for r in results], f"{icon('tv')} {t('Search Results:')}", previews
     )
-    if choice == len(results):
+    if choice >= len(results):  # Esc / Back
         return
     selection = results[choice]
 
@@ -119,7 +133,10 @@ def handle_french_manga():
 
     title = data.get("title") or selection.title
 
-    _play_episodes(title, selection.url, selected_lang, episodes, ep_nums, ep_idx)
+    _play_episodes(
+        title, selection.url, selected_lang, episodes, ep_nums, ep_idx,
+        cover=data.get("cover", ""),
+    )
 
 
 def resume_french_manga(data):
@@ -170,4 +187,7 @@ def resume_french_manga(data):
         return
 
     start_idx = cur_idx + 1 if (has_next and choice == 0) else cur_idx
-    _play_episodes(series_title, series_url, lang, episodes, ep_nums, start_idx)
+    _play_episodes(
+        series_title, series_url, lang, episodes, ep_nums, start_idx,
+        cover=epdata.get("cover", ""),
+    )

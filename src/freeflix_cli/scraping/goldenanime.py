@@ -8,6 +8,14 @@ from .config import portals
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
+
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
+    return cloudflare.cf_get(scraper, url, **kw)
+
 class AnimeExtractor:
     """
     Original Version (VO) anime extractor based on CineStream.
@@ -52,7 +60,7 @@ class AnimeExtractor:
         api_url = f"{base_url}/api/episode/{anilist_id}/{episode}"
 
         try:
-            response = scraper.get(api_url, headers=self.headers, timeout=10)
+            response = _get(api_url, headers=self.headers, timeout=10)
             if response.status_code != 200:
                 return []
 
@@ -95,7 +103,7 @@ class AnimeExtractor:
             }
             ext_search = {"persistedQuery": {"version": 1, "sha256Hash": search_hash}}
 
-            r = scraper.get(
+            r = _get(
                 api_url,
                 params={
                     "variables": json.dumps(vars_search),
@@ -141,7 +149,7 @@ class AnimeExtractor:
             }
             ext_ep = {"persistedQuery": {"version": 1, "sha256Hash": ep_hash}}
 
-            r = scraper.get(
+            r = _get(
                 api_url,
                 params={
                     "variables": json.dumps(vars_ep),
@@ -184,7 +192,7 @@ class AnimeExtractor:
             # 1. Search. anizone migrated to a Livewire app : the search
             #    is /anime?search=… and result links are now ABSOLUTE with
             #    short opaque slugs (…/anime/bmwdgxhk), not title slugs.
-            r = scraper.get(
+            r = _get(
                 f"{base_url}/anime?search={title}",
                 headers=self.headers,
                 timeout=10,
@@ -205,7 +213,7 @@ class AnimeExtractor:
 
             # 2. Episode page
             ep_url = f"{base_url}/anime/{best_slug}/{episode}"
-            r = scraper.get(ep_url, headers=self.headers, timeout=10)
+            r = _get(ep_url, headers=self.headers, timeout=10)
 
             # Find media-player src (M3U8)
             player_match = re.search(r'<media-player[^>]+src="([^"]+)"', r.text)
@@ -230,7 +238,7 @@ class AnimeExtractor:
 
         try:
             # 1. Search (V2 API)
-            r = scraper.get(
+            r = _get(
                 f"{base_api}/anime/search/?query={title}",
                 headers=headers,
                 timeout=10,
@@ -260,7 +268,7 @@ class AnimeExtractor:
                 return []
 
             # 2. Servers
-            r = scraper.get(
+            r = _get(
                 f"{base_api}/anime/servers/{gojo_id}/{episode}",
                 headers=headers,
                 timeout=10,
@@ -276,7 +284,7 @@ class AnimeExtractor:
                 for lang in ["sub", "dub"]:
                     try:
                         # 3. Stream Links (Oppai endpoint)
-                        r = scraper.get(
+                        r = _get(
                             f"{base_api}/anime/oppai/{gojo_id}/{episode}?server={server_id}&source_type={lang}",
                             headers=headers,
                             timeout=10,

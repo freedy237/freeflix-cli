@@ -23,7 +23,6 @@ from .handlers import (
     coflix,
     french_stream,
     french_manga,
-    wiflix,
     anilist,
     goldenanime,
     goldenms,
@@ -33,6 +32,7 @@ from . import history_ui
 from . import proxy
 import sys
 import os
+import time
 import signal
 
 
@@ -163,49 +163,105 @@ def _show_stats():
 
 
 def _show_about(version: str):
-    """Render the About panel with version, links, credits."""
+    """Render the About panel with version, links, credits — themed."""
     from rich.panel import Panel
     from rich.text import Text
+    from .themes import color
+
+    accent = color("accent")
+    link = f"{color('info')} underline"
 
     body = Text()
-    body.append("\n  FreeFlix CLI", style="bold cyan")
-    body.append(f"  v{version}\n\n", style="bold yellow")
+    body.append("\n  FreeFlix CLI", style=f"bold {accent}")
+    body.append(f"  v{version}\n\n", style=f"bold {color('warning')}")
     body.append("  " + t("Watch movies, series and anime from your terminal.\n"),
                 style="white")
     body.append("\n")
-    body.append(f"  GitHub  : ", style="dim")
-    body.append("https://github.com/freedy237/freeflix-cli\n", style="cyan underline")
-    body.append(f"  PyPI    : ", style="dim")
-    body.append("https://pypi.org/project/freeflix-cli/\n", style="cyan underline")
-    body.append(f"  Issues  : ", style="dim")
-    body.append("https://github.com/freedy237/freeflix-cli/issues\n", style="cyan underline")
+    body.append(f"  GitHub  : ", style=color("dim"))
+    body.append("https://github.com/freedy237/freeflix-cli\n", style=link)
+    body.append(f"  PyPI    : ", style=color("dim"))
+    body.append("https://pypi.org/project/freeflix-cli/\n", style=link)
+    body.append(f"  Issues  : ", style=color("dim"))
+    body.append("https://github.com/freedy237/freeflix-cli/issues\n", style=link)
     body.append("\n")
-    body.append(f"  {t('License')} : ", style="dim")
+    body.append(f"  {t('License')} : ", style=color("dim"))
     body.append("GPL-3.0-or-later\n", style="white")
-    body.append(f"  {t('Author')}  : ", style="dim")
+    body.append(f"  {t('Author')}  : ", style=color("dim"))
     body.append("freedy237 ", style="white")
-    body.append("<joresdomche@gmail.com>\n", style="dim")
+    body.append("<joresdomche@gmail.com>\n", style=color("dim"))
     body.append("\n")
-    body.append(f"  {t('Based on')} ", style="dim")
+    body.append(f"  {t('Based on')} ", style=color("dim"))
     body.append("autoflix-cli", style="bold white")
-    body.append(f" {t('by')} ", style="dim")
+    body.append(f" {t('by')} ", style=color("dim"))
     body.append("PaulExplorer\n", style="white")
-    body.append("    ", style="dim")
-    body.append("https://github.com/PaulExplorer/autoflix-cli\n", style="cyan underline")
-    body.append(f"\n  {t('Anime4K shaders by')} ", style="dim")
+    body.append("    ", style=color("dim"))
+    body.append("https://github.com/PaulExplorer/autoflix-cli\n", style=link)
+    body.append(f"\n  {t('Anime4K shaders by')} ", style=color("dim"))
     body.append("bloc97", style="white")
-    body.append(" — https://github.com/bloc97/Anime4K\n", style="cyan underline")
+    body.append(" — https://github.com/bloc97/Anime4K\n", style=link)
     body.append("\n")
 
     console.print(
         Panel(
             body,
-            title=f"[bold cyan]{icon('info')}  {t('About')}[/bold cyan]",
-            subtitle=f"[dim]freeflix v{version}[/dim]",
-            border_style="cyan",
+            title=f"[bold {color('header')}]{icon('info')}  {t('About')}[/]",
+            subtitle=f"[{color('dim')}]freeflix v{version}[/]",
+            border_style=color("border"),
             expand=False,
         )
     )
+
+
+def _set_cloudflare_token():
+    """
+    Settings : paste a cf_clearance cookie (+ User-Agent) so FreeFlix can
+    ride a Cloudflare-cleared browser session for a blocked source.
+    """
+    clear_screen()
+    print_header(t("Cloudflare token"))
+    print_info(t("If a source is Cloudflare-blocked, pass the check in your browser,"))
+    print_info(t("then paste the 'cf_clearance' cookie value + your User-Agent here."))
+    print_info(t("(cf_clearance is tied to your IP + User-Agent — both must match.)"))
+
+    fs_url = tracker.get_flaresolverr_url() or "(off)"
+    print_info(f"{t('Auto-solver (FlareSolverr)')}: {fs_url}")
+
+    hosts = [
+        ("__flaresolverr__", f"{t('Set FlareSolverr URL (auto-solve)')}"),
+        ("coflix.cymru", "Coflix"),
+        ("anime-sama.to", "Anime-Sama"),
+        ("__other__", t("Other host…")),
+        ("__clear__", t("Clear all tokens")),
+        ("__back__", t("← Back")),
+    ]
+    idx = select_from_list([label for _, label in hosts], t("Which source?"))
+    key, _label = hosts[idx]
+    if key == "__back__":
+        return
+    if key == "__flaresolverr__":
+        print_info(t("FlareSolverr auto-solves Cloudflare. Leave empty to disable."))
+        url = get_user_input(t("FlareSolverr URL [http://127.0.0.1:8191]"))
+        tracker.set_flaresolverr_url((url or "").strip())
+        print_success(t("FlareSolverr URL updated."))
+        pause()
+        return
+    if key == "__clear__":
+        tracker.clear_cf_clearance()
+        print_success(t("All Cloudflare tokens cleared."))
+        pause()
+        return
+    if key == "__other__":
+        key = get_user_input(t("Host (e.g. coflix.cymru)"))
+        if not key:
+            return
+
+    token = get_user_input(t("Paste cf_clearance cookie value"))
+    if not token:
+        return
+    ua = get_user_input(t("Paste your browser User-Agent (recommended)"))
+    tracker.set_cf_clearance(key.strip(), token.strip(), (ua or "").strip() or None)
+    print_success(f"{t('Cloudflare token saved for')} {key}")
+    pause()
 
 
 def _prompt_anime_language(force=False):
@@ -273,6 +329,58 @@ def check_language_setup(force=False):
         pause()
 
 
+def _register_providers():
+    """Register every provider in source-menu order (anime first, then
+    movies/series, then torrents). Called once at startup."""
+    # ── Anime / Manga sources ──────────────────────────────────
+    registry.register(
+        f"{icon('anime')} Anime-Sama (Anime and animated movies)",
+        anime_sama.handle_anime_sama,
+        supported_languages=["en", "fr"],
+        category="anime",
+    )
+    registry.register(
+        f"{icon('sparkle')} GoldenAnime (VO and Subtitles)",
+        goldenanime.handle_goldenanime,
+        supported_languages=["en", "fr"],
+        category="anime",
+    )
+    registry.register(
+        f"{icon('manga')} French-Manga (Anime VF/VOSTFR)",
+        french_manga.handle_french_manga,
+        supported_languages=["fr"],
+        category="anime",
+    )
+    registry.register(
+        f"{icon('wave')} Nyaa (Torrents — high-quality anime releases)",
+        nyaa_handler.handle_nyaa,
+        supported_languages=["en", "fr"],
+        category="anime",
+    )
+
+    # ── Films & Series sources ─────────────────────────────────
+    registry.register(
+        f"{icon('star')} GoldenMS (Movies & Series)",
+        goldenms.handle_goldenms,
+        supported_languages=["en"],
+        category="movies",
+    )
+    registry.register(
+        f"{icon('flag_fr')} French-Stream (Series and movies)",
+        french_stream.handle_french_stream,
+        supported_languages=["fr"],
+        category="movies",
+    )
+    # Coflix : self-heals (coflix.dance/.cymru…) ; on a Cloudflare captcha it
+    # raises a clean "protégée par Cloudflare" message instead of crashing.
+    registry.register(
+        f"{icon('movie')} Coflix (Series and movies)",
+        coflix.handle_coflix,
+        supported_languages=["fr"],
+        category="movies",
+    )
+
+
 def main():
     # ── CLI flags (lightweight, before anything else) ──────────
     if "--setup" in sys.argv:
@@ -297,68 +405,37 @@ def main():
         print("  freeflix --help    this message")
         return 0
 
+    # ── Resumable dependency gate ──────────────────────────────
+    #    Until the "all good" flag is cached, every launch re-checks what's
+    #    installed and finishes ONLY the missing pieces (instead of jumping
+    #    ahead with half the tools missing).
+    setup_assistant.ensure_runtime_deps()
+
     # ── First-launch setup (only if user hasn't declined) ──────
     if setup_assistant.should_prompt_setup():
         setup_assistant.run_setup(force=False)
 
-    # ── Splash screen ──────────────────────────────────────────
+    # ── Resolve version (used for splash + post-upgrade migrations) ──
     try:
         import importlib.metadata as _im
         _v = _im.version("freeflix-cli")
     except Exception:
         _v = ""
-    from . import splash
-    splash.show_splash(version=_v)
 
-    # Register Providers
-    #
-    # Order matters : it is the order shown in the source menu. Anime
-    # sources are listed first, then movie/series sources at the bottom.
+    # ── Post-upgrade migrations : first launch after an upgrade finishes
+    #    installing whatever the new version needs (and cleans up removals).
+    setup_assistant.run_pending_migrations(_v)
 
-    # ── Anime sources (top) ────────────────────────────────────
-    registry.register(
-        f"{icon('anime')} Anime-Sama (Anime and animated movies)",
-        anime_sama.handle_anime_sama,
-        supported_languages=["en", "fr"],
-    )
-    registry.register(
-        f"{icon('sparkle')} GoldenAnime (VO and Subtitles)",
-        goldenanime.handle_goldenanime,
-        supported_languages=["en", "fr"],
-    )
-    registry.register(
-        f"{icon('manga')} French-Manga (Anime VF/VOSTFR)",
-        french_manga.handle_french_manga,
-        supported_languages=["fr"],
-    )
-
-    # ── Movie / series sources (middle) ────────────────────────
-    registry.register(
-        f"{icon('star')} GoldenMS (Movies & Series)",
-        goldenms.handle_goldenms,
-        supported_languages=["en"],
-    )
-    registry.register(
-        f"{icon('flag_fr')} French-Stream (Series and movies)",
-        french_stream.handle_french_stream,
-        supported_languages=["fr"],
-    )
-    # Coflix is disabled : its player aggregator (lecteurvideo.com) is
-    # Cloudflare-protected, so nothing it lists is playable from the
-    # terminal. The handler/scraper stay in the tree in case the host
-    # changes ; just not registered as a selectable source.
-    # registry.register(
-    #     "🎬 Coflix (Series and movies)",
-    #     coflix.handle_coflix,
-    #     supported_languages=["fr"],
-    # )
-
-    # ── Torrent sources (very bottom) ──────────────────────────
-    registry.register(
-        f"{icon('wave')} Nyaa (Torrents — high-quality anime releases)",
-        nyaa_handler.handle_nyaa,
-        supported_languages=["en", "fr"],
-    )
+    # ── Splash + provider registration ─────────────────────────
+    #    Big FreeFlix wordmark with an animated ▰▰▱ loading bar while the
+    #    quiet startup work (provider registration) runs underneath.
+    from . import progress
+    with progress.LoadingScreen(version=_v) as _ls:
+        _ls.status("Loading providers…")
+        _register_providers()
+        time.sleep(0.6)            # let the ▰▰▱ animation play
+        _ls.status("Ready", frac=1.0)
+        time.sleep(0.35)
 
     # Check for updates
     if check_update():
@@ -379,7 +456,6 @@ def main():
 
     while True:
         clear_screen()
-        print_header(f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}")
 
         # 1. Continue Watching (History)
         last_watch = tracker.get_last_global()
@@ -448,7 +524,11 @@ def main():
 
         menu_items.append(f"{icon('exit')} {t('Exit')}")
 
-        choice_idx = select_from_list(menu_items, t("What would you like to do?"))
+        choice_idx = select_from_list(
+            menu_items,
+            t("What would you like to do?"),
+            header=f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}",
+        )
 
         if last_watch and choice_idx == resume_idx:
             history_ui.handle_resume(last_watch)
@@ -477,11 +557,32 @@ def main():
             content_lang = tracker.get_anime_language() or tracker.get_language()
             available_providers = registry.get_providers(content_lang)
 
-            p_items = [p["name"] for p in available_providers] + [t("← Back")]
-            p_idx = select_from_list(p_items, t("Select a Provider:"))
+            # Group the sources : anime / manga first, then films & series
+            # (stable order within each group), under section headers.
+            anime = [p for p in available_providers if p.get("category") == "anime"]
+            movies = [p for p in available_providers if p.get("category") == "movies"]
+            others = [p for p in available_providers
+                      if p.get("category") not in ("anime", "movies")]
+            ordered = anime + movies + others
 
-            if p_idx < len(available_providers):
-                available_providers[p_idx]["handler"]()
+            group_headers = {}
+            if anime:
+                group_headers[0] = f"{icon('anime')} {t('Anime / Manga')}"
+            if movies:
+                group_headers[len(anime)] = f"{icon('movie')} {t('Movies & Series')}"
+            if others:
+                group_headers[len(anime) + len(movies)] = t("Other")
+
+            p_items = [p["name"] for p in ordered] + [t("← Back")]
+            p_idx = select_from_list(
+                p_items,
+                t("Select a Provider:"),
+                header=f"{icon('globe')} {t('Sources')}",
+                group_headers=group_headers,
+            )
+
+            if p_idx < len(ordered):
+                ordered[p_idx]["handler"]()
             continue
 
         if choice_idx == settings_idx:
@@ -520,6 +621,9 @@ def main():
                     f"Nvidia GPU offload ({nv_mode})",
                     f"{icon('poster')} {t('Show Posters')} ({tracker.get_poster_mode()})",
                     f"{icon('theme')} {t('Icon Style')} ({tracker.get_icon_style()})",
+                    f"{t('Cloudflare token')}",
+                    f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})",
+                    f"{icon('subtitle')} {t('Download subtitles')} ({'ON' if tracker.get_subtitle_search() else 'OFF'})",
                     f"{icon('info')} {t('About')}",
                     t("Back"),
                 ]
@@ -648,6 +752,18 @@ def main():
                     print_info(t("Restart FreeFlix to apply icons everywhere."))
                     pause()
                 elif s_choice == 12:
+                    _set_cloudflare_token()
+                elif s_choice == 13:
+                    new = not tracker.get_analyze_players()
+                    tracker.set_analyze_players(new)
+                    print_success(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
+                    pause()
+                elif s_choice == 14:
+                    new = not tracker.get_subtitle_search()
+                    tracker.set_subtitle_search(new)
+                    print_success(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
+                    pause()
+                elif s_choice == 15:
                     _show_about(_VERSION)
                     pause()
                 else:

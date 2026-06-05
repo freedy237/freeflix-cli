@@ -25,7 +25,16 @@ ok "Homebrew available"
 # ─── 2. Install system packages ──────────────────────────────────────
 log "Installing system deps via brew…"
 brew install --quiet python yt-dlp ffmpeg aria2 mpv chafa
+brew install --quiet --cask vlc 2>/dev/null || brew install --quiet vlc 2>/dev/null || true
 ok "System packages installed"
+
+# ─── 2b. Nerd Font (crisp TUI icons) — idempotent ────────────────────
+log "Installing CaskaydiaCove Nerd Font (crisp icons)…"
+if brew install --quiet --cask font-caskaydia-cove-nerd-font 2>/dev/null; then
+    ok "Nerd Font installed (set your terminal font to 'CaskaydiaCove Nerd Font')"
+else
+    warn "Nerd Font cask unavailable — emoji icons still work out of the box."
+fi
 
 # ─── 3. Install freeflix-cli ─────────────────────────────────────────
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,5 +69,24 @@ if [[ ! "${ans:-Y}" =~ ^[Nn] ]]; then
     ok "mpv config installed (CTRL+1 toggles Anime4K)"
 fi
 
+# ─── 5. Optional : FlareSolverr (auto-solve Cloudflare) via Docker ───
+if ! curl -fsS --max-time 2 http://127.0.0.1:8191/ >/dev/null 2>&1; then
+    log "Set up FlareSolverr to auto-solve Cloudflare (Coflix/Anime-Sama) ? (needs Docker)"
+    read -rp "  [y/N] " ans
+    if [[ "${ans:-N}" =~ ^[Yy] ]]; then
+        if command -v docker >/dev/null 2>&1; then
+            docker start flaresolverr >/dev/null 2>&1 || \
+                docker run -d --name flaresolverr --restart unless-stopped \
+                    -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest || \
+                warn "Could not start FlareSolverr — start it manually later."
+            ok "FlareSolverr requested (give it a moment to be ready)."
+        else
+            warn "Docker not found. Install Docker, then run the flaresolverr container."
+        fi
+    fi
+fi
+
 echo
 ok "Installation complete. Run :  ${GREEN}freeflix${NC}"
+log "Icons: set your terminal font to 'CaskaydiaCove Nerd Font', then in"
+log "FreeFlix go to Settings > Icon Style > nerd (emoji is the default)."

@@ -74,9 +74,20 @@ def _poster_size():
     return width, height
 
 
+# url -> local file path. The downloaded IMAGE is cached per URL (independent
+# of render size) so resizing only re-runs chafa on the local file instead of
+# re-downloading. Files are kept for the session and cleaned up at exit.
+_img_cache = {}
+
+
 def _download(url: str, attempts: int = 3):
     """
-    Download `url` to a temp file. Returns the path or None.
+    Get a local file path for `url`'s image, downloading it ONCE.
+
+    The result is cached per URL : the first call downloads, every later call
+    (e.g. a different render size during a terminal resize) reuses the same
+    local file, so we never re-download just to re-scale. Returns the path or
+    None.
 
     Retries a couple of times because some cover hosts (e.g. Anime-Sama's
     covers on raw.githubusercontent.com) rate-limit / time out
@@ -84,6 +95,15 @@ def _download(url: str, attempts: int = 3):
     """
     if not url or _rq is None:
         return None
+    # Protocol-relative URLs (//host/…, common on Coflix/TMDB) can't be
+    # fetched as-is — give them a scheme.
+    if url.startswith("//"):
+        url = "https:" + url
+
+    # Reuse the already-downloaded file if we still have it.
+    cached = _img_cache.get(url)
+    if cached and os.path.exists(cached):
+        return cached
 
     suffix = ".jpg"
     low = url.lower()
@@ -99,12 +119,36 @@ def _download(url: str, attempts: int = 3):
                 fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=suffix)
                 with os.fdopen(fd, "wb") as f:
                     f.write(r.content)
+                _img_cache[url] = path
                 return path
         except Exception:
             pass
         if i < attempts - 1:
             time.sleep(0.4)
     return None
+
+
+def prefetch(url: str):
+    """Download (and cache) an image without rendering it. Pure I/O, releases
+    the GIL — safe to run with high concurrency in a download pool so covers
+    are on disk by the time the (CPU-bound, low-concurrency) chafa render runs."""
+    return _download(url)
+
+
+def _cleanup_images():
+    for p in _img_cache.values():
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    _img_cache.clear()
+
+
+try:
+    import atexit as _atexit
+    _atexit.register(_cleanup_images)
+except Exception:  # pragma: no cover
+    pass
 
 
 def render_url(url: str, width: int = None, height: int = None) -> bool:
@@ -138,11 +182,49 @@ def render_url(url: str, width: int = None, height: int = None) -> bool:
         return True
     except Exception:
         return False
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+
+
+_text_cache = {}
+
+
+def render_to_text(url: str, cols: int = 30, rows: int = 16):
+    """
+    Render an image as a rich Text of coloured Unicode blocks (chafa
+    --format symbols → Text.from_ansi), so it can live INSIDE a rich Layout
+    (the preview pane). Cached per (url, size). Returns an empty Text if it
+    can't render (no chafa / download failed).
+    """
+    from rich.text import Text
+
+    key = (url, cols, rows)
+    if key in _text_cache:
+        return _text_cache[key]
+
+    result = Text("")
+    if url and chafa_available():
+        path = _download(url)
+        if path:
+            try:
+                out = subprocess.run(
+                    [_CHAFA_PATH, "--format", "symbols", "--size", f"{cols}x{rows}", path],
+                    capture_output=True, text=True, timeout=8,
+                ).stdout
+                if out:
+                    result = Text.from_ansi(out)
+            except Exception:
+                pass
+    _text_cache[key] = result
+    return result
+
+
+def get_cached_text(url: str, cols: int = 30, rows: int = 16):
+    """
+    Return the already-rendered Text for (url, size) from cache, or None if
+    it hasn't been rendered yet. NEVER does network/chafa work — safe to call
+    from a UI render loop (the actual rendering is done in a background
+    thread via render_to_text()).
+    """
+    return _text_cache.get((url, cols, rows))
 
 
 def show_poster(cover_url: str, title: str = None, info_lines=None) -> bool:

@@ -11,16 +11,32 @@ from .handlers import (
     coflix,
     french_stream,
     french_manga,
-    wiflix,
     goldenanime,
     goldenms,
 )
 from .i18n import t
 
 
-def handle_resume(data):
+def _show_entry_poster(data):
+    """Draw the series poster + what we're resuming for a history entry."""
+    from . import terminal_image
+
+    cover = data.get("logo_url") or ""
+    title = data.get("series_title", "")
+    season = data.get("season_title", "") or ""
+    ep = data.get("episode_title", "") or ""
+    sub = " · ".join(x for x in (season, ep) if x and x not in (title, "Movie"))
+    if cover or title:
+        terminal_image.show_poster(cover, title=title, info_lines=[sub] if sub else None)
+
+
+def handle_resume(data, show_poster=True):
     """Dispatch resume to provider."""
     provider = data["provider"]
+
+    if show_poster:
+        _show_entry_poster(data)
+
     if provider == "Anime-Sama":
         anime_sama.resume_anime_sama(data)
     elif provider == "Coflix":
@@ -29,10 +45,6 @@ def handle_resume(data):
         french_stream.resume_french_stream(data)
     elif provider == "French-Manga":
         french_manga.resume_french_manga(data)
-    elif provider == "Wiflix":
-        print_warning(
-            "Resume for Wiflix not manually implemented here (usually direct)."
-        )
     elif provider == "GoldenAnime":
         goldenanime.resume_goldenanime(data)
     elif provider == "GoldenMS":
@@ -92,12 +104,15 @@ def handle_history():
 
         selected_entry = history[choice_idx]
 
+        # Show the poster of the picked entry before choosing the action.
+        _show_entry_poster(selected_entry)
+
         action = select_from_list(
             [t("▶ Resume"), t("❌ Delete"), t("← Cancel")], t("Action:")
         )
 
-        if action == 0:  # Resume
-            handle_resume(selected_entry)
+        if action == 0:  # Resume — poster already shown above.
+            handle_resume(selected_entry, show_poster=False)
         elif action == 1:  # Delete
             tracker.delete_history_item(
                 selected_entry["provider"], selected_entry["series_title"]

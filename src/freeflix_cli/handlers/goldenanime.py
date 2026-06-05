@@ -2,6 +2,8 @@ from ..scraping.goldenanime import goldenanime
 from ..scraping.subtitles import subtitle_extractor
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_header,
     print_info,
     print_warning,
@@ -11,8 +13,10 @@ from ..cli_utils import (
     console,
     spinner,
 )
-from ..player_manager import play_video
+from ..player_manager import play_video, analyze_stream_quality, format_quality_label
 from ..tracker import tracker
+from ..icons import icon
+from ..i18n import t
 from ..languages import get_language_label
 from ..anilist import anilist_client
 from ..scraping import player as player_scraper
@@ -69,9 +73,10 @@ def search_imdb_id(title: str):
 
 def handle_goldenanime():
     """Handle GoldenAnime provider flow."""
-    print_header("✨ GoldenAnime (VO)")
-
-    query = get_user_input("Search query (Title or AniList ID) (or 'exit' to back)")
+    query = get_user_input(
+        "Search query (Title or AniList ID) (or 'exit' to back)",
+        header=f"{icon('sparkle')} GoldenAnime (VO)",
+    )
     if not query or query.lower() == "exit":
         return
 
@@ -97,17 +102,49 @@ def handle_goldenanime():
         print_info(f"Searching AniList by Title: [cyan]{title}[/cyan]")
         results = anilist_client.search_media(title)
         if results:
-            media_options = [
-                f"{m['title']['english'] or m['title']['romaji']} ({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} eps"
+            # Preview pane : AniList cover + year/format/episodes/genres.
+            def _ani_lines(m):
+                out = []
+                bits = []
+                if m.get("seasonYear"):
+                    bits.append(str(m["seasonYear"]))
+                if m.get("format"):
+                    bits.append(str(m["format"]))
+                if m.get("episodes"):
+                    bits.append(f"{m['episodes']} eps")
+                if bits:
+                    out.append(" · ".join(bits))
+                if m.get("genres"):
+                    out.append(", ".join(m["genres"][:3]))
+                return out
+
+            previews = [
+                make_preview(
+                    cover=(m.get("coverImage", {}) or {}).get("large")
+                    or (m.get("coverImage", {}) or {}).get("medium", ""),
+                    title=m["title"]["english"] or m["title"]["romaji"],
+                    lines=_ani_lines(m),
+                    panel_title="GoldenAnime",
+                )
                 for m in results
-            ] + ["Manual input (Skip AniList)"]
-            m_idx = select_from_list(media_options, "Select AniList Match:")
+            ]
+            labels = [
+                f"{m['title']['english'] or m['title']['romaji']} "
+                f"({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} eps"
+                for m in results
+            ]
+            # Esc / Back falls through to manual input below (skip AniList).
+            m_idx = select_with_preview(
+                labels, f"{icon('sparkle')} {t('Select AniList Match:')}", previews
+            )
             if m_idx < len(results):
                 match = results[m_idx]
                 anilist_id = match["id"]
                 title = match["title"]["english"] or match["title"]["romaji"]
                 max_episodes = match.get("episodes")
-                cover_url = match.get("coverImage", {}).get("medium")
+                cover_url = (match.get("coverImage", {}) or {}).get("large") or (
+                    match.get("coverImage", {}) or {}
+                ).get("medium")
 
     # Anime poster + summary at selection (cover from AniList).
     from .. import terminal_image
@@ -177,10 +214,55 @@ def _flow_goldenanime_stream(
         skipped = len(results) - len(valid_results)
         print_info(f"[dim]Skipped {skipped} unsupported stream(s).[/dim]")
 
+    # Analyse each stream's real resolutions + bitrate (like the other
+    # sources), shown next to the source. Direct m3u8/mp4 are probed
+    # directly ; runs in parallel with a total time budget.
+    def _ga_headers(r):
+        h = {"Referer": goldenanime.sudatchi_base + "/"}
+        if "Allanime" in r.get("source", ""):
+            h["Referer"] = goldenanime.allanime_referer + "/"
+        if "Animetsu" in r.get("source", ""):
+            h["Referer"] = goldenanime.animetsu_base + "/"
+            h["Origin"] = goldenanime.animetsu_base
+        if isinstance(r.get("headers"), dict):
+            for k, v in r["headers"].items():
+                if v:
+                    h[k] = v
+        return h
+
+    quality_map = {}
+    if tracker.get_analyze_players():
+        from concurrent.futures import (
+            ThreadPoolExecutor, as_completed, TimeoutError as _FT,
+        )
+
+        ex = ThreadPoolExecutor(max_workers=8)
+        futs = {
+            ex.submit(analyze_stream_quality, r["url"], _ga_headers(r)): i
+            for i, r in enumerate(valid_results)
+        }
+        with spinner("Analyzing streams (resolutions, bitrate)…"):
+            try:
+                for fut in as_completed(futs, timeout=14):
+                    i = futs[fut]
+                    try:
+                        quality_map[i] = format_quality_label(fut.result())
+                    except Exception:
+                        quality_map[i] = "✗"
+            except _FT:
+                pass
+        ex.shutdown(wait=False)
+
+    stream_labels = []
+    for i, r in enumerate(valid_results):
+        base = f"{r['source']} - {r['quality']} ({r['type']})"
+        q = quality_map.get(i)
+        if q and q != "✓":
+            base += f"  —  {q}"
+        stream_labels.append(base)
+
     choice_idx = select_from_list(
-        [f"{r['source']} - {r['quality']} ({r['type']})" for r in valid_results]
-        + ["← Back"],
-        "📺 Select Stream:",
+        stream_labels + ["← Back"], f"{icon('tv')} Select Stream:"
     )
 
     if choice_idx == len(valid_results):  # Back
@@ -195,7 +277,11 @@ def _flow_goldenanime_stream(
     user_lang = tracker.get_anime_language() or tracker.get_language() or "en"
     lang_name = get_language_label(user_lang)
 
-    want_subs = select_from_list(["Yes", "No"], f"Search for {lang_name} subtitles?")
+    want_subs = 1  # default: No
+    if tracker.get_subtitle_search():
+        want_subs = select_from_list(
+            ["Yes", "No"], f"Search for {lang_name} subtitles?"
+        )
     if want_subs == 0:
         # Try to resolve title if missing
         search_title = title

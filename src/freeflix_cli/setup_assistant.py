@@ -13,6 +13,7 @@ repo's main branch, which keeps the wheel small.
 
 import os
 import sys
+import time
 import shutil
 import subprocess
 import urllib.request
@@ -139,6 +140,109 @@ def is_setup_complete() -> bool:
     if not shaders.exists() or not any(shaders.glob("Anime4K_*.glsl")):
         return False
     return True
+
+
+# ─── Runtime dependency gate (idempotent / resumable) ─────────────────
+# label -> (winget id for Windows, acceptable binary names, essential?)
+# Essential tools gate playback ; the rest are quality-of-life (posters,
+# faster downloads) and never block.
+_TOOLS = [
+    ("player",  "mpv.net",         ("mpvnet", "mpv", "vlc"), True),
+    ("yt-dlp",  "yt-dlp.yt-dlp",   ("yt-dlp",),              True),
+    ("ffmpeg",  "Gyan.FFmpeg",     ("ffmpeg",),              True),
+    ("aria2",   "aria2.aria2",     ("aria2c",),              False),
+    ("chafa",   "hpjansson.Chafa", ("chafa",),               False),
+]
+
+
+def _have(bins) -> bool:
+    return any(shutil.which(b) for b in bins)
+
+
+def missing_essential_tools() -> list:
+    """Essential tools that aren't on PATH (empty list == ready to play)."""
+    return [label for (label, _id, bins, ess) in _TOOLS if ess and not _have(bins)]
+
+
+def missing_tools() -> list:
+    """All tools (essential + optional) that aren't installed yet."""
+    return [(label, _id, bins) for (label, _id, bins, _e) in _TOOLS if not _have(bins)]
+
+
+def runtime_ready() -> bool:
+    return not missing_essential_tools()
+
+
+def _winget_install(pkg_id: str) -> None:
+    try:
+        # capture_output so winget's own logs don't fight the loading screen.
+        subprocess.run(
+            ["winget", "install", "--silent",
+             "--accept-source-agreements", "--accept-package-agreements",
+             "--id", pkg_id],
+            check=False, capture_output=True, text=True,
+        )
+    except Exception:
+        pass
+
+
+def ensure_runtime_deps(auto_install: bool = True) -> bool:
+    """
+    Resumable dependency gate, run on every launch until it succeeds ONCE.
+
+    Behaviour the user asked for : as long as the "all good" flag isn't cached,
+    each launch re-checks what's already installed and installs ONLY what's
+    still missing (it never restarts a finished install, and it never jumps
+    ahead while essential tools are absent). Once everything essential is
+    present, ``system_deps_ok`` is cached so future launches short-circuit
+    instantly.
+
+    Returns True when the essential tools (a player + yt-dlp + ffmpeg) exist.
+    """
+    if tracker.data.get("system_deps_ok"):
+        return True
+    if runtime_ready():
+        tracker.data["system_deps_ok"] = True
+        tracker._save_data()
+        return True
+
+    os_name = detect_os()
+
+    # Windows can self-heal silently via winget (only the missing pieces),
+    # behind the big FreeFlix loading screen with a progress bar tracking
+    # which tool is installing.
+    if auto_install and os_name == "windows" and shutil.which("winget"):
+        todo = missing_tools()
+        if todo:
+            from . import progress as _progress
+            with _progress.LoadingScreen(status="Installing dependencies…") as _ls:
+                total = len(todo)
+                for i, (label, pkg_id, bins) in enumerate(todo):
+                    _ls.status(f"Installing {label}…", frac=i / total)
+                    if not _have(bins):
+                        _winget_install(pkg_id)
+                _ls.status("Finishing up…", frac=1.0)
+                time.sleep(0.3)
+
+    if runtime_ready():
+        tracker.data["system_deps_ok"] = True
+        tracker._save_data()
+        print_success("All required tools are installed.")
+        return True
+
+    # Still missing essentials → guide, and DON'T cache, so the next launch
+    # picks up where this one left off.
+    print_warning("Some required tools are still missing: "
+                  + ", ".join(missing_essential_tools()))
+    if os_name == "windows":
+        print_info("Run this (re-runnable — installs only what's missing):")
+        print_info("  powershell -ExecutionPolicy Bypass -File scripts\\install.ps1")
+        print_info("then open a NEW Windows Terminal and run:  freeflix")
+    elif os_name == "linux":
+        print_info("Run the installer:  ./scripts/install.sh")
+    elif os_name == "macos":
+        print_info("Run the installer:  ./scripts/install-mac.sh")
+    return False
 
 
 # ─── Downloads ────────────────────────────────────────────────────────
@@ -380,6 +484,156 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
     return True
 
 
+# ─── FlareSolverr : optional Cloudflare auto-solver ───────────────────
+def _flaresolverr_running(url: str = "http://127.0.0.1:8191/") -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _container_runtime():
+    """
+    Return a usable container runtime : 'podman' (rootless, preferred — no
+    sudo, no daemon, Fedora default) then 'docker'. None if neither works.
+    """
+    for cmd in ("podman", "docker"):
+        if not shutil.which(cmd):
+            continue
+        try:
+            r = subprocess.run([cmd, "info"], capture_output=True, timeout=12)
+            if r.returncode == 0:
+                return cmd
+        except Exception:
+            continue
+    return None
+
+
+FS_IMAGE = "ghcr.io/flaresolverr/flaresolverr:latest"
+
+
+def _flaresolverr_make_persistent(runtime: str):
+    """
+    Linux + podman : make the container auto-start on boot via a systemd
+    user service + lingering. (Docker uses --restart unless-stopped + its
+    daemon, so nothing extra needed there.)
+    """
+    if detect_os() != "linux" or runtime != "podman":
+        return
+    try:
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        if user:
+            subprocess.run(["loginctl", "enable-linger", user],
+                           capture_output=True, timeout=10)
+        unit_dir = Path.home() / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        gen = subprocess.run(
+            ["podman", "generate", "systemd", "--new", "--name", "flaresolverr",
+             "--restart-policy=always"],
+            capture_output=True, text=True, timeout=25,
+        )
+        if gen.returncode == 0 and gen.stdout.strip():
+            (unit_dir / "flaresolverr.service").write_text(gen.stdout)
+            # Hand the container over to systemd.
+            subprocess.run(["podman", "stop", "flaresolverr"], capture_output=True)
+            subprocess.run(["podman", "rm", "flaresolverr"], capture_output=True)
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+            subprocess.run(["systemctl", "--user", "enable", "--now",
+                            "flaresolverr.service"], capture_output=True, timeout=30)
+            print_success("  ✓ FlareSolverr set to auto-start on boot")
+    except Exception:
+        pass
+
+
+def install_flaresolverr() -> bool:
+    """
+    Optional, fully automated : set up FlareSolverr (auto-solves Cloudflare
+    JS challenges) so FreeFlix keeps working without pasting a token.
+
+    Cross-platform, A-to-Z :
+      * Linux  : Podman rootless (preferred) or Docker ; installs Podman via
+                 the distro package manager if neither is present ; makes it
+                 persistent (systemd user service + lingering).
+      * macOS  : Podman/Docker if present, else guidance.
+      * Windows: Docker Desktop if present, else guidance.
+    """
+    if _flaresolverr_running():
+        print_success("FlareSolverr already running on :8191")
+        return True
+
+    os_name = detect_os()
+    print_info("FlareSolverr auto-solves Cloudflare challenges (optional, ~1 GB image).")
+
+    runtime = _container_runtime()
+
+    # No runtime → try to provide one.
+    if not runtime:
+        if os_name == "linux":
+            cmd = _linux_pkg_cmd("podman")
+            if cmd:
+                print_info("No Docker/Podman found. Podman is the easiest (rootless).")
+                try:
+                    ans = input(f"Install Podman now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    return False
+                if ans not in ("n", "no"):
+                    subprocess.run(cmd, check=False)
+                    runtime = _container_runtime()
+        elif os_name == "macos":
+            print_warning(
+                "Install a container runtime to enable FlareSolverr, e.g.:\n"
+                "  brew install podman && podman machine init && podman machine start\n"
+                "  (or Docker Desktop), then re-run `freeflix --setup`."
+            )
+            return False
+        elif os_name == "windows":
+            print_warning(
+                "Install Docker Desktop to enable FlareSolverr:\n"
+                "  winget install Docker.DockerDesktop\n"
+                "  then re-run `freeflix --setup`."
+            )
+            return False
+
+    if not runtime:
+        print_warning("No container runtime available — FlareSolverr skipped.")
+        return False
+
+    try:
+        ans = input(f"Set up FlareSolverr via {runtime} now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if ans in ("n", "no"):
+        return False
+
+    # Reuse an existing container, else pull & create it.
+    subprocess.run([runtime, "start", "flaresolverr"], capture_output=True)
+    if not _flaresolverr_running():
+        print_info(f"Pulling & starting FlareSolverr via {runtime} (first run "
+                   "downloads ~Chromium)…")
+        try:
+            subprocess.run(
+                [runtime, "run", "-d", "--name", "flaresolverr",
+                 "--restart", "unless-stopped", "-p", "8191:8191", FS_IMAGE],
+                check=False,
+            )
+        except Exception as e:
+            print_warning(f"Could not start FlareSolverr ({type(e).__name__}: {e})")
+            return False
+
+    # Make it survive reboots (Linux + podman).
+    _flaresolverr_make_persistent(runtime)
+
+    import time as _time
+    for _ in range(10):
+        if _flaresolverr_running():
+            print_success("FlareSolverr is up on http://127.0.0.1:8191")
+            return True
+        _time.sleep(2)
+    print_info("FlareSolverr started — it may need a moment to be ready.")
+    return True
+
+
 # ─── Windows : install the media players ──────────────────────────────
 def install_windows_players() -> bool:
     """
@@ -434,6 +688,20 @@ def print_platform_guidance_windows(gpus: Dict[str, bool]):
     We can't set this programmatically (it's a UWP setting tied to the
     user shell). Best we can do is point the user there.
     """
+    # Icons : the #1 Windows gotcha is running in the legacy cmd.exe console,
+    # which can't render the TUI glyphs. Always show this.
+    print_info("─" * 60)
+    print_info("Icons not showing as crisp glyphs on Windows?")
+    print_info("─" * 60)
+    print_info("  1. Use 'Windows Terminal' (Store / winget), NOT the old")
+    print_info("     cmd.exe window — legacy console can't draw the glyphs.")
+    print_info("  2. scripts/install.ps1 installs 'CaskaydiaCove Nerd Font'.")
+    print_info("     In Windows Terminal: Settings > Defaults > Appearance >")
+    print_info("     Font face -> CaskaydiaCove Nerd Font.")
+    print_info("  3. Then in FreeFlix: Settings > Icon Style -> nerd.")
+    print_info("     (Emoji icons are the default and work out of the box.)")
+    print_info("")
+
     if not (gpus.get("nvidia") or gpus.get("amd_discrete")):
         return
     gpu = "Nvidia" if gpus.get("nvidia") else "AMD"
@@ -491,6 +759,7 @@ def run_setup(force: bool = False) -> bool:
     print_info("  1. Install tuned mpv.conf + input.conf + position-resume hook")
     print_info("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)")
     print_info("  3. Offer to install chafa (anime posters in the terminal)")
+    print_info("  4. Offer to set up FlareSolverr (auto-solve Cloudflare, optional)")
     if os_name == "linux" and (gpus["nvidia"] or gpus["amd_discrete"]):
         gpu = "Nvidia" if gpus["nvidia"] else "AMD"
         print_info(f"  3. Install a PRIME wrapper so standalone mpv uses the {gpu} dGPU")
@@ -513,6 +782,8 @@ def run_setup(force: bool = False) -> bool:
     install_anime4k_shaders()
     print_info("\n[+] Anime posters (chafa)…")
     install_chafa()
+    print_info("\n[+] Cloudflare auto-solver (FlareSolverr, optional)…")
+    install_flaresolverr()
     if os_name == "linux":
         print_info("\n[3/3] Installing PRIME wrapper…")
         install_prime_wrappers(gpus)
@@ -529,6 +800,65 @@ def run_setup(force: bool = False) -> bool:
 
     print_success("\n✓ Setup complete. Launching FreeFlix…\n")
     return True
+
+
+# ─── Post-upgrade migrations ──────────────────────────────────────────
+def _ver_tuple(v):
+    out = []
+    for part in str(v or "0").split("."):
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(0)
+    return tuple(out)
+
+
+# Each entry : (version_that_introduced_it, description, action).
+# `action` MUST be idempotent (check presence first) — it runs once, on the
+# first launch after upgrading PAST that version. Use it to install a newly
+# required tool, refresh configs, or clean up a removed feature.
+#   e.g. ("1.6.0", "Feature X removed — cleaning up", _cleanup_x)
+def _migrations():
+    return [
+        ("1.5.7", "Anime posters need chafa", install_chafa),
+    ]
+
+
+def run_pending_migrations(current_version: str) -> None:
+    """
+    Run the migration steps for every version newer than the last one we
+    set up, then record the current version. Called on launch so an
+    upgrade (uv/pipx/pip) self-finishes on first run.
+    """
+    if not current_version or current_version == "dev":
+        return
+
+    last = tracker.get_last_setup_version()
+    if last is None:
+        # First launch with the migration system : adopt the current version
+        # without replaying history (a fresh install already ran setup, and
+        # in-app features still offer any missing tool on demand).
+        tracker.set_last_setup_version(current_version)
+        return
+
+    if _ver_tuple(last) >= _ver_tuple(current_version):
+        return  # same version or a downgrade — nothing to do
+
+    pending = [
+        (ver, desc, action)
+        for ver, desc, action in _migrations()
+        if _ver_tuple(last) < _ver_tuple(ver) <= _ver_tuple(current_version)
+    ]
+    if pending:
+        print_info(f"Finalizing upgrade {last} → {current_version}…")
+        for ver, desc, action in pending:
+            print_info(f"  • {desc}")
+            try:
+                action()
+            except Exception as e:
+                print_warning(f"    (skipped: {type(e).__name__})")
+
+    tracker.set_last_setup_version(current_version)
 
 
 def should_prompt_setup() -> bool:

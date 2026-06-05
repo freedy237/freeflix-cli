@@ -12,10 +12,32 @@ from .objects import (
 )
 from .utils import parse_episodes_from_js
 import base64
+import re
 from ..proxy import DNS_OPTIONS
 
 website_origin = ""
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
+
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """
+    GET that rides a cf_clearance cookie if set, and — on a Cloudflare block
+    — asks FlareSolverr to auto-solve the challenge, then retries once.
+    Cascade : curl_cffi → FlareSolverr → manual cf_clearance → block message.
+    """
+    base_headers = kw.pop("headers", {})
+
+    def _fetch():
+        cf = cloudflare.get_cf_headers(url)
+        h = {**cf, **base_headers} if cf else dict(base_headers)
+        return scraper.get(url, headers=h, **kw) if h else scraper.get(url, **kw)
+
+    resp = _fetch()
+    if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
+        resp = _fetch()
+    return resp
 
 
 from .config import portals
@@ -39,7 +61,7 @@ def get_website_url(portal=portals["coflix"]):
 def search(query: str) -> list[SearchResult]:
     page = website_origin + f"/suggest.php?query={query}"
 
-    response = scraper.get(page)
+    response = _get(page)
     response.raise_for_status()
     response = response.json()
 
@@ -82,7 +104,7 @@ def get_players(players_url: str) -> list[Player]:
         "Referer": website_origin,
     }
 
-    response = scraper.get(players_url, headers=headers)
+    response = _get(players_url, headers=headers)
 
     content = response.text or ""
     # coflix's player aggregator (lecteurvideo.com) sits behind Cloudflare
@@ -92,9 +114,14 @@ def get_players(players_url: str) -> list[Player]:
     if response.status_code != 200 and (
         "cloudflare" in head or "cf-ray" in head or "attention required" in head
     ):
+        hint = (
+            " Astuce : Réglages → Cloudflare token (colle ton cookie "
+            "cf_clearance + ton User-Agent) pour débloquer."
+            if not cloudflare.has_token(players_url)
+            else " (ton cf_clearance ne passe plus — régénère-le dans le navigateur.)"
+        )
         raise RuntimeError(
-            "Source coflix protégée par Cloudflare (lecteurvideo.com) — "
-            "non lisible depuis le terminal."
+            "Source Coflix protégée par Cloudflare en ce moment." + hint
         )
     response.raise_for_status()
 
@@ -121,7 +148,7 @@ def get_episode(url: str) -> Episode:
     Returns:
         Episode object with title and players
     """
-    response = scraper.get(url)
+    response = _get(url)
     response.raise_for_status()
 
     content = response.text
@@ -142,7 +169,7 @@ def get_episode(url: str) -> Episode:
 
 
 def get_season(url: str) -> CoflixSeason:
-    response = scraper.get(url)
+    response = _get(url)
     response.raise_for_status()
 
     content = response.json()
@@ -157,14 +184,46 @@ def get_season(url: str) -> CoflixSeason:
     return CoflixSeason(title, url, episodes)
 
 
+def _extract_cover(soup, html: str = "") -> str:
+    """
+    Robust Coflix cover URL so the poster ALWAYS shows : tries og:image,
+    then .title-img / .poster, then the first TMDB image in the page, and
+    normalises it to an absolute https URL (Coflix serves protocol-relative
+    //image.tmdb.org/… URLs that curl can't fetch as-is).
+    """
+    candidates = []
+    og = soup.find("meta", {"property": "og:image"})
+    if og and og.attrs.get("content"):
+        candidates.append(og.attrs["content"])
+    for cls in ("title-img", "poster"):
+        d = soup.find("div", {"class": cls})
+        if d and d.find("img"):
+            candidates.append(d.find("img").attrs.get("src", ""))
+    if html:
+        m = re.search(r'https?:?//image\.tmdb\.org/t/p/w\d+/[^"\'\s>]+', html)
+        if m:
+            candidates.append(m.group(0))
+
+    for c in candidates:
+        c = (c or "").strip()
+        if not c:
+            continue
+        if c.startswith("//"):
+            return "https:" + c
+        if c.startswith("http"):
+            return c
+        return website_origin.rstrip("/") + "/" + c.lstrip("/")
+    return ""
+
+
 def get_movie(url: str) -> CoflixMovie:
-    response = scraper.get(url)
+    response = _get(url)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html5lib")
 
     title: str = soup.find("h1").text.strip()
-    img: str = soup.find("div", {"class": "title-img"}).find("img").attrs["src"]
+    img: str = _extract_cover(soup, response.text)
 
     genres: list[str] = []
     genres_container = soup.find("div", {"class": "ctgrs"})
@@ -183,13 +242,13 @@ def get_movie(url: str) -> CoflixMovie:
 
 
 def get_series(url: str) -> CoflixSeries:
-    response = scraper.get(url)
+    response = _get(url)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html5lib")
 
     title: str = soup.find("h1").text.strip()
-    img: str = soup.find("div", {"class": "poster"}).find("img").attrs["src"]
+    img: str = _extract_cover(soup, response.text)
 
     genres: list[str] = []
     genres_container = soup.find("div", {"class": "ctgrs"})

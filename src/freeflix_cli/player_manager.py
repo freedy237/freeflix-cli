@@ -284,6 +284,146 @@ def _prompt_hls_quality(variants: list):
     return variants[idx]
 
 
+def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
+    """
+    Fallback for single-quality / non-master streams (media playlist or
+    direct mp4) : use ffprobe to read the actual resolution + bitrate.
+    Returns {"height":h, "mbps":m} or None.
+    """
+    ff = shutil.which("ffprobe")
+    if not ff:
+        return None
+    hdr = ""
+    if headers.get("Referer"):
+        hdr += f"Referer: {headers['Referer']}\r\n"
+    if headers.get("User-Agent"):
+        hdr += f"User-Agent: {headers['User-Agent']}\r\n"
+    cmd = [ff, "-v", "quiet", "-print_format", "json",
+           "-show_entries", "stream=width,height,bit_rate:format=bit_rate"]
+    if hdr:
+        cmd += ["-headers", hdr]
+    cmd.append(url)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        data = json.loads(r.stdout or "{}")
+    except Exception:
+        return None
+    height, bitrate = None, 0
+    for s in data.get("streams", []):
+        if s.get("height"):
+            height = s["height"]
+            try:
+                bitrate = int(s.get("bit_rate") or 0)
+            except (TypeError, ValueError):
+                bitrate = 0
+            break
+    if not bitrate:
+        try:
+            bitrate = int((data.get("format") or {}).get("bit_rate") or 0)
+        except (TypeError, ValueError):
+            bitrate = 0
+    if height:
+        return {"height": height, "mbps": round(bitrate / 1_000_000, 1) if bitrate else 0}
+    return None
+
+
+def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> dict:
+    """
+    Resolve a player URL and probe its HLS master, to know — BEFORE playing —
+    which resolutions it offers and the bitrate needed for stable playback.
+
+    Returns {"ok": bool, "qualities": [{"height":1080,"mbps":5.0}, …],
+             "blocked": bool}. Each quality carries ITS OWN minimum bitrate
+             (the HLS variant bandwidth), never a sum. Network-bound : meant
+             to be run in a thread pool.
+    """
+    out = {"ok": False, "qualities": [], "blocked": False}
+    headers = headers or {}
+    try:
+        u = url
+        if hasattr(player, "new_url") and isinstance(player.new_url, dict):
+            for old, new in player.new_url.items():
+                u = u.replace(old, new)
+
+        player_config = {}
+        for pname, cfg in player.players.items():
+            if pname in u.lower():
+                player_config = cfg
+                break
+
+        # GoldenAnime & co pass DIRECT stream URLs (m3u8/mp4), not player
+        # embeds — use them as-is. Detect by the URL shape (a resolved
+        # stream URL may itself contain a player name, so is_supported is not
+        # reliable here ; player embeds are /embed-…html, /e/… etc.).
+        low = u.split("?")[0].lower()
+        is_direct_stream = (
+            low.endswith((".m3u8", ".mp4", ".mkv", ".txt"))
+            or ".m3u8" in low
+            or "master" in low
+            or "/api/streams" in low
+        )
+        if is_direct_stream:
+            stream_url = u
+            probe_headers = headers
+        else:
+            stream_url = player.get_hls_link(u, headers)
+            if stream_url and stream_url.startswith("/"):
+                stream_url = "https://" + u.split("/")[2] + stream_url
+            if not stream_url:
+                return out
+            probe_headers = _proxy_request_headers(u, player_config, False, headers)
+        probe = _probe_stream(stream_url, probe_headers)
+        blocked = probe.get("blocked")
+        if blocked == "cloudflare":
+            out["blocked"] = True
+            return out
+
+        variants = probe.get("variants", [])
+        # One bitrate PER resolution (variants are already de-duped per
+        # resolution by _probe_stream). Each variant's bandwidth is the
+        # minimum link speed to play THAT quality — never summed.
+        best = {}
+        for v in variants:
+            h, bw = v.get("height"), v.get("bandwidth") or 0
+            if h and (h not in best or bw > best[h]):
+                best[h] = bw
+        out["qualities"] = [
+            {"height": h, "mbps": round(best[h] / 1_000_000, 1)}
+            for h in sorted(best, reverse=True)
+        ]
+        # Single-quality / direct stream (no HLS master variants) : ask
+        # ffprobe for the real resolution + bitrate. Skip it when the master
+        # was access-blocked (e.g. vidmoly's CDN 403 anti-leech) — ffprobe
+        # would 403 too, so don't burn the timeout.
+        if not out["qualities"] and not blocked:
+            q = _ffprobe_quality(stream_url, probe_headers, timeout=12)
+            if q:
+                out["qualities"] = [q]
+        out["ok"] = True
+    except Exception:
+        return out
+    return out
+
+
+def format_quality_label(info: dict) -> str:
+    """
+    Each quality with ITS OWN minimum bitrate, e.g.
+    '1080p ~5.0 · 720p ~2.5 · 480p ~0.8 Mbps'. Not a sum.
+    '✗' = unresolved, '🔒' = Cloudflare, 'direct' = single/non-HLS.
+    """
+    if not info or not info.get("ok"):
+        return "✗" if not (info or {}).get("blocked") else "🔒"
+    qs = info.get("qualities") or []
+    if not qs:
+        return "✓"  # resolves, but resolution/bitrate couldn't be read
+    any_mbps = any(q.get("mbps") for q in qs)
+    parts = [
+        f"{q['height']}p ~{q['mbps']:.1f}" if q.get("mbps") else f"{q['height']}p"
+        for q in qs[:4]
+    ]
+    return " · ".join(parts) + (" Mbps" if any_mbps else "")
+
+
 PLAYERS: Dict[str, Dict[str, str]] = {
     "mpv": {"display": "mpv"},
     "vlc": {"display": "vlc"},
@@ -409,29 +549,20 @@ def _resolve_or_install(player_name: str):
 
 def _run_with_data_meter(cmd, env=None):
     """
-    Launch the player (proxy mode) and show a LIVE data-usage counter that
-    grows as the proxy streams segments, then the total consumed at the end.
-    Raises CalledProcessError on a non-zero exit to preserve the previous
-    check=True behaviour.
+    Launch the player (proxy mode) and report the TOTAL data consumed once
+    it exits. We deliberately do NOT print a live counter during playback :
+    mpv writes its own status lines to the same terminal, and a competing
+    \\r line garbles both. So the player's output stays clean, and we print
+    the total on a fresh line afterwards.
     """
+    from .icons import icon
+
     proxy.reset_bytes_counter()
-    proc = subprocess.Popen(cmd, env=env)
-    rc = 0
-    try:
-        while True:
-            try:
-                rc = proc.wait(timeout=0.5)
-                break
-            except subprocess.TimeoutExpired:
-                mb = proxy.get_bytes_served() / (1024 * 1024)
-                print(f"\r  📊 Data used: {mb:8.1f} MB", end="", flush=True)
-    except KeyboardInterrupt:
-        proc.terminate()
-        rc = proc.wait()
+    rc = subprocess.run(cmd, env=env).returncode
 
     total = proxy.get_bytes_served() / (1024 * 1024)
-    # Clear the live line and print the final total.
-    print(f"\r  📊 Data used: {total:8.1f} MB (total){' ' * 8}")
+    if total > 0:
+        print_info(f"{icon('stats')} {t('Data used')}: {total:.1f} MB")
     if rc != 0:
         raise subprocess.CalledProcessError(rc, cmd)
     return rc
@@ -581,12 +712,25 @@ def _download_stream(
         cmd = [
             ytdlp,
             "--no-warnings",
+            "--newline",
             "--no-overwrites",
             "--add-header", f"Referer:{referer}",
             "--add-header", f"User-Agent:{user_agent}",
             "--merge-output-format", "mp4",
             "-o", os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s"),
         ]
+        # Speed up HLS segment downloads. With aria2c present, hand fragments
+        # to it (16 connections — the fast combo). Otherwise use yt-dlp's
+        # native parallel-fragment downloader.
+        if shutil.which("aria2c"):
+            cmd += [
+                "--downloader", "aria2c",
+                "--downloader-args", "aria2c:-x 16 -s 16 -k 1M",
+            ]
+            backend_name = "yt-dlp + aria2c (x16)"
+        else:
+            cmd += ["--concurrent-fragments", "16"]
+            backend_name = "yt-dlp (16 fragments)"
         if format_arg:
             cmd.extend(["-f", format_arg])
         cmd.append(stream_url)
@@ -622,6 +766,7 @@ def _download_stream(
             cmd = [
                 ytdlp,
                 "--no-warnings",
+                "--newline",
                 "--no-overwrites",
                 "--add-header", f"Referer:{referer}",
                 "--add-header", f"User-Agent:{user_agent}",
@@ -637,11 +782,14 @@ def _download_stream(
     )
     print_info(f"Output: [cyan]{DOWNLOAD_DIR}[/cyan]")
 
+    # Swallow yt-dlp / aria2c's noisy logs and show a clean themed bar with
+    # speed + downloaded/total + ETA instead.
     try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print_error(f"Download failed (exit code {e.returncode}).")
-        return False
+        from . import progress as _progress
+        rc = _progress.run_download_with_bar(cmd, safe_title)
+        if rc != 0:
+            print_error(f"Download failed (exit code {rc}).")
+            return False
     except KeyboardInterrupt:
         print_info("\nDownload interrupted by user.")
         return False
@@ -733,10 +881,31 @@ def play_video(
             import tempfile
 
             r = requests.get(subtitle_url, timeout=10, impersonate="chrome")
+            content = r.content
             sub_ext = ".vtt" if "vtt" in subtitle_url.lower() else ".srt"
+            # Many subtitle hosts (OpenSubtitles & co, used by GoldenAnime)
+            # serve the .srt GZIPPED or inside a ZIP — writing the raw bytes
+            # as .srt gives mpv an unreadable file. Decompress first.
+            if content[:2] == b"\x1f\x8b":  # gzip
+                import gzip
+                content = gzip.decompress(content)
+            elif content[:2] == b"PK":  # zip
+                import zipfile
+                import io
+                try:
+                    z = zipfile.ZipFile(io.BytesIO(content))
+                    names = [
+                        n for n in z.namelist()
+                        if n.lower().endswith((".srt", ".vtt", ".ass", ".ssa"))
+                    ]
+                    if names:
+                        content = z.read(names[0])
+                        sub_ext = os.path.splitext(names[0])[1] or ".srt"
+                except Exception:
+                    pass
             fd, temp_sub = tempfile.mkstemp(suffix=sub_ext, prefix="freeflix_sub_")
             with os.fdopen(fd, "wb") as f:
-                f.write(r.content)
+                f.write(content)
             local_subtitle_path = temp_sub
             print_success("Subtitles downloaded locally.")
         except Exception as e:

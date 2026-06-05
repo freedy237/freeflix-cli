@@ -9,6 +9,26 @@ website_origin = ""
 
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """
+    GET that rides a cf_clearance cookie if set, and — on a Cloudflare block
+    — asks FlareSolverr to auto-solve the challenge, then retries once.
+    """
+    base_headers = kw.pop("headers", {})
+
+    def _fetch():
+        cf = cloudflare.get_cf_headers(url)
+        h = {**cf, **base_headers} if cf else dict(base_headers)
+        return scraper.get(url, headers=h, **kw) if h else scraper.get(url, **kw)
+
+    resp = _fetch()
+    if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
+        resp = _fetch()
+    return resp
+
 # info_class = "mt-0.5 text-gray-300 font-medium text-xs truncate"
 info_class = "info-value"
 
@@ -41,7 +61,7 @@ def get_website_url(portal=portals["anime-sama"]):
 def search(query: str) -> list[SearchResult]:
     page = website_origin + f"/catalogue/?search={query}"
 
-    response = scraper.get(page)
+    response = _get(page)
     response.raise_for_status()
 
     results: list[SearchResult] = []
@@ -84,7 +104,7 @@ def get_season(url: str) -> SamaSeason:
             url.replace("vostfr", lang_code).removesuffix("/")
             + f"/episodes.js?filever={randint(1, 100000)}"
         )
-        response = scraper.get(nurl)
+        response = _get(nurl)
 
         if response.status_code == 404:
             continue
@@ -107,7 +127,7 @@ def get_season(url: str) -> SamaSeason:
 
 # season_container_class = "flex flex-wrap overflow-y-hidden justify-start bg-slate-900 bg-opacity-70 rounded mt-2 h-auto"
 def get_series(url: str) -> SamaSeries:
-    response = scraper.get(url)
+    response = _get(url)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html5lib")

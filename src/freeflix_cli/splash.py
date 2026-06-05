@@ -20,6 +20,32 @@ _LOGO = r"""
 """
 
 
+def logo_renderable(width: int = None, height: int = None):
+    """Return the themed FreeFlix wordmark, centered and responsive (full
+    ANSI-shadow art on wide terminals, a compact mark otherwise). Shared by
+    the splash and the loading screen so they always match."""
+    try:
+        w = width if width is not None else console.size.width
+        h = height if height is not None else console.size.height
+    except Exception:
+        w, h = 80, 24
+    if w >= 64 and h >= 14:
+        return Align.center(Text(_LOGO, style=f"bold {color('accent')}"))
+    from .icons import icon
+    return Align.center(Text(f"{icon('home')} FREEFLIX", style=f"bold {color('accent')}"))
+
+
+def tagline_text(width: int = None) -> Text:
+    """Themed responsive tagline used under the logo."""
+    try:
+        w = width if width is not None else console.size.width
+    except Exception:
+        w = 80
+    tag = ("Movies · Series · Anime — straight from your terminal"
+           if w >= 56 else "Movies · Series · Anime")
+    return Text(tag, style=color("info"))
+
+
 def show_splash(version: str = "", duration: float = 1.2):
     """
     Render the logo centered, themed, with a tagline + version, then
@@ -32,27 +58,10 @@ def show_splash(version: str = "", duration: float = 1.2):
 
         clear_screen()
         console.print()
-
-        # Responsive logo : full ANSI-shadow wordmark on wide terminals,
-        # a compact one when the big one (≈60 cols) wouldn't fit.
-        if w >= 64 and h >= 14:
-            console.print(Align.center(Text(_LOGO, style=f"bold {color('accent')}")))
-        else:
-            console.print(
-                Align.center(Text("🍿 FREEFLIX", style=f"bold {color('accent')}"))
-            )
-
-        # Tagline adapts to width too (full vs short).
-        if w >= 56:
-            tag = "Movies · Series · Anime — straight from your terminal"
-        else:
-            tag = "Movies · Series · Anime"
-        console.print(Align.center(Text(tag, style=color("info"))))
-
+        console.print(logo_renderable(w, h))
+        console.print(Align.center(tagline_text(w)))
         if version:
-            console.print(
-                Align.center(Text(f"v{version}", style=color("dim")))
-            )
+            console.print(Align.center(Text(f"v{version}", style=color("dim"))))
         console.print()
         time.sleep(duration)
     except Exception:

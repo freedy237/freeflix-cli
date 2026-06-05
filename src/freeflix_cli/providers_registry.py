@@ -10,6 +10,7 @@ class ProviderRegistry:
         name: str,
         handler: Callable,
         supported_languages: Optional[List[str]] = None,
+        category: str = "anime",
     ):
         """
         Register a streaming provider.
@@ -22,12 +23,16 @@ class ProviderRegistry:
             language (asked first on launch) decides which sources appear:
             picking English keeps every source tagged 'en', picking French
             keeps every source tagged 'fr'.
+        :param category: Grouping key for the source menu — ``"anime"`` (anime
+            / manga) or ``"movies"`` (films & series). The menu lists anime
+            sources first, then films/series, under section headers.
         """
         self.providers.append(
             {
                 "name": name,
                 "handler": handler,
                 "supported_languages": supported_languages,
+                "category": category,
             }
         )
 

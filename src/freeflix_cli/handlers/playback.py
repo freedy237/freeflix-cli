@@ -4,11 +4,75 @@ from ..cli_utils import (
     print_warning,
     print_error,
     print_success,
+    spinner,
 )
-from ..player_manager import play_video
+from ..player_manager import play_video, analyze_stream_quality, format_quality_label
 from ..tracker import tracker
 from ..scraping import player
 from ..i18n import t
+from ..icons import icon
+
+
+def _search_subtitle(series_title, season_title, episode_title):
+    """
+    Offer + fetch an external subtitle for any source (parity with
+    GoldenAnime, which had this exclusively). Resolves an IMDb id via
+    Cinemeta, searches the subtitle extractor, lets the user pick.
+    Returns a subtitle URL or None.
+    """
+    import re as _re
+    import urllib.parse as _up
+    from curl_cffi import requests as _rq
+    from ..scraping.subtitles import subtitle_extractor
+
+    lang = tracker.get_anime_language() or tracker.get_language() or "en"
+    if select_from_list([t("Yes"), t("No")], t("Search for subtitles?")) != 0:
+        return None
+
+    imdb_id, is_movie = None, False
+    try:
+        for typ in ("series", "movie"):
+            u = (f"https://v3-cinemeta.strem.io/catalog/{typ}/top/"
+                 f"search={_up.quote(series_title)}.json")
+            metas = _rq.get(u, timeout=6, impersonate="chrome").json().get("metas", [])
+            for m in metas:
+                if m.get("imdb_id"):
+                    imdb_id, is_movie = m["imdb_id"], (typ == "movie")
+                    break
+            if imdb_id:
+                break
+    except Exception:
+        imdb_id = None
+
+    if not imdb_id:
+        print_warning(t("Could not find subtitles for this title."))
+        return None
+
+    season = episode = None
+    if not is_movie:
+        m = _re.search(r"(\d+)", episode_title or "")
+        episode = int(m.group(1)) if m else 1
+        m2 = _re.search(r"(\d+)", season_title or "")
+        season = int(m2.group(1)) if m2 else 1
+
+    try:
+        with spinner(t("Searching for subtitles…")):
+            subs = subtitle_extractor.search(
+                imdb_id=imdb_id, season=season, episode=episode, lang_filter=lang
+            )
+    except Exception:
+        subs = None
+
+    if not subs:
+        print_warning(t("No subtitles found."))
+        return None
+
+    choices = [f"{s['source']} - {s.get('lang', lang)}" for s in subs[:6]] + [t("None")]
+    idx = select_from_list(choices, f"{icon('subtitle')} {t('Select Subtitle:')}")
+    if idx < len(subs[:6]):
+        print_info(f"{t('Selected subtitle from:')} {subs[idx]['source']}")
+        return subs[idx]["url"]
+    return None
 
 
 def play_episode_flow(
@@ -48,12 +112,56 @@ def play_episode_flow(
     if headers is None:
         headers = {}
 
+    # Optionally analyse every player up front : resolutions + the bitrate
+    # needed for stable playback, shown next to each player. Runs in
+    # parallel (thread-safe extractor) behind a spinner.
+    quality_map = {}
+    if tracker.get_analyze_players():
+        from concurrent.futures import (
+            ThreadPoolExecutor,
+            as_completed,
+            TimeoutError as _FTimeout,
+        )
+
+        # Hard TOTAL budget : a single slow/hanging host (some embeds take
+        # 25 s+) must not stall the whole menu. Collect what's done within
+        # the budget ; stragglers just get no annotation, and we DON'T wait
+        # for them on exit (shutdown(wait=False)).
+        ANALYSIS_BUDGET = 14
+        ex = ThreadPoolExecutor(max_workers=8)
+        futs = {
+            ex.submit(analyze_stream_quality, p.url, headers): p
+            for p in supported_players
+        }
+        with spinner(t("Analyzing players (resolutions, bitrate)…")):
+            try:
+                for fut in as_completed(futs, timeout=ANALYSIS_BUDGET):
+                    p = futs[fut]
+                    try:
+                        quality_map[p.url] = format_quality_label(fut.result())
+                    except Exception:
+                        quality_map[p.url] = "✗"
+            except _FTimeout:
+                pass  # budget hit — remaining players show no quality tag
+        ex.shutdown(wait=False)
+
+    # Offer external subtitles (all sources now, not just GoldenAnime).
+    subtitle_url = None
+    if tracker.get_subtitle_search():
+        subtitle_url = _search_subtitle(
+            series_title, season_title, getattr(episode, "title", "")
+        )
+
     while True:
         # Player Selection Menu
-        player_options = [
-            f"{p.name} : {p.url.split('/')[2].split('.')[-2]}"
-            for p in supported_players
-        ]
+        player_options = []
+        for p in supported_players:
+            host = p.url.split("/")[2].split(".")[-2]
+            label = f"{p.name} : {host}"
+            q = quality_map.get(p.url)
+            if q:
+                label += f"  —  {q}"
+            player_options.append(label)
         player_options.append(t("← Back"))
 
         player_idx = select_from_list(
@@ -73,6 +181,7 @@ def play_episode_flow(
             selected_player.url,
             headers=headers,
             title=window_title,
+            subtitle_url=subtitle_url,
         )
 
         if success:

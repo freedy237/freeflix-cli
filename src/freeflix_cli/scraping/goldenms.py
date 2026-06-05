@@ -6,6 +6,14 @@ from ..proxy import DNS_OPTIONS
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
+
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
+    return cloudflare.cf_get(scraper, url, **kw)
+
 class MediaExtractor:
     """
     Movie and Series extractor based on CineStream.
@@ -76,7 +84,7 @@ class MediaExtractor:
                 if episode:
                     url += f"&episodeId={episode}"
 
-                r = scraper.get(url, headers=headers, timeout=10)
+                r = _get(url, headers=headers, timeout=10)
                 if r.status_code != 200:
                     continue
                 enc_data = r.text
@@ -120,7 +128,7 @@ class MediaExtractor:
             return []
         try:
             # 1. Encrypt TMDB ID via API
-            r_enc = scraper.get(
+            r_enc = _get(
                 f"{self.multi_decrypt_api}/enc-vidlink?text={tmdb_id}", timeout=10
             )
             enc_data = r_enc.json().get("result")
@@ -137,7 +145,7 @@ class MediaExtractor:
             else:
                 url = f"{self.vidlink_api}/api/b/tv/{enc_data}/{season}/{episode}"
 
-            r = scraper.get(url, headers=headers, timeout=10)
+            r = _get(url, headers=headers, timeout=10)
             data = r.json()
             m3u8_url = data.get("stream", {}).get("playlist")
 
@@ -172,7 +180,7 @@ class MediaExtractor:
             key = secrets.token_hex(32)  # Generate 32-byte key
 
             # Fetch X-Cap-Token from multi-decrypt
-            r_token = scraper.get(f"{self.multi_decrypt_api}/enc-hexa", timeout=10)
+            r_token = _get(f"{self.multi_decrypt_api}/enc-hexa", timeout=10)
             cap_token = r_token.json().get("result", {}).get("token")
 
             headers = {
@@ -185,7 +193,7 @@ class MediaExtractor:
             }
 
             # 3. Request
-            r_enc = scraper.get(url, headers=headers, timeout=10)
+            r_enc = _get(url, headers=headers, timeout=10)
             if r_enc.status_code != 200:
                 return []
             enc_data = r_enc.text
@@ -234,7 +242,7 @@ class MediaExtractor:
             if season:
                 watch_url += f"/{tv_slug}"
 
-            r = scraper.get(watch_url, headers=headers, timeout=10)
+            r = _get(watch_url, headers=headers, timeout=10)
             token_match = re.search(
                 r'window\.__REQUEST_TOKEN__\s*=\s*"([^"]+)"', r.text
             )
@@ -278,7 +286,7 @@ class MediaExtractor:
                         continue
 
                     final_url = f"{base_url}{stream_path}&requestToken={token}"
-                    r_streams = scraper.get(
+                    r_streams = _get(
                         final_url, headers=headers, timeout=10
                     ).json()
 
@@ -312,7 +320,7 @@ class MediaExtractor:
                 if season is None
                 else f"{base_url}/e/tv/{tmdb_id}/{season}/{episode}"
             )
-            r = scraper.get(embed_url, headers={"Referer": f"{base_url}/"}, timeout=10)
+            r = _get(embed_url, headers={"Referer": f"{base_url}/"}, timeout=10)
 
             # Extract backups/sources via regex
             matches = re.findall(r'href=["\']([^"\']+/playlist/[^"\']+)["\']', r.text)
@@ -321,7 +329,7 @@ class MediaExtractor:
             for url in matches:
                 full_url = url if url.startswith("http") else f"{base_url}{url}"
                 try:
-                    r_json = scraper.get(full_url, timeout=10).json()
+                    r_json = _get(full_url, timeout=10).json()
                     playlist = r_json.get("playlist", [])[0]
                     sources = playlist.get("sources", [])
                     for src in sources:

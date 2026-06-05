@@ -11,8 +11,33 @@ import binascii
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
-scraper = requests.Session(curl_options=DNS_OPTIONS)
+import threading as _threading
 
+# Per-thread session : curl_cffi Session is NOT thread-safe, so when the
+# player-analysis runs several extractions in parallel through ONE shared
+# session the responses get mixed up (every player loses its quality). Give
+# each thread its own session.
+_session_tls = _threading.local()
+
+
+def _scraper():
+    s = getattr(_session_tls, "s", None)
+    if s is None:
+        s = requests.Session(curl_options=DNS_OPTIONS)
+        _session_tls.s = s
+    return s
+
+
+# Main-thread session kept under the old name for any external reference.
+scraper = _scraper()
+
+
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade), per thread."""
+    return cloudflare.cf_get(_scraper(), url, **kw)
 
 # Player mapping: domain name -> parser type
 # Player mapping and configuration
@@ -34,13 +59,38 @@ new_url = load_remote_jsonc(
     DEFAULT_NEW_URL,
 )
 
+# Domain corrections that must win over the (stale) upstream new_url.jsonc.
+# vidmoly's live domain is .net (serves the player + m3u8). .to is now a
+# PARKED ad domain, .biz/.me are 404. So route everything to .net.
+new_url.pop("vidmoly.net", None)  # keep the live domain untouched
+new_url.update(
+    {
+        "vidmoly.to": "vidmoly.net",
+        "vidmoly.biz": "vidmoly.net",
+        "vidmoly.me": "vidmoly.net",
+    }
+)
+
 # kakaflix supported players
 kakaflix_players = load_remote_jsonc(
     "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/kakaflix_players.jsonc",
     DEFAULT_KAKAFLIX_PLAYERS,
 )
 
-actual_player_config = None
+import threading
+
+# Per-thread current player config, so several extractions can run in
+# parallel (e.g. analysing every player's resolutions at once) without
+# clobbering each other.
+_apc = threading.local()
+
+
+def _set_apc(cfg):
+    _apc.config = cfg
+
+
+def _get_apc():
+    return getattr(_apc, "config", None)
 
 
 def extract_hls_url(unpacked_code):
@@ -66,20 +116,20 @@ def get_hls_link_default(url: str, headers: dict) -> str:
     """
     Extract HLS link from default player.
     """
-    global actual_player_config
+    cfg = _get_apc() or {}
 
     use_headers = headers
-    if actual_player_config.get("m3u8-extractor"):
-        if actual_player_config.get("m3u8-extractor").get("no-header"):
+    if cfg.get("m3u8-extractor"):
+        if cfg.get("m3u8-extractor").get("no-header"):
             use_headers = {}
 
-    response = scraper.get(url, headers=use_headers, impersonate="chrome")
+    response = _get(url, headers=use_headers, impersonate="chrome")
 
     # Some hosts (e.g. fsvid) now REQUIRE the page referer despite the
     # 'no-header' config flag and return 403 without it. Retry once with
     # the original headers before giving up.
     if response.status_code == 403 and use_headers is not headers and headers:
-        response = scraper.get(url, headers=headers, impersonate="chrome")
+        response = _get(url, headers=headers, impersonate="chrome")
 
     response.raise_for_status()
 
@@ -124,7 +174,7 @@ def get_hls_link_embed4me(embed_url: str) -> str:
 
     headers = {"Referer": url_root}
 
-    r = scraper.get(api_url, headers=headers, impersonate="chrome", timeout=10)
+    r = _get(api_url, headers=headers, impersonate="chrome", timeout=10)
     r.raise_for_status()
 
     hex_data = r.text.strip()
@@ -149,7 +199,7 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     Returns:
         HLS stream URL
     """
-    response = scraper.get(
+    response = _get(
         url.replace("embed-", ""),
         headers={**headers, "Referer": "https://uqload.is/"},
         impersonate="chrome",
@@ -189,7 +239,7 @@ def get_hls_link_sendvid(url: str) -> str:
     Returns:
         Video URL
     """
-    response = scraper.get(url, impersonate="chrome")
+    response = _get(url, impersonate="chrome")
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -209,7 +259,7 @@ def get_hls_link_sibnet(url: str) -> str:
     Returns:
         Video URL
     """
-    response = scraper.get(url, impersonate="chrome")
+    response = _get(url, impersonate="chrome")
     response.raise_for_status()
 
     relative_path = response.text.split('player.src([{src: "')[1].split('"')[0]
@@ -299,7 +349,7 @@ def get_hls_link_filemoon(url: str, headers: dict) -> str:
 
     code = url.split("/")[-1]
     try:
-        response = scraper.get(
+        response = _get(
             "https://9n8o.com/api/videos/" + code + "/embed/playback",
             impersonate="chrome",
             headers={
@@ -343,7 +393,7 @@ def get_hls_link_vidoza(url: str, headers: dict) -> str:
         HLS stream URL
     """
 
-    response = scraper.get(
+    response = _get(
         url,
         headers=headers,
         impersonate="chrome",
@@ -368,7 +418,7 @@ def get_hls_link_kakaflix(url: str, headers: dict) -> str:
     Returns:
         HLS stream URL
     """
-    response = scraper.get(
+    response = _get(
         url,
         headers=headers,
         impersonate="chrome",
@@ -396,7 +446,7 @@ def get_hls_link_myvidplay(url: str, headers: dict) -> str:
     Returns:
         HLS stream URL
     """
-    response = scraper.get(
+    response = _get(
         url,
         headers=headers,
         impersonate="chrome",
@@ -429,7 +479,7 @@ def get_hls_link_vidmoly(url: str, headers: dict) -> str:
     if "Referer" in final_headers and not final_headers["Referer"]:
         del final_headers["Referer"]
 
-    response = scraper.get(
+    response = _get(
         url,
         headers=final_headers,
         impersonate="chrome",
@@ -462,7 +512,7 @@ def get_hls_link_veev(url):
 
     # 2. Fetch HTML
     try:
-        html = scraper.get(f"https://veev.to/e/{media_id}", impersonate="chrome").text
+        html = _get(f"https://veev.to/e/{media_id}", impersonate="chrome").text
     except Exception as e:
         print(f"Connection error: {e}")
         return None
@@ -528,7 +578,7 @@ def get_hls_link_veev(url):
         # API call to get JSON
         dl_url = f"https://veev.to/dl?op=player_api&cmd=gi&file_code={media_id}&r=https://veev.to&ch={ch}&ie=1"
         try:
-            resp = scraper.get(dl_url, impersonate="chrome").json()
+            resp = _get(dl_url, impersonate="chrome").json()
         except:
             continue
 
@@ -578,12 +628,10 @@ def get_hls_link(url: str, headers: dict = {}) -> str | None:
     Returns:
         HLS/video stream URL if successful, None otherwise
     """
-    global actual_player_config
-
     # Find matching player and parse accordingly
     for player_name, config in players.items():
         if player_name in url.lower():
-            actual_player_config = config
+            _set_apc(config)
             parse_type = config["type"]
 
             if parse_type == "default":
@@ -611,7 +659,7 @@ def get_hls_link(url: str, headers: dict = {}) -> str | None:
             elif parse_type == "xtremestream":
                 return get_hls_link_xtremestream(url, headers)
 
-    actual_player_config = None
+    _set_apc(None)
     return None
 
 

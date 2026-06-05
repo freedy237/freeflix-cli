@@ -47,6 +47,7 @@ _EMOJI = {
     "party": "🎉",
     "flag_us": "🇺🇸",
     "movie_clap": "🎬",
+    "loading": "⏳",
 }
 
 # Semantic name -> Nerd Font codepoint (Font Awesome range, present in every
@@ -87,6 +88,7 @@ _NERD = {
     "party": chr(0xF06B),     # gift
     "flag_us": chr(0xF024),   # flag
     "movie_clap": chr(0xF008),  # film
+    "loading": chr(0xF252),   # hourglass
 }
 
 

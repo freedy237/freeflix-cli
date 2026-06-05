@@ -72,7 +72,9 @@ class AniListClient:
                     }
                     coverImage {
                         medium
+                        large
                     }
+                    genres
                     format
                     episodes
                     status

@@ -4,6 +4,8 @@ from ..scraping.goldenms import goldenms_extractor
 from ..scraping.subtitles import subtitle_extractor
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_header,
     print_info,
     print_warning,
@@ -16,6 +18,8 @@ from ..player_manager import play_video
 from ..tracker import tracker
 from ..languages import get_language_label
 from ..scraping import player as player_scraper
+from ..icons import icon
+from ..i18n import t
 import re
 
 
@@ -60,17 +64,19 @@ def _is_valid(r):
 
 def handle_goldenms():
     """Main entry point for the GoldenMS provider (Movies & Series)."""
-    print_header("GoldenMS (Movies & Series)")
-
     choices = ["Movie", "Series", "← Back"]
-    c_idx = select_from_list(choices, "Select Type:")
+    c_idx = select_from_list(
+        choices, "Select Type:", header=f"{icon('star')} GoldenMS (Movies & Series)"
+    )
     if c_idx == 2:
         return
 
     is_movie = c_idx == 0
     type_str = "Movie" if is_movie else "Series"
 
-    title = get_user_input(f"Enter {type_str} title")
+    title = get_user_input(
+        f"Enter {type_str} title", header=f"{icon('star')} GoldenMS (Movies & Series)"
+    )
     if not title:
         return
 
@@ -82,17 +88,35 @@ def handle_goldenms():
         pause()
         return
 
-    # User select result
-    display_options = []
-    for m in metas:
-        year = m.get("releaseInfo", "Unknown")
-        name = m.get("name", "Unknown Title")
-        display_options.append(f"{name} ({year})")
+    # Preview pane : Cinemeta poster + rating/genres beside the result list.
+    def _meta_lines(m):
+        out = []
+        if m.get("releaseInfo"):
+            out.append(str(m["releaseInfo"]))
+        if m.get("imdbRating"):
+            out.append(f"{icon('star')} {m['imdbRating']}")
+        genres = m.get("genres") or m.get("genre") or []
+        if genres:
+            out.append(", ".join(genres[:3]))
+        return out
 
-    display_options.append("← Cancel")
-    selection_idx = select_from_list(display_options, "Select Match:")
+    previews = [
+        make_preview(
+            cover=m.get("poster", ""),
+            title=m.get("name", "?"),
+            lines=_meta_lines(m),
+            panel_title="GoldenMS",
+        )
+        for m in metas
+    ]
+    labels = [
+        f"{m.get('name', '?')} ({m.get('releaseInfo', '?')})" for m in metas
+    ]
+    selection_idx = select_with_preview(
+        labels, f"{icon('tv')} {t('Select Match:')}", previews
+    )
 
-    if selection_idx == len(metas):
+    if selection_idx >= len(metas):  # Esc / Back
         return
 
     selected_meta = metas[selection_idx]

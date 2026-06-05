@@ -120,10 +120,10 @@ DEFAULT_NEW_URL = {
     "mivalyo": "dinisglows",
     "vidhideplus": "dinisglows",
     "dingtezuni": "dinisglows",
-    # Vidmoly Player
-    "vidmoly.to": "vidmoly.biz",
-    "vidmoly.me": "vidmoly.biz",
-    "vidmoly.net": "vidmoly.biz",
+    # Vidmoly Player — live domain is .net ; .to is parked, .biz/.me are 404.
+    "vidmoly.to": "vidmoly.net",
+    "vidmoly.biz": "vidmoly.net",
+    "vidmoly.me": "vidmoly.net",
 }
 
 DEFAULT_KAKAFLIX_PLAYERS = {
@@ -136,7 +136,7 @@ DEFAULT_SOURCE_PORTAL = {
     "french-stream": "https://french-stream.one",
     "french-manga": "https://w16.french-manga.net",
     "anime-sama": "https://anime-sama.pw",
-    "coflix": "https://coflix.fans",
+    "coflix": "https://coflix.cymru",
     "sudatchi": "https://sudatchi.com",
     "animetsu": "https://animetsu.live",
     "animetsu-api": "https://b.animetsu.live",

@@ -1,6 +1,8 @@
 from ..scraping import anime_sama, player
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_header,
     print_info,
     print_warning,
@@ -14,6 +16,8 @@ from ..cli_utils import (
 from ..player_manager import play_video
 from ..tracker import tracker
 from ..anilist import anilist_client
+from ..i18n import t
+from ..icons import icon
 from .playback import play_episode_flow
 import re
 
@@ -123,26 +127,53 @@ def handle_anime_sama():
     """Handle Anime-Sama provider flow."""
     anime_sama.get_website_url()
 
-    print_header("🎌 Anime-Sama")
-    query = get_user_input("Search query (or 'exit' to back)")
+    query = get_user_input(
+        "Search query (or 'exit' to back)",
+        header=f"{icon('anime')} Anime-Sama",
+    )
     if not query or query.lower() == "exit":
         return
 
-    with spinner(f"Searching for {query}…"):
-        results = anime_sama.search(query)
+    try:
+        with spinner(f"Searching for {query}…"):
+            results = anime_sama.search(query)
+    except Exception as e:
+        print_error(f"Search failed (network/source issue): {type(e).__name__}")
+        print_info("The source may be down or rate-limiting — try again in a moment.")
+        pause()
+        return
 
     if not results:
         print_warning("No results found.")
         pause()
         return
 
-    choice_idx = select_from_list(
-        [f"{r.title} ({', '.join(r.genres)})" for r in results], "📺 Search Results:"
+    # Preview pane : poster + genres beside the result list (type to filter).
+    previews = [
+        make_preview(
+            cover=getattr(r, "img", ""),
+            title=r.title,
+            lines=[", ".join(r.genres)] if r.genres else [],
+            panel_title="Anime-Sama",
+        )
+        for r in results
+    ]
+    labels = [r.title for r in results]
+    choice_idx = select_with_preview(
+        labels, f"{icon('tv')} {t('Search Results:')}", previews
     )
+    if choice_idx >= len(results):  # Esc / Back
+        return
     selection = results[choice_idx]
 
-    with spinner(f"Loading {selection.title}…"):
-        series = anime_sama.get_series(selection.url)
+    try:
+        with spinner(f"Loading {selection.title}…"):
+            series = anime_sama.get_series(selection.url)
+    except Exception as e:
+        print_error(f"Failed to load (network/source issue): {type(e).__name__}")
+        print_info("The source may be down or rate-limiting — try again in a moment.")
+        pause()
+        return
 
     if not series.seasons:
         print_warning("No seasons found.")
@@ -180,7 +211,13 @@ def handle_anime_sama():
     selected_season_access = series.seasons[season_idx]
 
     print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
-    season = anime_sama.get_season(selected_season_access.url)
+    try:
+        season = anime_sama.get_season(selected_season_access.url)
+    except Exception as e:
+        print_error(f"Failed to load season (network/source issue): {type(e).__name__}")
+        print_info("The source may be down or rate-limiting — try again in a moment.")
+        pause()
+        return
 
     # episodes is dict {lang: [Episode]}
     langs = list(season.episodes.keys())

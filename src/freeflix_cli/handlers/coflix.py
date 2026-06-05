@@ -2,57 +2,81 @@ from ..scraping import coflix, player
 from ..scraping.objects import CoflixMovie, CoflixSeries
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_header,
     print_info,
     print_error,
     print_warning,
-    get_user_input,
     get_user_input,
     console,
     pause,
 )
 from ..player_manager import play_video
 from ..tracker import tracker
+from ..icons import icon
+from ..i18n import t
+from .. import terminal_image
 from .playback import play_episode_flow
+from ..cli_utils import spinner
 
 
 def handle_coflix():
     """Handle Coflix provider flow."""
     coflix.get_website_url()
 
-    print_header("🎬 Coflix")
-
     while True:
-        query = get_user_input("Search query (or 'exit' to back)")
+        query = get_user_input(
+            "Search query (or 'exit' to back)",
+            header=f"{icon('movie')} Coflix",
+        )
         if not query or query.lower() == "exit":
             break
 
-        print_info(f"Searching for: [cyan]{query}[/cyan]")
-        results = coflix.search(query)
+        with spinner(f"Searching for {query}…"):
+            results = coflix.search(query)
 
         if not results:
             print_warning("No results found.")
             pause()
             continue
 
-        options = [f"{r.title}" for r in results] + ["← Back"]
-        choice_idx = select_from_list(options, "📺 Search Results:")
+        # Preview pane : poster + genres beside the result list (type to filter).
+        previews = [
+            make_preview(
+                cover=getattr(r, "img", ""),
+                title=r.title,
+                lines=[", ".join(getattr(r, "genres", []) or [])],
+                panel_title="Coflix",
+            )
+            for r in results
+        ]
+        choice_idx = select_with_preview(
+            [r.title for r in results], f"{icon('tv')} {t('Search Results:')}", previews
+        )
 
-        if choice_idx == len(results):
+        if choice_idx >= len(results):  # Esc / Back
             continue
 
         selection = results[choice_idx]
 
-        print_info(f"Loading [cyan]{selection.title}[/cyan]...")
         try:
-            content = coflix.get_content(selection.url)
+            with spinner(f"Loading {selection.title}…"):
+                content = coflix.get_content(selection.url)
         except Exception as e:
             print_error(f"Error loading content: {e}")
             pause()
             continue
 
+        # Poster + title at selection.
+        terminal_image.show_poster(
+            getattr(content, "img", "") or getattr(selection, "img", ""),
+            title=getattr(content, "title", selection.title),
+            info_lines=[", ".join(getattr(content, "genres", []) or [])],
+        )
+
         if isinstance(content, CoflixMovie):
-            console.print(f"\n[bold]🎬 Movie:[/bold] [cyan]{content.title}[/cyan]\n")
+            console.print(f"\n[bold]{icon('movie')} Movie:[/bold] [cyan]{content.title}[/cyan]\n")
 
             # Check for saved progress (Movie Resume Fix)
             saved_progress = tracker.get_series_progress("Coflix", content.title)
@@ -90,7 +114,7 @@ def handle_coflix():
             )
 
         elif isinstance(content, CoflixSeries):
-            console.print(f"\n[bold]📺 Series:[/bold] [cyan]{content.title}[/cyan]\n")
+            console.print(f"\n[bold]{icon('tv')} Series:[/bold] [cyan]{content.title}[/cyan]\n")
 
             if not content.seasons:
                 print_warning("No seasons found.")

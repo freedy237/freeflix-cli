@@ -9,6 +9,7 @@ from typing import List, Dict
 from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
+from .. import cloudflare
 
 NYAA_BASE = "https://nyaa.si"
 
@@ -22,7 +23,7 @@ def search(query: str, max_results: int = 25) -> List[Dict]:
 
     url = f"{NYAA_BASE}/?f=0&c=0_0&q={quote_plus(query)}&s=seeders&o=desc"
     try:
-        r = cffi_requests.get(url, impersonate="chrome", timeout=15)
+        r = cloudflare.cf_get(cffi_requests, url, impersonate="chrome", timeout=15)
         r.raise_for_status()
     except Exception:
         return []

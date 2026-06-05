@@ -200,6 +200,62 @@ class ProgressTracker:
         self.data["icon_style"] = style
         self._save_data()
 
+    # Cloudflare cf_clearance fallback, per host. Stored as
+    #   {"coflix.cymru": {"token": "...", "ua": "..."}}
+    # The UA must match the browser that obtained the cookie (cf_clearance
+    # is bound to IP + User-Agent).
+    def get_cf_clearance(self, host: str) -> Optional[dict]:
+        return (self.data.get("cf_clearance") or {}).get(host)
+
+    def set_cf_clearance(self, host: str, token: str, ua: Optional[str] = None):
+        d = self.data.setdefault("cf_clearance", {})
+        d[host] = {"token": token, "ua": ua}
+        self._save_data()
+
+    def clear_cf_clearance(self, host: Optional[str] = None):
+        if host:
+            (self.data.get("cf_clearance") or {}).pop(host, None)
+        else:
+            self.data["cf_clearance"] = {}
+        self._save_data()
+
+    # FlareSolverr endpoint used to auto-solve Cloudflare JS challenges.
+    # Defaults to the standard local port ; empty string disables it.
+    def get_flaresolverr_url(self) -> str:
+        # 127.0.0.1 (not "localhost") : on many systems localhost resolves to
+        # IPv6 ::1, but rootless podman maps the port on IPv4 only.
+        return self.data.get("flaresolverr_url", "http://127.0.0.1:8191")
+
+    def set_flaresolverr_url(self, url: str):
+        self.data["flaresolverr_url"] = url
+        self._save_data()
+
+    # Version for which post-upgrade migrations last ran. Lets the first
+    # launch after an upgrade install new deps / clean up removed features.
+    def get_last_setup_version(self) -> Optional[str]:
+        return self.data.get("last_setup_version")
+
+    def set_last_setup_version(self, version: str):
+        self.data["last_setup_version"] = version
+        self._save_data()
+
+    # Analyse each player's resolutions + bitrate before showing the menu
+    # (adds a short network probe ; the user can turn it off for speed).
+    def get_analyze_players(self) -> bool:
+        return self.data.get("analyze_players", True)
+
+    def set_analyze_players(self, on: bool):
+        self.data["analyze_players"] = bool(on)
+        self._save_data()
+
+    # Offer external-subtitle search before playback (on every source).
+    def get_subtitle_search(self) -> bool:
+        return self.data.get("subtitle_search", True)
+
+    def set_subtitle_search(self, on: bool):
+        self.data["subtitle_search"] = bool(on)
+        self._save_data()
+
     # --- Player Preferences ---
 
     def get_player(self) -> Optional[str]:

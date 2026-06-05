@@ -2,6 +2,8 @@ from ..scraping import french_stream, player
 from ..scraping.objects import FrenchStreamMovie, FrenchStreamSeason
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_header,
     print_info,
     print_warning,
@@ -11,6 +13,8 @@ from ..cli_utils import (
     spinner,
 )
 from ..tracker import tracker
+from ..icons import icon
+from ..i18n import t
 from .playback import play_episode_flow
 
 
@@ -25,8 +29,10 @@ def resolve_url(url, base):
 
 def handle_french_stream():
     """Handle French-Stream provider flow."""
-    print_header("🇫🇷 French-Stream")
-    query = get_user_input("Search query (or 'exit' to back)")
+    query = get_user_input(
+        "Search query (or 'exit' to back)",
+        header=f"{icon('flag_fr')} French-Stream",
+    )
     if not query or query.lower() == "exit":
         return
 
@@ -38,7 +44,21 @@ def handle_french_stream():
         pause()
         return
 
-    choice_idx = select_from_list([f"{r.title}" for r in results], "📺 Search Results:")
+    # Preview pane : poster + genres beside the result list (type to filter).
+    previews = [
+        make_preview(
+            cover=getattr(r, "img", ""),
+            title=r.title,
+            lines=[", ".join(getattr(r, "genres", []) or [])],
+            panel_title="French-Stream",
+        )
+        for r in results
+    ]
+    choice_idx = select_with_preview(
+        [r.title for r in results], f"{icon('tv')} {t('Search Results:')}", previews
+    )
+    if choice_idx >= len(results):  # Esc / Back
+        return
     selection = results[choice_idx]
 
     with spinner(f"Loading {selection.title}…"):
@@ -53,7 +73,7 @@ def handle_french_stream():
     )
 
     if isinstance(content, FrenchStreamMovie):
-        console.print(f"\n[bold]🎬 Movie:[/bold] [cyan]{content.title}[/cyan]")
+        console.print(f"\n[bold]{icon('movie')} Movie:[/bold] [cyan]{content.title}[/cyan]")
         if not content.players:
             print_warning("No players found.")
             pause()
@@ -76,7 +96,7 @@ def handle_french_stream():
         )
 
     elif isinstance(content, FrenchStreamSeason):
-        console.print(f"\n[bold]📺 Series:[/bold] [cyan]{content.title}[/cyan]")
+        console.print(f"\n[bold]{icon('tv')} Series:[/bold] [cyan]{content.title}[/cyan]")
 
         # Check for saved progress
         saved_progress = tracker.get_series_progress("French-Stream", content.title)

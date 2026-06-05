@@ -19,6 +19,14 @@ if not website_origin.startswith("http"):
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
+
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
+    return cloudflare.cf_get(scraper, url, **kw)
+
 def _abs_img(src: str) -> str:
     """Resolve an <img> src : leave absolute URLs (e.g. TMDB) untouched,
     prefix the site origin only for relative paths."""
@@ -96,7 +104,7 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
     players: list[Player] = []
     movie_id = url.split("/")[-1].split("-")[0]
 
-    movie_info_response = scraper.get(
+    movie_info_response = _get(
         f"{website_origin}/engine/ajax/film_api.php?id={movie_id}"
     )
     movie_info_response.raise_for_status()
@@ -116,7 +124,7 @@ def get_series_season(url: str, content: str) -> FrenchStreamSeason:
     title: str = soup.find("meta", {"property": "og:title"}).attrs["content"]
     serie_id = url.split("/")[-1].split("-")[0]
 
-    serie_info_response = scraper.get(
+    serie_info_response = _get(
         f"{website_origin}/ep-data.php?id={serie_id}"
     )
     serie_info_response.raise_for_status()
@@ -156,7 +164,7 @@ def get_episodes_from_lang(lang: str, serie_info: dict):
 
 
 def get_content(url: str):
-    response = scraper.get(url)
+    response = _get(url)
     response.raise_for_status()
     content = response.text
 

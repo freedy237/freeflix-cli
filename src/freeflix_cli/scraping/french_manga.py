@@ -21,6 +21,14 @@ website_origin = portals.get("french-manga", "https://w16.french-manga.net").rst
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
+
+from .. import cloudflare
+
+
+def _get(url, **kw):
+    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
+    return cloudflare.cf_get(scraper, url, **kw)
+
 def _ajax_headers():
     return {
         "X-Requested-With": "XMLHttpRequest",
@@ -42,16 +50,26 @@ def search(query: str) -> list:
 
     results = []
     # Each card : <div class='search-item' onclick="location.href='/NNN-…html'">
-    #               … <div class='search-title'>Title (Year)</div>
+    #   <div class='search-poster'><img src='https://image.tmdb.org/…'></div>
+    #   <div class='search-info'><div class='search-title'>Title (Year)</div>
     for m in re.finditer(
-        r"location\.href='([^']+)'.*?search-title[^>]*>([^<]+)",
+        r"location\.href='([^']+)'(.*?)search-title[^>]*>([^<]+)",
         r.text,
         re.DOTALL,
     ):
-        url, title = m.group(1), m.group(2).strip()
+        url, mid, title = m.group(1), m.group(2), m.group(3).strip()
         if not url.startswith("http"):
             url = website_origin + url
-        results.append(SearchResult(title, url, "", []))
+        # Pull the card's poster (TMDB thumbnail) so the preview pane has a cover.
+        img = ""
+        im = re.search(r"<img[^>]+src=['\"]([^'\"]+)", mid)
+        if im:
+            img = im.group(1)
+            if img.startswith("//"):
+                img = "https:" + img
+            elif img.startswith("/"):
+                img = website_origin + img
+        results.append(SearchResult(title, url, img, []))
     return results
 
 
@@ -111,13 +129,13 @@ def get_episodes(url: str) -> dict:
     out = {"title": "", "cover": "", "vf": {}, "vostfr": {}}
     url = _abs_url(url)
     try:
-        page = scraper.get(url, timeout=20)
+        page = _get(url, timeout=20)
         out["cover"] = _extract_cover(page.text)
         news_id = _extract_news_id(page.text)
         if not news_id:
             return out
 
-        api = scraper.get(
+        api = _get(
             f"{website_origin}/engine/ajax/manga_episodes_api.php?id={news_id}",
             headers=_ajax_headers(),
             timeout=15,
