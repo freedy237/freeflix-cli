@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.4
+
+### ⚡ Instant startup (fix)
+- `freeflix` showed nothing for ~2.5 s on launch. Cause: four **remote config
+  files were fetched synchronously at import time** (players/new_url/kakaflix
+  overrides + source portals), blocking before anything could display.
+- These are optional upstream overrides of bundled defaults, so we now apply
+  the **defaults instantly** and pull the remote overrides in a **background
+  thread** kicked off at launch. They merge in (in place) well before any
+  playback needs them. Import time dropped from ~3.8 s to ~0.6 s.
+- Trimmed the splash sequence a touch too.
+
 ## 1.6.3
 
 ### ⬇️ Real-time download progress (fix)

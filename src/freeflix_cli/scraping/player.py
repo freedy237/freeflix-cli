@@ -39,45 +39,59 @@ def _get(url, **kw):
     """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade), per thread."""
     return cloudflare.cf_get(_scraper(), url, **kw)
 
-# Player mapping: domain name -> parser type
-# Player mapping and configuration
-players = load_remote_jsonc(
-    "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/players_info.jsonc",
-    DEFAULT_PLAYERS,
-)
-
-# FreeFlix-only players that the upstream autoflix players_info.jsonc does
-# not know about (french-manga's luluvid / vidzy). The remote list REPLACES
-# DEFAULT_PLAYERS when reachable, so we re-inject our extras here to make
-# sure they are always registered, online or offline.
-for _name, _cfg in DEFAULT_PLAYERS.items():
-    players.setdefault(_name, _cfg)
-
-# URL replacements for compatibility
-new_url = load_remote_jsonc(
-    "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/new_url.jsonc",
-    DEFAULT_NEW_URL,
-)
-
-# Domain corrections that must win over the (stale) upstream new_url.jsonc.
-# vidmoly's live domain is .net (serves the player + m3u8). .to is now a
-# PARKED ad domain, .biz/.me are 404. So route everything to .net.
-new_url.pop("vidmoly.net", None)  # keep the live domain untouched
-new_url.update(
-    {
-        "vidmoly.to": "vidmoly.net",
-        "vidmoly.biz": "vidmoly.net",
-        "vidmoly.me": "vidmoly.net",
-    }
-)
-
-# kakaflix supported players
-kakaflix_players = load_remote_jsonc(
-    "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/kakaflix_players.jsonc",
-    DEFAULT_KAKAFLIX_PLAYERS,
-)
-
 import threading
+
+# These three remote files are OPTIONAL upstream overrides of our bundled
+# defaults. Fetching them at IMPORT time was 3 blocking network calls (~3 s of
+# dead air before `freeflix` showed anything). So we apply the bundled defaults
+# SYNCHRONOUSLY (instant, fully functional offline) and pull the overrides in a
+# BACKGROUND thread kicked off at launch, merging them IN PLACE — they are ready
+# long before any extraction runs, and a slow/absent network never delays start.
+_PLAYERS_URL = "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/players_info.jsonc"
+_NEW_URL_URL = "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/new_url.jsonc"
+_KAKAFLIX_URL = "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/kakaflix_players.jsonc"
+
+# vidmoly's live domain is .net ; .to is a PARKED ad domain, .biz/.me are 404.
+# These corrections must win even over the (stale) upstream new_url.jsonc.
+_VIDMOLY_FIX = {
+    "vidmoly.to": "vidmoly.net",
+    "vidmoly.biz": "vidmoly.net",
+    "vidmoly.me": "vidmoly.net",
+}
+
+players = dict(DEFAULT_PLAYERS)
+new_url = dict(DEFAULT_NEW_URL)
+new_url.pop("vidmoly.net", None)
+new_url.update(_VIDMOLY_FIX)
+kakaflix_players = dict(DEFAULT_KAKAFLIX_PLAYERS)
+
+
+def _refresh_remote_configs():
+    """Background merge of the optional upstream overrides (zero startup cost).
+    Each dict is mutated in place so importers keep seeing the live object."""
+    try:
+        rp = load_remote_jsonc(_PLAYERS_URL, None)
+        if rp:
+            players.update(rp)  # remote wins shared keys; our extras stay
+    except Exception:
+        pass
+    try:
+        nu = load_remote_jsonc(_NEW_URL_URL, None)
+        if nu:
+            new_url.update(nu)
+        new_url.pop("vidmoly.net", None)  # re-assert our corrections over remote
+        new_url.update(_VIDMOLY_FIX)
+    except Exception:
+        pass
+    try:
+        kp = load_remote_jsonc(_KAKAFLIX_URL, None)
+        if kp:
+            kakaflix_players.update(kp)
+    except Exception:
+        pass
+
+
+threading.Thread(target=_refresh_remote_configs, daemon=True).start()
 
 # Per-thread current player config, so several extractions can run in
 # parallel (e.g. analysing every player's resolutions at once) without

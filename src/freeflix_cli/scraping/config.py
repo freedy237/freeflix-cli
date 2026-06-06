@@ -38,10 +38,30 @@ def _find_local_override():
 #   1. DEFAULT_SOURCE_PORTAL  (hardcoded fallback, always correct at ship time)
 #   2. remote config          (our repo — lets us patch URLs without a release)
 #   3. local override         (user / bundled file — final word)
+#
+# Start from the bundled defaults + local override SYNCHRONOUSLY (no network),
+# so importing this module — and therefore launching `freeflix` — is instant.
+# The optional remote patch is fetched in the BACKGROUND and merged in; it is
+# ready long before the user actually resolves a source. `portals` is mutated
+# IN PLACE (never reassigned) so importers keep seeing the live dict.
 portals = dict(DEFAULT_SOURCE_PORTAL)
-remote_portals = load_remote_jsonc(REMOTE_CONFIG_URL, {})
-if remote_portals:
-    portals.update(remote_portals)
-local_portals = _find_local_override()
-if local_portals:
-    portals.update(local_portals)
+_local_portals = _find_local_override()
+if _local_portals:
+    portals.update(_local_portals)
+
+
+def _refresh_remote_portals():
+    remote = load_remote_jsonc(REMOTE_CONFIG_URL, None)
+    if not remote:
+        return
+    merged = dict(DEFAULT_SOURCE_PORTAL)
+    merged.update(remote)
+    if _local_portals:
+        merged.update(_local_portals)  # local stays the final word
+    portals.clear()
+    portals.update(merged)
+
+
+import threading as _threading
+
+_threading.Thread(target=_refresh_remote_portals, daemon=True).start()

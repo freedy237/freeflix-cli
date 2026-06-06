@@ -433,15 +433,15 @@ def main():
     with progress.LoadingScreen(version=_v) as _ls:
         # A short, smooth 0 -> 100% sequence so the splash feels intentional
         # instead of flashing past.
-        _ls.status("Starting up…", frac=0.15)
-        time.sleep(0.3)
-        _ls.status("Loading providers…", frac=0.5)
+        _ls.status("Starting up…", frac=0.2)
+        time.sleep(0.2)
+        _ls.status("Loading providers…", frac=0.55)
         _register_providers()
-        time.sleep(0.35)
-        _ls.status("Preparing the library…", frac=0.8)
-        time.sleep(0.3)
+        time.sleep(0.22)
+        _ls.status("Preparing the library…", frac=0.85)
+        time.sleep(0.2)
         _ls.status("Ready", frac=1.0)
-        time.sleep(0.4)
+        time.sleep(0.28)
 
     # Check for updates
     if check_update():
