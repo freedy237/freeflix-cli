@@ -231,11 +231,14 @@ def _render_download(title: str, info: dict, tick: int) -> Panel:
         det.append(f"ETA {info['eta']}")
     detail = Text("   ".join(det) if det else "starting…", style=color("dim"))
 
+    # A centered box, not a full-width banner : clamp to a sane width.
+    box_w = max(34, min(60, console.size.width - 8))
     return Panel(
         Group(head, Text(""), barline, Text(""), detail),
         border_style=color("border"),
         title=Text("Download", style=color("info")),
         padding=(0, 2),
+        width=box_w,
     )
 
 
@@ -293,25 +296,45 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None) -> int:
     reader = threading.Thread(target=_reader, args=(proc,), daemon=True)
     reader.start()
 
+    def _frame(info, tick):
+        # Full-screen, vertically centered → repaints whole screen each frame,
+        # so a resize reflows cleanly and nothing is left behind on exit.
+        h = max(8, console.size.height - 1)
+        return Align.center(_render_download(title, info, tick),
+                            vertical="middle", height=h)
+
     tick = 0
-    last_info = {}
+    last = {"frac": None, "speed": None, "downloaded": None,
+            "total": None, "eta": None}
+    seen_ytdlp = False
     try:
-        with Live(_render_download(title, {}, 0), console=console,
-                  refresh_per_second=12, transient=True) as live:
+        # screen=True : alternate buffer, fully responsive, erases on exit.
+        with Live(_frame(last, 0), console=console,
+                  refresh_per_second=12, screen=True) as live:
             while not state["done"] or proc.poll() is None:
                 tick += 1
-                if state["line"]:
-                    info = parse_progress(state["line"])
-                    # Only adopt lines that actually carry progress, so yt-dlp's
-                    # interleaved [info]/[Merger]/… lines don't blank the bar.
-                    if info["frac"] is not None or info["speed"] or info["total"]:
-                        last_info = info
-                live.update(_render_download(title, last_info, tick))
+                line = state["line"]
+                if line:
+                    info = parse_progress(line)
+                    if "[download]" in line:
+                        seen_ytdlp = True
+                    # Fraction source, kept STABLE/monotonic:
+                    #  * yt-dlp HLS -> only yt-dlp's own "[download] … (frag a/b)"
+                    #    lines count ; aria2c's interleaved per-fragment lines are
+                    #    used for speed only, never the bar (no backward jumps).
+                    #  * pure aria2c (direct .mp4) -> its single-file % is overall.
+                    use_for_frac = ("[download]" in line) if seen_ytdlp else True
+                    if info["frac"] is not None and use_for_frac:
+                        if last["frac"] is None or info["frac"] >= last["frac"]:
+                            last["frac"] = info["frac"]
+                    for k in ("speed", "eta", "downloaded", "total"):
+                        if info[k]:
+                            last[k] = info[k]
+                live.update(_frame(last, tick))
                 time.sleep(0.08)
-            # one last frame at 100% if we got that far
-            if last_info.get("frac") is not None:
-                last_info["frac"] = max(last_info["frac"], 0.999)
-            live.update(_render_download(title, last_info, tick))
+            if last["frac"] is not None:
+                last["frac"] = max(last["frac"], 0.999)
+            live.update(_frame(last, tick))
     except KeyboardInterrupt:
         try:
             proc.terminate()

@@ -3,6 +3,7 @@ import platform
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import json
 import urllib.parse
@@ -709,6 +710,7 @@ def _download_stream(
 
     backend_name = None
     cmd = None
+    frag_tmp = None  # temp dir for HLS fragments (kept out of Downloads)
 
     quality = tracker.get_download_quality()
     format_arg = None
@@ -725,23 +727,32 @@ def _download_stream(
                 "Install with: sudo dnf install yt-dlp"
             )
             return False
-        # IMPORTANT: use yt-dlp's NATIVE parallel-fragment downloader, NOT
-        # aria2c, for HLS. Handing fragments to aria2c spammed the folder with
-        # hundreds of `.part-FragN`/`.aria2` files and made the progress bar
-        # jump per-fragment. Native fragments go into a single `.part` file and
-        # report a stable overall progress (frag a/b), then rename to one .mp4.
-        backend_name = "yt-dlp (16 fragments)"
+        # Speed AND a clean folder: keep aria2c (16 connections) for the throughput,
+        # but send every fragment + the .part file to a TEMP dir we delete after
+        # (-P temp:), so the Downloads folder only ever sees the final .mp4 — no
+        # more `*.part-FragN` / `*.aria2` clutter.
+        frag_tmp = tempfile.mkdtemp(prefix="freeflix_frag_")
         cmd = [
             ytdlp,
             "--no-warnings",
             "--newline",
             "--no-overwrites",
-            "--concurrent-fragments", "16",
             "--add-header", f"Referer:{referer}",
             "--add-header", f"User-Agent:{user_agent}",
             "--merge-output-format", "mp4",
-            "-o", os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s"),
+            "-P", f"home:{DOWNLOAD_DIR}",
+            "-P", f"temp:{frag_tmp}",
+            "-o", f"{safe_title}.%(ext)s",
         ]
+        if shutil.which("aria2c"):
+            cmd += [
+                "--downloader", "aria2c",
+                "--downloader-args", "aria2c:-x 16 -s 16 -k 1M",
+            ]
+            backend_name = "yt-dlp + aria2c (x16)"
+        else:
+            cmd += ["--concurrent-fragments", "16"]
+            backend_name = "yt-dlp (16 fragments)"
         if format_arg:
             cmd.extend(["-f", format_arg])
         cmd.append(stream_url)
@@ -809,6 +820,8 @@ def _download_stream(
         return False
     finally:
         _sweep_download_litter()  # tidy up whatever the backend left behind
+        if frag_tmp:
+            shutil.rmtree(frag_tmp, ignore_errors=True)
 
     if local_subtitle_path and os.path.exists(local_subtitle_path):
         sub_ext = os.path.splitext(local_subtitle_path)[1] or ".srt"

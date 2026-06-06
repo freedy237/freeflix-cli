@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.2
+
+### ⬇️ Downloads
+- **Speed back, clutter gone**: HLS uses yt-dlp **+ aria2c (x16)** again for
+  throughput, but every fragment + the `.part` file now go to a **temp dir**
+  (`-P temp:`) that's deleted afterwards — the Downloads folder only ever sees
+  the final `.mp4`.
+- **Rock-stable progress bar**: the fraction is driven only by yt-dlp's overall
+  `(frag a/b)` count and is monotonic (never jumps backward); aria2c's
+  interleaved per-fragment lines feed the **speed** readout only.
+
+### 🖥️ Download box is now purely responsive
+- The progress box renders in the alternate screen (`screen=True`), centered:
+  resizing reflows it cleanly with no offset/leftover, and it erases itself on
+  exit.
+
 ## 1.6.1
 
 ### 🐛 Downloads
