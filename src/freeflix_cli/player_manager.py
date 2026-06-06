@@ -666,6 +666,22 @@ def _save_mpv_position(out_path: str, key: str, completion_threshold: float = 0.
         tracker.set_episode_position(key, pos)
 
 
+def _sweep_download_litter():
+    """Remove leftover HLS fragment / temp clutter (the `*-Frag*`, `*.aria2`,
+    `*.frag.urls` files the old aria2c-per-fragment path left behind) so the
+    download folder stays clean. These patterns are never a finished file."""
+    import glob
+    try:
+        for pat in ("*-Frag*", "*.aria2", "*.frag.urls"):
+            for p in glob.glob(os.path.join(DOWNLOAD_DIR, pat)):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
 def _download_stream(
     stream_url: str,
     referer: str,
@@ -686,6 +702,7 @@ def _download_stream(
     """
     safe_title = _sanitize_filename(title)
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    _sweep_download_litter()  # clear any old fragment clutter up front
 
     url_lower = stream_url.lower()
     is_hls = ".m3u8" in url_lower or (not is_mp4 and ".mp4" not in url_lower)
@@ -708,29 +725,23 @@ def _download_stream(
                 "Install with: sudo dnf install yt-dlp"
             )
             return False
-        backend_name = "yt-dlp"
+        # IMPORTANT: use yt-dlp's NATIVE parallel-fragment downloader, NOT
+        # aria2c, for HLS. Handing fragments to aria2c spammed the folder with
+        # hundreds of `.part-FragN`/`.aria2` files and made the progress bar
+        # jump per-fragment. Native fragments go into a single `.part` file and
+        # report a stable overall progress (frag a/b), then rename to one .mp4.
+        backend_name = "yt-dlp (16 fragments)"
         cmd = [
             ytdlp,
             "--no-warnings",
             "--newline",
             "--no-overwrites",
+            "--concurrent-fragments", "16",
             "--add-header", f"Referer:{referer}",
             "--add-header", f"User-Agent:{user_agent}",
             "--merge-output-format", "mp4",
             "-o", os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s"),
         ]
-        # Speed up HLS segment downloads. With aria2c present, hand fragments
-        # to it (16 connections — the fast combo). Otherwise use yt-dlp's
-        # native parallel-fragment downloader.
-        if shutil.which("aria2c"):
-            cmd += [
-                "--downloader", "aria2c",
-                "--downloader-args", "aria2c:-x 16 -s 16 -k 1M",
-            ]
-            backend_name = "yt-dlp + aria2c (x16)"
-        else:
-            cmd += ["--concurrent-fragments", "16"]
-            backend_name = "yt-dlp (16 fragments)"
         if format_arg:
             cmd.extend(["-f", format_arg])
         cmd.append(stream_url)
@@ -796,6 +807,8 @@ def _download_stream(
     except Exception as e:
         print_error(f"Download error: {e}")
         return False
+    finally:
+        _sweep_download_litter()  # tidy up whatever the backend left behind
 
     if local_subtitle_path and os.path.exists(local_subtitle_path):
         sub_ext = os.path.splitext(local_subtitle_path)[1] or ".srt"

@@ -205,63 +205,87 @@ def handle_anime_sama():
             resume_anime_sama(saved_progress)
             return
 
-    season_idx = select_from_list(
-        [s.title for s in series.seasons], "📺 Select Season:"
-    )
-    selected_season_access = series.seasons[season_idx]
-
-    print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
-    try:
-        season = anime_sama.get_season(selected_season_access.url)
-    except Exception as e:
-        print_error(f"Failed to load season (network/source issue): {type(e).__name__}")
-        print_info("The source may be down or rate-limiting — try again in a moment.")
-        pause()
-        return
-
-    # episodes is dict {lang: [Episode]}
-    langs = list(season.episodes.keys())
-    if not langs:
-        print_warning("No episodes found.")
-        pause()
-        return
-
-    lang_idx = select_from_list(langs, "🌍 Select Language:")
-    selected_lang = langs[lang_idx]
-    episodes = season.episodes[selected_lang]
-
-    ep_idx = select_from_list([e.title for e in episodes], "📺 Select Episode:")
-
-    while True:
-        selected_episode = episodes[ep_idx]
-
-        success = play_episode_flow(
-            provider_name="Anime-Sama",
-            series_title=series.title,
-            season_title=season.title,
-            episode=selected_episode,
-            series_url=series.url,
-            season_url=selected_season_access.url,
-            logo_url=series.img,
-            headers={"Referer": anime_sama.website_origin},
-            anilist_callback=lambda: _update_anilist_progress(
-                series, season, selected_episode
-            ),
-            genres=getattr(series, "genres", None),
+    # Season → Language → Episode, each level with a Back option that steps
+    # UP one level (Back at the season picker leaves the series entirely).
+    back = t("← Back")
+    while True:  # ── Season ──
+        season_idx = select_from_list(
+            [s.title for s in series.seasons] + [back],
+            f"{icon('tv')} {t('Select Season:')}",
         )
+        if season_idx >= len(series.seasons):
+            return  # leave the series → back to source menu
 
-        if success:
-            if ep_idx + 1 < len(episodes):
-                next_ep = episodes[ep_idx + 1]
-                choice = select_from_list(
-                    ["Yes", "No"], f"Play next episode: {next_ep.title}?"
+        selected_season_access = series.seasons[season_idx]
+        print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
+        try:
+            season = anime_sama.get_season(selected_season_access.url)
+        except Exception as e:
+            print_error(f"Failed to load season (network/source issue): {type(e).__name__}")
+            print_info("The source may be down or rate-limiting — try again in a moment.")
+            pause()
+            continue  # back to season picker
+
+        langs = list(season.episodes.keys())  # {lang: [Episode]}
+        if not langs:
+            print_warning("No episodes found.")
+            pause()
+            continue
+
+        while True:  # ── Language ──
+            if len(langs) == 1:
+                selected_lang = langs[0]
+            else:
+                lang_idx = select_from_list(
+                    langs + [back], f"{icon('globe')} {t('Select Language:')}"
                 )
-                if choice == 0:
-                    ep_idx += 1
-                    continue
-            break
-        else:
-            return  # Back
+                if lang_idx >= len(langs):
+                    break  # back to season picker
+                selected_lang = langs[lang_idx]
+            episodes = season.episodes[selected_lang]
+
+            ep_idx = 0
+            while True:  # ── Episode ──
+                ep_idx = select_from_list(
+                    [e.title for e in episodes] + [back],
+                    f"{icon('tv')} {t('Select Episode:')}",
+                    default_index=min(ep_idx, len(episodes) - 1),
+                )
+                if ep_idx >= len(episodes):
+                    break  # back to language picker
+
+                # ── Play (with next-episode chaining) ──
+                while True:
+                    selected_episode = episodes[ep_idx]
+                    success = play_episode_flow(
+                        provider_name="Anime-Sama",
+                        series_title=series.title,
+                        season_title=season.title,
+                        episode=selected_episode,
+                        series_url=series.url,
+                        season_url=selected_season_access.url,
+                        logo_url=series.img,
+                        headers={"Referer": anime_sama.website_origin},
+                        anilist_callback=lambda: _update_anilist_progress(
+                            series, season, selected_episode
+                        ),
+                        genres=getattr(series, "genres", None),
+                    )
+                    if not success:
+                        break  # play returned Back → episode picker
+                    if ep_idx + 1 < len(episodes) and select_from_list(
+                        [t("Yes"), t("No")],
+                        f"{t('Play next episode:')} {episodes[ep_idx + 1].title}?",
+                    ) == 0:
+                        ep_idx += 1
+                        continue
+                    break  # done watching → episode picker
+                # loop back to the episode picker
+
+            # Back out of the episode picker :
+            if len(langs) == 1:
+                break  # single language → step back to the season picker
+            # else: re-show the language picker
 
 
 def resume_anime_sama(data):

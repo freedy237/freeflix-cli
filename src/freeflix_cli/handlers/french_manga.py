@@ -117,19 +117,27 @@ def handle_french_manga():
         info_lines=[f"{t('Languages')}: {', '.join(l.upper() for l in langs)}"],
     )
 
-    if len(langs) == 1:
-        selected_lang = langs[0]
-    else:
-        lang_idx = select_from_list(langs, t("🌍 Select Language:"))
-        selected_lang = langs[lang_idx]
+    while True:  # ── Language ──
+        if len(langs) == 1:
+            selected_lang = langs[0]
+        else:
+            lang_idx = select_from_list(
+                langs + [t("← Back")], f"{icon('globe')} {t('Select Language:')}"
+            )
+            if lang_idx >= len(langs):
+                return  # back → source menu
+            selected_lang = langs[lang_idx]
 
-    episodes = data[selected_lang]
-    ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
+        episodes = data[selected_lang]
+        ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
 
-    ep_options = [f"Episode {n}" for n in ep_nums] + [t("← Back")]
-    ep_idx = select_from_list(ep_options, t("📺 Select Episode:"))
-    if ep_idx == len(ep_nums):
-        return
+        ep_options = [f"Episode {n}" for n in ep_nums] + [t("← Back")]
+        ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
+        if ep_idx >= len(ep_nums):
+            if len(langs) == 1:
+                return  # single language → back exits the handler
+            continue  # back to the language picker
+        break
 
     title = data.get("title") or selection.title
 

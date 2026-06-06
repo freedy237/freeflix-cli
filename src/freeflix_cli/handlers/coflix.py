@@ -135,63 +135,64 @@ def handle_coflix():
                     resume_coflix(saved_progress)
                     continue
 
-            season_idx = select_from_list(
-                [s.title for s in content.seasons], "📺 Select Season:"
-            )
-            selected_season_access = content.seasons[season_idx]
-
-            print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
-            try:
-                season = coflix.get_season(selected_season_access.url)
-            except Exception as e:
-                print_error(f"Error loading season: {e}")
-                pause()
-                continue
-
-            if not season.episodes:
-                print_warning("No episodes found.")
-                pause()
-                continue
-
-            ep_idx = select_from_list(
-                [e.title for e in season.episodes], "📺 Select Episode:"
-            )
-
-            while True:
-                selected_episode = season.episodes[ep_idx]
-                headers = {"Referer": "https://lecteurvideo.com/"}
-
-                # Fetch players for the episode
-                try:
-                    ep_details = coflix.get_episode(selected_episode.url)
-                except Exception as e:
-                    print_error(f"Error loading episode: {e}")
-                    pause()
-                    break
-
-                success = play_episode_flow(
-                    provider_name="Coflix",
-                    series_title=content.title,
-                    season_title=selected_season_access.title,
-                    episode=ep_details,
-                    series_url=content.url,
-                    season_url=selected_season_access.url,
-                    logo_url=content.img,
-                    headers=headers,
+            while True:  # ── Season ──
+                season_idx = select_from_list(
+                    [s.title for s in content.seasons] + [t("← Back")],
+                    f"{icon('tv')} {t('Select Season:')}",
                 )
+                if season_idx >= len(content.seasons):
+                    break  # back to the search prompt
 
-                if success:
-                    if ep_idx + 1 < len(season.episodes):
-                        next_ep = season.episodes[ep_idx + 1]
-                        choice = select_from_list(
-                            ["Yes", "No"], f"Play next episode: {next_ep.title}?"
+                selected_season_access = content.seasons[season_idx]
+                print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
+                try:
+                    season = coflix.get_season(selected_season_access.url)
+                except Exception as e:
+                    print_error(f"Error loading season: {e}")
+                    pause()
+                    continue  # back to the season picker
+                if not season.episodes:
+                    print_warning("No episodes found.")
+                    pause()
+                    continue
+
+                while True:  # ── Episode ──
+                    ep_idx = select_from_list(
+                        [e.title for e in season.episodes] + [t("← Back")],
+                        f"{icon('tv')} {t('Select Episode:')}",
+                    )
+                    if ep_idx >= len(season.episodes):
+                        break  # back to the season picker
+
+                    while True:  # ── Play (with next-episode chaining) ──
+                        selected_episode = season.episodes[ep_idx]
+                        headers = {"Referer": "https://lecteurvideo.com/"}
+                        try:
+                            ep_details = coflix.get_episode(selected_episode.url)
+                        except Exception as e:
+                            print_error(f"Error loading episode: {e}")
+                            pause()
+                            break
+                        success = play_episode_flow(
+                            provider_name="Coflix",
+                            series_title=content.title,
+                            season_title=selected_season_access.title,
+                            episode=ep_details,
+                            series_url=content.url,
+                            season_url=selected_season_access.url,
+                            logo_url=content.img,
+                            headers=headers,
                         )
-                        if choice == 0:
+                        if success and ep_idx + 1 < len(season.episodes) and (
+                            select_from_list(
+                                [t("Yes"), t("No")],
+                                f"{t('Play next episode:')} {season.episodes[ep_idx + 1].title}?",
+                            ) == 0
+                        ):
                             ep_idx += 1
                             continue
-                    break
-                else:
-                    break
+                        break
+                    # back to the episode picker
 
 
 def resume_coflix(data):

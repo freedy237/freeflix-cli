@@ -164,9 +164,16 @@ def handle_goldenms():
 
             sorted_seasons = sorted(season_map.keys())
 
-            season_options = [f"Season {s}" for s in sorted_seasons] + ["Manual Input"]
-            s_idx = select_from_list(season_options, "Select Season:")
+            season_options = (
+                [f"Season {s}" for s in sorted_seasons]
+                + ["Manual Input", t("← Back")]
+            )
+            s_idx = select_from_list(
+                season_options, f"{icon('tv')} {t('Select Season:')}"
+            )
 
+            if s_idx == len(sorted_seasons) + 1:
+                return  # Back → source menu
             if s_idx == len(sorted_seasons):
                 season_str = get_user_input("Enter season number", default="1")
                 season = int(season_str) if season_str.isdigit() else 1

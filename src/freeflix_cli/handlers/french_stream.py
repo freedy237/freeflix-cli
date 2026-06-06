@@ -119,50 +119,63 @@ def handle_french_stream():
             pause()
             return
 
-        if len(langs) == 1:
-            lang = langs[0]
-        else:
-            lang = langs[select_from_list(langs, "🌍 Select Language:")]
+        while True:  # ── Language ──
+            if len(langs) == 1:
+                lang = langs[0]
+            else:
+                l_idx = select_from_list(
+                    langs + [t("← Back")], f"{icon('globe')} {t('Select Language:')}"
+                )
+                if l_idx >= len(langs):
+                    return  # back → source menu
+                lang = langs[l_idx]
+            episodes = content.episodes[lang]
 
-        episodes = content.episodes[lang]
+            ep_idx = 0
+            while True:  # ── Episode ──
+                ep_idx = select_from_list(
+                    [e.title for e in episodes] + [t("← Back")],
+                    f"{icon('tv')} {t('Select Episode:')}",
+                    default_index=min(ep_idx, len(episodes) - 1),
+                )
+                if ep_idx >= len(episodes):
+                    break  # back to the language picker
 
-        ep_idx = select_from_list([e.title for e in episodes], "📺 Select Episode:")
-
-        while True:
-            selected_episode = episodes[ep_idx]
-            if not selected_episode.players:
-                print_warning("No players found for this episode.")
-                pause()
-                return
-            supported = [
-                p for p in selected_episode.players if player.is_supported(p.url)
-            ]
-            if not supported:
-                print_warning("No supported players found.")
-                pause()
-                return
-
-            success = play_episode_flow(
-                provider_name="French-Stream",
-                series_title=content.title,
-                season_title=content.title,
-                series_url=content.url,
-                season_url=content.url,
-                headers={"Referer": french_stream.website_origin},
-                episode=selected_episode,
-            )
-
-            if success:
-                if ep_idx + 1 < len(episodes):
-                    if (
+                while True:  # ── Play (with next-episode chaining) ──
+                    selected_episode = episodes[ep_idx]
+                    if not selected_episode.players:
+                        print_warning("No players found for this episode.")
+                        pause()
+                        break
+                    supported = [
+                        p for p in selected_episode.players if player.is_supported(p.url)
+                    ]
+                    if not supported:
+                        print_warning("No supported players found.")
+                        pause()
+                        break
+                    success = play_episode_flow(
+                        provider_name="French-Stream",
+                        series_title=content.title,
+                        season_title=content.title,
+                        series_url=content.url,
+                        season_url=content.url,
+                        headers={"Referer": french_stream.website_origin},
+                        episode=selected_episode,
+                    )
+                    if success and ep_idx + 1 < len(episodes) and (
                         select_from_list(
-                            ["Yes", "No"], f"Play next: {episodes[ep_idx+1].title}?"
-                        )
-                        == 0
+                            [t("Yes"), t("No")],
+                            f"{t('Play next episode:')} {episodes[ep_idx + 1].title}?",
+                        ) == 0
                     ):
                         ep_idx += 1
                         continue
-            break
+                    break
+                # back to the episode picker
+
+            if len(langs) == 1:
+                return  # single language → back exits the handler
 
 
 def resume_french_stream(data):

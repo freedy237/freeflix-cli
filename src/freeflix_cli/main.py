@@ -431,11 +431,17 @@ def main():
     #    quiet startup work (provider registration) runs underneath.
     from . import progress
     with progress.LoadingScreen(version=_v) as _ls:
-        _ls.status("Loading providers…")
+        # A short, smooth 0 -> 100% sequence so the splash feels intentional
+        # instead of flashing past.
+        _ls.status("Starting up…", frac=0.15)
+        time.sleep(0.3)
+        _ls.status("Loading providers…", frac=0.5)
         _register_providers()
-        time.sleep(0.6)            # let the ▰▰▱ animation play
-        _ls.status("Ready", frac=1.0)
         time.sleep(0.35)
+        _ls.status("Preparing the library…", frac=0.8)
+        time.sleep(0.3)
+        _ls.status("Ready", frac=1.0)
+        time.sleep(0.4)
 
     # Check for updates
     if check_update():

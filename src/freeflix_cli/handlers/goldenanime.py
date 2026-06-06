@@ -158,14 +158,16 @@ def handle_goldenanime():
     episode = 1
     if max_episodes:
         ep_options = [f"Episode {i}" for i in range(1, max_episodes + 1)] + [
-            "Manual input"
+            "Manual input", t("← Back")
         ]
-        ep_idx = select_from_list(ep_options, "📺 Select Episode:")
+        ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
         if ep_idx < max_episodes:
             episode = ep_idx + 1
-        else:
+        elif ep_idx == max_episodes:
             ep_input = get_user_input("Episode number")
             episode = int(ep_input) if ep_input and ep_input.isdigit() else 1
+        else:
+            return  # Back
     else:
         ep_input = get_user_input("Episode number (default 1)")
         episode = int(ep_input) if ep_input and ep_input.isdigit() else 1

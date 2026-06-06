@@ -71,6 +71,8 @@ _FR = {
     "Anime / Manga": "Anime / Manga",
     "Movies & Series": "Films & Séries",
     "Other": "Autres",
+    "Select Season:": "Choisis la saison :",
+    "Select Episode:": "Choisis l'épisode :",
     "📺 Select Season:": "📺 Choisis la saison :",
     "🌍 Select Language:": "🌍 Choisis la langue :",
     "📺 Select Episode:": "📺 Choisis l'épisode :",

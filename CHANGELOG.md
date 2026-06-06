@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.1
+
+### 🐛 Downloads
+- **No more fragment clutter**: HLS now uses yt-dlp's native parallel-fragment
+  downloader (`--concurrent-fragments 16`) instead of handing each fragment to
+  aria2c — which was spawning hundreds of `*.part-FragN` / `*.aria2` files in
+  the FreeFlix folder. One `.part` file now, renamed to one `.mp4`.
+- **Stable progress bar**: it tracks the overall download (`frag a/b`), not the
+  tiny per-fragment files, so it starts clean and climbs smoothly to 100%.
+- Leftover fragment/temp clutter is swept before and after every download.
+- aria2c is still used for direct .mp4 (single file, multi-connection).
+
+### 🔙 Back navigation everywhere
+- Every season / language / episode picker now has a **← Back** that steps up
+  one level (episode → language → season → out), so you can back out without
+  finishing the whole flow. Applied to Anime-Sama, Coflix, French-Stream,
+  French-Manga, GoldenMS, GoldenAnime.
+
+### ✨ Launch
+- The startup splash now plays a short, smooth 0 → 100% sequence instead of
+  flashing past.
+
 ## 1.6.0
 
 A big release — everything that landed since 1.5.9.
