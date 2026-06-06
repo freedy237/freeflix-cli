@@ -727,16 +727,24 @@ def _download_stream(
                 "Install with: sudo dnf install yt-dlp"
             )
             return False
-        # Speed AND a clean folder: keep aria2c (16 connections) for the throughput,
-        # but send every fragment + the .part file to a TEMP dir we delete after
-        # (-P temp:), so the Downloads folder only ever sees the final .mp4 — no
-        # more `*.part-FragN` / `*.aria2` clutter.
+        # For HLS we MUST use yt-dlp's NATIVE downloader with parallel fragments,
+        # not aria2c. Two reasons:
+        #   1. real-time progress — native prints "[download] X% (frag a/b)"
+        #      continuously, so the bar climbs live. Handing fragments to aria2c
+        #      makes yt-dlp report only at the very end (bar stuck on "starting").
+        #   2. it's just as fast for HLS — 16 fragments download in parallel,
+        #      which already saturates the link (aria2c's per-connection split
+        #      doesn't help small segments), and it leaves no fragment files.
+        # Fragments + the .part still go to a temp dir we delete, so the
+        # Downloads folder only ever sees the final .mp4.
         frag_tmp = tempfile.mkdtemp(prefix="freeflix_frag_")
+        backend_name = "yt-dlp (16 fragments)"
         cmd = [
             ytdlp,
             "--no-warnings",
             "--newline",
             "--no-overwrites",
+            "--concurrent-fragments", "16",
             "--add-header", f"Referer:{referer}",
             "--add-header", f"User-Agent:{user_agent}",
             "--merge-output-format", "mp4",
@@ -744,15 +752,6 @@ def _download_stream(
             "-P", f"temp:{frag_tmp}",
             "-o", f"{safe_title}.%(ext)s",
         ]
-        if shutil.which("aria2c"):
-            cmd += [
-                "--downloader", "aria2c",
-                "--downloader-args", "aria2c:-x 16 -s 16 -k 1M",
-            ]
-            backend_name = "yt-dlp + aria2c (x16)"
-        else:
-            cmd += ["--concurrent-fragments", "16"]
-            backend_name = "yt-dlp (16 fragments)"
         if format_arg:
             cmd.extend(["-f", format_arg])
         cmd.append(stream_url)

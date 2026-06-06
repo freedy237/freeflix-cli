@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.3
+
+### ⬇️ Real-time download progress (fix)
+- HLS now downloads with yt-dlp's **native parallel-fragment** downloader
+  (`--concurrent-fragments 16`) instead of aria2c. With aria2c, yt-dlp only
+  reported overall progress at the very end, so the bar sat on "starting…" then
+  jumped to 100%. Native reports `(frag a/b)` **continuously**, so the bar now
+  climbs **live** from the moment the download starts.
+- Just as fast for HLS (16 fragments in parallel saturate the link) and still
+  leaves the Downloads folder clean (fragments go to a temp dir, deleted after).
+- aria2c is still used for direct `.mp4` (real-time single-file % + speed).
+
 ## 1.6.2
 
 ### ⬇️ Downloads
