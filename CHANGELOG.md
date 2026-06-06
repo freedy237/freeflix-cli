@@ -1,0 +1,84 @@
+# Changelog
+
+## 1.6.0
+
+A big release — everything that landed since 1.5.9.
+
+### ✨ Browse with posters (preview pane)
+- Live **preview pane** (poster + title + genres / metadata) beside the result
+  list on **every** source, updating as you navigate; type to filter.
+- Covers per source: Anime-Sama, Coflix, French-Stream, French-Manga (TMDB
+  thumbnails), GoldenMS (Cinemeta), GoldenAnime (AniList).
+- Tuned for fluidity: per-URL image cache (no re-download on resize), two
+  thread pools (downloads ×6 / chafa render ×2), on-demand repaint
+  (`auto_refresh` off), debounced re-warm, fixed-height centered panel (no
+  jump), animated spinner, footer key hints, narrow-terminal fallback.
+
+### 🗂️ Grouped source menu
+- Sources are now grouped: **Anime / Manga** first, then **Films & Séries**,
+  under section headers.
+
+### 📊 Progress bars (themed `▰▰▱`)
+- New `progress` module shared across the app.
+- **Launch splash** with an animated loading bar.
+- **Dependency-install** progress (big FreeFlix + bar tracking each tool).
+- **Download bar** that filters yt-dlp / aria2c logs and shows **speed +
+  downloaded/total + ETA** instead.
+
+### 🖥️ Full-screen, resize-safe UI
+- Header banners render inside the Live region; home & source menus use the
+  alternate screen — no more headers/posters stacking or wrapping on resize.
+- Full-screen, resize-safe search inputs.
+
+### 🔌 Sources & extractors (major overhaul)
+- **GoldenMS**: new multi-extractor backend (Hexa, Mapple, Videasy, Vidlink,
+  Xpass) with subtitles and per-source quality labels.
+- **GoldenAnime**: new extractors (AllAnime with AES decryption, Animetsu,
+  AniZone, Sudatchi) with subtitles.
+- **French-Stream**: rebuilt scraper (movies + series, per-language episodes,
+  robust posters).
+- **Coflix**: rides a `cf_clearance` cookie, clean "protected by Cloudflare"
+  message with a token tip, and always-present `og:image` covers.
+- **player.py**: thread-local `curl_cffi` sessions so parallel extraction is
+  safe; thread-local player config; **vidmoly** fixed (live domain is `.net`;
+  parked `.to/.biz/.me` remapped).
+
+### ▶️ Playback & downloads
+- **Stream quality analysis** before playing: per-quality resolution + bitrate
+  via ffprobe; labels like `1080p ~5.0 · 720p ~2.5 Mbps`. Bounded time budget
+  so a slow host never freezes the menu.
+- Faster downloads: **yt-dlp + aria2c** (16 connections) for HLS, 16 parallel
+  fragments as fallback.
+- **Subtitle download fixed**: gzip + zip decompression.
+- **Subtitle search on all sources** (Cinemeta / IMDb lookup), toggleable.
+- Data-used meter after playback.
+
+### ☁️ Cloudflare handling
+- New `cloudflare` module: `cf_get` cascade with a `cf_clearance` cookie and
+  **FlareSolverr** auto-solve.
+- **3 retries + system-DNS (no-DoH) fallback** for "connection reset" / DNS
+  hiccups.
+- Settings: paste a `cf_clearance` token; configurable FlareSolverr URL.
+
+### ⚙️ Setup & platform
+- **Resumable dependency gate**: caches an "all good" flag; until then each
+  launch re-checks and installs only what's missing.
+- **`install.ps1` rewritten**: pure ASCII (fixes the Windows PowerShell 5.1
+  parse error), idempotent, installs **Windows Terminal + CaskaydiaCove Nerd
+  Font**, writes a completion marker.
+- Nerd Font option added to `install.sh` / `install-mac.sh`.
+- **FlareSolverr auto-install** (Podman-first, `systemd --user` persistence).
+- Settings: analyze-players toggle, subtitle-search toggle, icon style
+  (emoji / Nerd Font), themed About panel.
+
+### 🐛 Fixes & robustness
+- **Removed Wiflix** entirely (handler, scraper, objects).
+- Graceful handling of network failures in source flows — search / load no
+  longer crash the app.
+- Central emoji → Nerd Font conversion (`iconify`); no hardcoded emoji.
+- Resize no longer stacks headers or pushes posters out of their frame.
+
+### 📦 Install / upgrade
+```
+pip install -U freeflix-cli      # or: pipx upgrade freeflix-cli / uv tool upgrade freeflix-cli
+```
