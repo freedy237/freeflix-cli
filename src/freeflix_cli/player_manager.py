@@ -434,6 +434,7 @@ PLAYERS: Dict[str, Dict[str, str]] = {
 }
 
 DOWNLOAD_DIR = os.path.expanduser("~/Downloads/FreeFlix")
+TEMP_DIR = os.path.join(DOWNLOAD_DIR, ".temp")
 
 
 def get_player_display(code: str, default: str = "manual") -> str:
@@ -585,6 +586,17 @@ def handle_player_error(context: str = "player") -> int:
     )
 
 
+def _stable_temp_dir(safe_title: str) -> str:
+    """
+    Return a *deterministic* temp dir for download fragments, enabling
+    yt-dlp resume on re-launch. The directory is **hidden** (``.temp/``)
+    so it never shows up in My Downloads.
+    """
+    d = os.path.join(TEMP_DIR, safe_title)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _sanitize_filename(name: str, max_len: int = 200) -> str:
     """Make a string safe to use as a filename across filesystems."""
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
@@ -592,6 +604,16 @@ def _sanitize_filename(name: str, max_len: int = 200) -> str:
     if not cleaned:
         cleaned = "video"
     return cleaned[:max_len]
+
+
+def clean_season_title(series_title: str, season_title: str) -> str:
+    """
+    Remove *series_title* from the start of *season_title* when the season
+    title already embeds the series name (e.g. Coflix), avoiding duplicate
+    names like  ``"FROM - FROM - Saison 4"`` → ``"FROM - Saison 4"``.
+    """
+    cleaned = season_title.replace(series_title, "", 1).strip(" -")
+    return cleaned if cleaned else season_title
 
 
 def _mpv_position_args(title: str):
@@ -735,9 +757,10 @@ def _download_stream(
         #   2. it's just as fast for HLS — 16 fragments download in parallel,
         #      which already saturates the link (aria2c's per-connection split
         #      doesn't help small segments), and it leaves no fragment files.
-        # Fragments + the .part still go to a temp dir we delete, so the
-        # Downloads folder only ever sees the final .mp4.
-        frag_tmp = tempfile.mkdtemp(prefix="freeflix_frag_")
+        # Fragments + the .part go to a STABLE hidden temp dir that
+        # survives interruptions — yt-dlp finds its .ytdl state on
+        # re-launch and resumes where it left off.
+        frag_tmp = _stable_temp_dir(safe_title)
         backend_name = "yt-dlp (16 fragments)"
         cmd = [
             ytdlp,
@@ -805,22 +828,26 @@ def _download_stream(
 
     # Swallow yt-dlp / aria2c's noisy logs and show a clean themed bar with
     # speed + downloaded/total + ETA instead.
+    dl_ok = False
     try:
         from . import progress as _progress
         rc = _progress.run_download_with_bar(cmd, safe_title)
         if rc != 0:
             print_error(f"Download failed (exit code {rc}).")
-            return False
+        else:
+            dl_ok = True
     except KeyboardInterrupt:
         print_info("\nDownload interrupted by user.")
-        return False
     except Exception as e:
         print_error(f"Download error: {e}")
-        return False
     finally:
         _sweep_download_litter()  # tidy up whatever the backend left behind
-        if frag_tmp:
-            shutil.rmtree(frag_tmp, ignore_errors=True)
+        if dl_ok and frag_tmp:
+            shutil.rmtree(frag_tmp, ignore_errors=True)  # success → cleanup
+        # On failure/interrupt: keep frag_tmp so yt-dlp can resume next time
+
+    if not dl_ok:
+        return False
 
     if local_subtitle_path and os.path.exists(local_subtitle_path):
         sub_ext = os.path.splitext(local_subtitle_path)[1] or ".srt"
