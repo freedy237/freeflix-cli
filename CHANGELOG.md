@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.5
+
+### 🐛 Duplicate filename in downloads (fix)
+- Season titles that already embed the series name (e.g. Coflix' `"FROM - Saison 4"`
+  inside series `"FROM"`) no longer produce filenames like
+  `"FROM - FROM - Saison 4 - Ep1.mp4"`. A new `clean_season_title()` helper strips
+  the duplicate prefix, matching the existing resume-display logic.
+
+### ⬇️ Download resume after interruption (fix)
+- HLS fragments now go to a **stable `~/.temp/<title>/`** directory inside
+  `Downloads/FreeFlix/` instead of a random temporary directory. The temp dir is
+  **kept** on Ctrl-C / error, so yt-dlp finds its `.ytdl` resume state on the
+  next launch and continues where it left off.
+
+### ✅ Tests
+- 12 new tests covering both fixes plus edge cases.
+
 ## 1.6.4
 
 ### ⚡ Instant startup (fix)
