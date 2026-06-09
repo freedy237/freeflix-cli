@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.6
+
+### 🐍 Python 3.9 compatibility (fix)
+- Added `from __future__ import annotations` to `scraping/player.py` to make
+  the `str | None` type annotation (PEP 604) work on Python 3.9, which doesn't
+  natively support the syntax. Fixes crash on import for Python 3.9 users.
+
 ## 1.6.5
 
 ### 🐛 Duplicate filename in downloads (fix)

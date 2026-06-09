@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from curl_cffi import requests
 from .deobfuscate import deobfuscate
 from bs4 import BeautifulSoup
