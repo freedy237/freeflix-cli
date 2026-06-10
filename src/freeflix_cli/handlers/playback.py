@@ -6,7 +6,7 @@ from ..cli_utils import (
     print_success,
     spinner,
 )
-from ..player_manager import play_video, analyze_stream_quality, format_quality_label, clean_season_title
+from ..player_manager import play_video, analyze_stream_quality, format_quality_label, clean_season_title, clean_episode_title
 from ..tracker import tracker
 from ..scraping import player
 from ..i18n import t
@@ -174,9 +174,10 @@ def play_episode_flow(
 
         selected_player = supported_players[player_idx]
 
-        # Construct title for player window (de-duplicate season title)
+        # Construct title for player window (de-duplicate season + episode)
         clean_season = clean_season_title(series_title, season_title)
-        window_title = f"{series_title} - {clean_season} - {episode.title}"
+        clean_episode = clean_episode_title(series_title, season_title, episode.title)
+        window_title = f"{series_title} - {clean_season} - {clean_episode}"
 
         success = play_video(
             selected_player.url,
@@ -244,7 +245,8 @@ def _download_one_episode(
 
     print_info(f"⬇ {label} — starting download")
     clean_season = clean_season_title(series_title, season_title)
-    window_title = f"{series_title} - {clean_season} - {episode.title}"
+    clean_episode = clean_episode_title(series_title, season_title, episode.title)
+    window_title = f"{series_title} - {clean_season} - {clean_episode}"
 
     for sp in supported_players:
         ok = play_video(

@@ -616,6 +616,23 @@ def clean_season_title(series_title: str, season_title: str) -> str:
     return cleaned if cleaned else season_title
 
 
+def clean_episode_title(series_title: str, season_title: str, episode_title: str) -> str:
+    """
+    Remove *series_title* and *season_title* from the start of *episode_title*
+    when the episode title already embeds the full path (e.g. Coflix returns
+    ``"FROM - Saison 4 - Episode 7"`` instead of just ``"Episode 7"``).
+
+    Strips series first, then the (already-cleaned) season part.
+    """
+    ep = episode_title
+    if ep.lower().startswith(series_title.lower()):
+        ep = ep[len(series_title):].strip(" -")
+    clean_season = clean_season_title(series_title, season_title)
+    if ep.lower().startswith(clean_season.lower()):
+        ep = ep[len(clean_season):].strip(" -")
+    return ep if ep else episode_title
+
+
 def _mpv_position_args(title: str):
     """
     Return extra CLI args for mpv to enable position tracking via the

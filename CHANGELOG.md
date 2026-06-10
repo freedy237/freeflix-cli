@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.7
+
+### 🐛 Episode title duplicate in downloads (fix)
+- Some providers (notably Coflix) return episode titles that already embed the
+  full series + season path (e.g. `"FROM - Saison 4 - Episode 7"` instead of
+  just `"Episode 7"`), producing filenames like
+  `"FROM - Saison 4 - FROM - Saison 4 - Episode 7.mp4`.
+- New `clean_episode_title()` helper strips the series and season prefix from
+  the episode title before constructing the download filename.
+- 5 new tests covering Coflix full-path, partial prefixes, and edge cases.
+
 ## 1.6.6
 
 ### 🐍 Python 3.9 compatibility (fix)

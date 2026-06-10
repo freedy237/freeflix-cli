@@ -9,6 +9,7 @@ import pytest
 
 from freeflix_cli.player_manager import (
     clean_season_title,
+    clean_episode_title,
     _sanitize_filename,
     _stable_temp_dir,
     DOWNLOAD_DIR,
@@ -58,6 +59,30 @@ class TestCleanSeasonTitle:
             clean_season_title("Some Series", "Saison 1")
             == "Saison 1"
         )
+
+
+class TestCleanEpisodeTitle:
+    """Episode titles that embed series + season (e.g. Coflix)."""
+
+    def test_coflix_full_path(self):
+        """Coflix episode title = 'FROM - Saison 4 - Episode 7', series='FROM', season='FROM - Saison 4'"""
+        assert clean_episode_title("FROM", "FROM - Saison 4", "FROM - Saison 4 - Episode 7") == "Episode 7"
+
+    def test_no_duplicate(self):
+        """Episode title that doesn't contain series/season is kept."""
+        assert clean_episode_title("FROM", "Saison 4", "Episode 7") == "Episode 7"
+
+    def test_only_series_prefix(self):
+        """Episode title only has series prefix, not season."""
+        assert clean_episode_title("FROM", "Saison 4", "FROM - Episode 7") == "Episode 7"
+
+    def test_only_season_prefix(self):
+        """Episode title only has season prefix, not series."""
+        assert clean_episode_title("FROM", "FROM - Saison 4", "Saison 4 - Episode 7") == "Episode 7"
+
+    def test_multi_word_series(self):
+        """Multi-word series like 'Breaking Bad'."""
+        assert clean_episode_title("Breaking Bad", "Breaking Bad - Season 1", "Breaking Bad - Season 1 - Episode 1") == "Episode 1"
 
 
 class TestStableTempDir:
