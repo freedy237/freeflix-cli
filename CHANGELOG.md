@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.8
+
+### 🎯 Quality selection for downloads (feat)
+- When downloading, the HLS quality probe now runs **before** the player
+  selection screen, so you can pick the resolution (1080p / 720p / 480p…)
+  **before** choosing "download".
+- The selected height is passed through to yt-dlp as a `bv*[height<=N]`
+  format filter, matching what you'd see in playback.
+
 ## 1.6.7
 
 ### 🐛 Episode title duplicate in downloads (fix)

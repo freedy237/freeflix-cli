@@ -729,6 +729,7 @@ def _download_stream(
     title: str,
     is_mp4: bool = False,
     local_subtitle_path: str = None,
+    quality: int = None,
 ) -> bool:
     """
     Download a resolved stream to ~/Downloads/FreeFlix/.
@@ -751,11 +752,12 @@ def _download_stream(
     cmd = None
     frag_tmp = None  # temp dir for HLS fragments (kept out of Downloads)
 
-    quality = tracker.get_download_quality()
+    # Use user-selected quality from probe, or fall back to tracker default
+    quality_str = str(quality) if quality else tracker.get_download_quality()
     format_arg = None
-    if quality in ("1080", "720", "480"):
+    if quality_str in ("1080", "720", "480"):
         format_arg = (
-            f"bv*[height<={quality}]+ba/b[height<={quality}]/bv*+ba/b"
+            f"bv*[height<={quality_str}]+ba/b[height<={quality_str}]/bv*+ba/b"
         )
 
     if is_hls:
@@ -1013,6 +1015,7 @@ def play_video(
     # both muxed and split-audio streams.
     # Also doubles as a Cloudflare-block probe. Skipped for batch.
     selected_hls_bitrate = None
+    selected_quality = None  # height for yt-dlp download (e.g. 1080)
     if not force_player:
         try:
             probe_headers = _proxy_request_headers(
@@ -1034,6 +1037,7 @@ def play_video(
                 chosen = _prompt_hls_quality(_variants)
                 if chosen and chosen.get("bandwidth"):
                     selected_hls_bitrate = chosen["bandwidth"]
+                    selected_quality = chosen.get("height")
                     print_info(f"Quality: [cyan]{chosen['label']}[/cyan]")
         except Exception:
             pass
@@ -1123,6 +1127,7 @@ def play_video(
                 title=title,
                 is_mp4=is_mp4,
                 local_subtitle_path=local_subtitle_path,
+                quality=selected_quality,
             )
             if success:
                 return True
