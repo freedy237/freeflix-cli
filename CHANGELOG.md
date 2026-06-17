@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.9
+
+### 🔍 French-Stream search not found (fix)
+- `french-stream.one` now uses a JS challenge (fsschal cookie) on the search
+  endpoint. The `search()` function was using `scraper.post()` directly,
+  bypassing the Cloudflare protection cascade.
+- Added `_post()` helper that rides `cf_clearance` cookies, detects both
+  standard Cloudflare and custom JS challenge pages, and falls back to
+  FlareSolverr when blocked.
+
 ## 1.6.8
 
 ### 🎯 Quality selection for downloads (feat)

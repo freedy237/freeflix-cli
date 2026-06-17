@@ -27,6 +27,35 @@ def _get(url, **kw):
     """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
     return cloudflare.cf_get(scraper, url, **kw)
 
+
+def _post(url, data=None, **kw):
+    """Cloudflare-aware POST (cf_clearance + FlareSolverr cascade)."""
+    base_headers = kw.pop("headers", {})
+
+    def _headers():
+        cf = cloudflare.get_cf_headers(url)
+        return {**cf, **base_headers} if cf else dict(base_headers)
+
+    def _fetch():
+        h = _headers()
+        return scraper.post(url, data=data, headers=h, **kw) if h else scraper.post(url, data=data, **kw)
+
+    resp = _fetch()
+
+    try:
+        blocked = cloudflare.is_blocked(resp)
+        if not blocked:
+            body = (resp.text or "").lower()
+            if "verification" in body and "anti-robot" in body:
+                blocked = True
+    except Exception:
+        blocked = False
+
+    if blocked and cloudflare.solve_and_store(url):
+        resp = _fetch()
+
+    return resp
+
 def _abs_img(src: str) -> str:
     """Resolve an <img> src : leave absolute URLs (e.g. TMDB) untouched,
     prefix the site origin only for relative paths."""
@@ -49,7 +78,7 @@ def search(query: str) -> list[SearchResult]:
         "Referer": f"{website_origin}/",
     }
 
-    response = scraper.post(
+    response = _post(
         website_origin + page_search,
         data=data,
         headers=headers,
