@@ -29,7 +29,9 @@ def _get(url, **kw):
 
 
 def _post(url, data=None, **kw):
-    """Cloudflare-aware POST (cf_clearance + FlareSolverr cascade)."""
+    """Cloudflare-aware POST — handles both standard Cloudflare challenges
+    (cf_clearance + FlareSolverr cascade) and the custom JS challenge used
+    by french-stream.one which sets a ``fsschal=1`` cookie."""
     base_headers = kw.pop("headers", {})
 
     def _headers():
@@ -42,16 +44,17 @@ def _post(url, data=None, **kw):
 
     resp = _fetch()
 
+    # Detect challenge page (status 200 JS challenge with fsschal)
+    need_retry = False
     try:
-        blocked = cloudflare.is_blocked(resp)
-        if not blocked:
-            body = (resp.text or "").lower()
-            if "verification" in body and "anti-robot" in body:
-                blocked = True
+        body = (resp.text or "").lower()
+        if not cloudflare.is_blocked(resp) and "verification" in body and "anti-robot" in body:
+            scraper.cookies.set("fsschal", "1", domain="french-stream.one", path="/")
+            need_retry = True
     except Exception:
-        blocked = False
+        pass
 
-    if blocked and cloudflare.solve_and_store(url):
+    if need_retry:
         resp = _fetch()
 
     return resp
