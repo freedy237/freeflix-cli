@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.10
+
+### 🎯 PyPI publish fix
+- Re-publish v1.6.9 fix with the correct code. The initial v1.6.9 tag
+  was pushed before the FlareSolverr-based approach was replaced with
+  the simpler `fsschal=1` cookie fix.
+
+### 🎨 Nerd Font auto-detection + install (feat)
+- New `detect_nerd_font()` checks whether a Nerd Font (CaskaydiaCove)
+  is installed: `fc-list` on Linux/macOS, registry on Windows.
+- New `install_nerd_font()` downloads and installs CaskaydiaCove Nerd
+  Font automatically per OS (zip + `~/.local/share/fonts` on Linux,
+  `brew cask` on macOS, zip + `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
+  on Windows).
+- In Settings → Icon Style, when "nerd" is selected, FreeFlix now
+  detects if a Nerd Font is present and offers to install it if not.
+
 ## 1.6.9
 
 ### 🔍 French-Stream search not found (fix)

@@ -746,15 +746,23 @@ def main():
                     print_success(f"{t('Show Posters')}: {p_vals[c]}")
                     pause()
                 elif s_choice == 11:
-                    print_info(t("Nerd Font needs a Nerd Font selected in your terminal."))
                     i_opts = [
                         "emoji (works everywhere)",
                         "nerd (crisp icons, needs a Nerd Font)",
                     ]
                     i_vals = ["emoji", "nerd"]
                     c = select_from_list(i_opts, t("Icon Style:"))
-                    tracker.set_icon_style(i_vals[c])
-                    print_success(f"{t('Icon Style')}: {i_vals[c]}")
+                    picked = i_vals[c]
+                    if picked == "nerd":
+                        if not setup_assistant.detect_nerd_font():
+                            print_info("CaskaydiaCove Nerd Font not found on this system.")
+                            ans = input("Install it now? [Y/n] ").strip().lower()
+                            if ans not in ("n", "no"):
+                                setup_assistant.install_nerd_font()
+                        else:
+                            print_success("CaskaydiaCove Nerd Font detected.")
+                    tracker.set_icon_style(picked)
+                    print_success(f"{t('Icon Style')}: {picked}")
                     print_info(t("Restart FreeFlix to apply icons everywhere."))
                     pause()
                 elif s_choice == 12:

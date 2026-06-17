@@ -438,6 +438,142 @@ def install_chafa() -> bool:
     return False
 
 
+NERD_FONT_URL = (
+    "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip"
+)
+NERD_FONT_NAME = "CaskaydiaCove Nerd Font"
+NERD_FONT_DIR = "CaskaydiaCoveNF"  # inside the zip
+
+
+def detect_nerd_font() -> bool:
+    """
+    Check whether a Nerd Font (CaskaydiaCove) is already installed.
+    Returns True/False.
+    """
+    os_name = detect_os()
+    if os_name in ("linux", "macos"):
+        try:
+            out = subprocess.run(
+                ["fc-list"], capture_output=True, text=True, timeout=10
+            ).stdout
+            import re
+            return bool(re.search(r"(?i)CaskaydiaCove|Nerd Font", out))
+        except Exception:
+            return False
+    if os_name == "windows":
+        user_fonts = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "Microsoft", "Windows", "Fonts",
+        )
+        if not user_fonts or not os.path.isdir(user_fonts):
+            return False
+        try:
+            for f in os.listdir(user_fonts):
+                if "CaskaydiaCove" in f and f.lower().endswith(".ttf"):
+                    return True
+        except Exception:
+            pass
+        sys_fonts = os.path.join(os.environ.get("WINDIR", ""), "Fonts")
+        if sys_fonts and os.path.isdir(sys_fonts):
+            try:
+                for f in os.listdir(sys_fonts):
+                    if "CaskaydiaCove" in f and f.lower().endswith(".ttf"):
+                        return True
+            except Exception:
+                pass
+        return False
+    return False
+
+
+def install_nerd_font() -> bool:
+    """
+    Download and install CaskaydiaCove Nerd Font if missing.
+    Interactive (Y/n). Returns True if font ends up available.
+    """
+    if detect_nerd_font():
+        print_success(f"{NERD_FONT_NAME} already installed")
+        return True
+
+    os_name = detect_os()
+
+    if os_name == "linux":
+        dest = os.path.join(os.path.expanduser("~"), ".local", "share", "fonts")
+        os.makedirs(dest, exist_ok=True)
+        tmp = "/tmp/freeflix-nerdfont"
+        zip_path = f"{tmp}.zip"
+        print_info("Downloading CaskaydiaCove Nerd Font…")
+        try:
+            urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
+            import zipfile
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(tmp)
+            for f in os.listdir(tmp):
+                if f.endswith(".ttf"):
+                    shutil.copy2(os.path.join(tmp, f), os.path.join(dest, f))
+            subprocess.run(["fc-cache", "-f", dest], capture_output=True, timeout=30)
+            shutil.rmtree(tmp, ignore_errors=True)
+            os.unlink(zip_path)
+        except Exception as e:
+            print_warning(f"Nerd Font install failed: {e}")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return False
+
+    elif os_name == "macos":
+        if not shutil.which("brew"):
+            print_warning("Homebrew not found — install it first: https://brew.sh")
+            return False
+        cmd = ["brew", "install", "--quiet", "--cask", "font-caskaydia-cove-nerd-font"]
+        print_info("Installing CaskaydiaCove Nerd Font via Homebrew…")
+        try:
+            subprocess.run(cmd, check=False, timeout=120)
+        except Exception as e:
+            print_warning(f"Nerd Font install via brew failed: {e}")
+            return False
+
+    elif os_name == "windows":
+        user_fonts = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "Microsoft", "Windows", "Fonts",
+        )
+        if not user_fonts:
+            print_warning("Could not find Windows fonts directory")
+            return False
+        os.makedirs(user_fonts, exist_ok=True)
+        zip_path = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "CascadiaCodeNF.zip")
+        extract_dir = zip_path.replace(".zip", "")
+        print_info("Downloading CaskaydiaCove Nerd Font…")
+        try:
+            urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
+            import zipfile
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(extract_dir)
+            import glob
+            for ttf in glob.glob(os.path.join(extract_dir, "*.ttf")):
+                shutil.copy2(ttf, os.path.join(user_fonts, os.path.basename(ttf)))
+            import winreg
+            reg_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_SET_VALUE) as key:
+                for ttf in glob.glob(os.path.join(user_fonts, "CaskaydiaCove*.ttf")):
+                    name = os.path.basename(ttf).replace(".ttf", "") + " (TrueType)"
+                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, ttf)
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            os.unlink(zip_path)
+        except Exception as e:
+            print_warning(f"Nerd Font install failed: {e}")
+            return False
+
+    else:
+        print_warning(f"Unsupported OS ({os_name}) — install Nerd Font manually")
+        return False
+
+    if detect_nerd_font():
+        print_success(f"  ✓ {NERD_FONT_NAME} installed")
+        print_info(f"Select '{NERD_FONT_NAME}' in your terminal settings")
+        return True
+    print_warning(f"  ! {NERD_FONT_NAME} still not found — install manually")
+    return False
+
+
 def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
     """
     Linux only : if a discrete GPU is detected (Nvidia OR AMD), drop
