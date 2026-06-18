@@ -8,7 +8,6 @@ from .objects import (
 )
 
 from curl_cffi import requests as cffi_requests
-from ..proxy import DNS_OPTIONS
 
 from .config import portals
 
@@ -16,7 +15,7 @@ website_origin = portals["french-stream"]
 if not website_origin.startswith("http"):
     website_origin = "https://" + website_origin
 
-scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
+scraper = cffi_requests.Session(impersonate="chrome")
 
 
 

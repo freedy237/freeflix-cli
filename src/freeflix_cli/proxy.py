@@ -46,9 +46,10 @@ def get_bytes_served() -> int:
 
 app = Flask(__name__)
 
-# Requested Google DNS Options
+# Requested Google DNS Options — system DNS by default (no DoH so it works
+# even when 1.1.1.1 is unreachable). The internal video proxy adds DoH only for
+# segment fetching (see _build_session).
 DNS_OPTIONS = {
-    CurlOpt.DOH_URL: "https://1.1.1.1/dns-query",
     CurlOpt.DOH_SSL_VERIFYPEER: 0,
     CurlOpt.DOH_SSL_VERIFYHOST: 0,
 }
@@ -87,6 +88,8 @@ _thread_local = threading.local()
 def _build_session():
     session = requests.Session(impersonate="chrome")
     session.curl_options.update(DNS_OPTIONS)
+    # Use DoH for the video proxy (bypasses ISP DNS blocks on CDNs).
+    session.curl_options[CurlOpt.DOH_URL] = "https://1.1.1.1/dns-query"
     # Loosen libcurl's low-speed cutoff so congested CDNs aren't dropped
     # after 15 s of slow traffic (see the 'Operation too slow' issue).
     session.curl_options.update({

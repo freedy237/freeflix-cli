@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.11
+
+### 🌐 French-Stream DNS timeout (fix)
+- `french-stream.one` scraper used `DNS_OPTIONS` (DoH via 1.1.1.1) which is
+  unreachable on some networks, causing 15s DNS resolution timeouts.
+- Removed `curl_options=DNS_OPTIONS` from the french-stream session — now
+  uses system DNS instead.
+
 ## 1.6.10
 
 ### 🎯 PyPI publish fix
