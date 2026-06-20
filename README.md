@@ -8,6 +8,8 @@
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
 
+> 🆕 **v1.7.0** — new `freeflix --doctor` diagnostic tool, cross-platform one-liner installer (`scripts/install.py`), ArkAnime source removed (CDN dead).
+
 
 - A complete **download backend** (yt-dlp for HLS, aria2c for direct mp4, with quality selection 480p/720p/1080p) ;
 - **Batch "download whole season"** ;
@@ -44,23 +46,31 @@
 | 🇫🇷 | **French UI** : the whole CLI is in French when language is set to FR |
 | 🛡 | **Anti-crash mpv config** : ytdl-hook off, gpu renderer, no infinite reconnect |
 | 🎨 | **Anime4K** pre-bundled with runtime toggle CTRL+1 / CTRL+0 |
+| 🩺 | **`freeflix --doctor`** system diagnostic (check deps, config, network) |
 
 ---
 
 ## 📦 Installation
 
-### 🚀 Quickest — one command from PyPI
+### 🚀 One-liner (anything with Python ≥ 3.9)
 
-If you already have the system deps (`mpv`, `yt-dlp`, `ffmpeg`, `aria2`, `libnotify`) :
+No git, no package manager, no sudo needed. Just Python.
 
 ```bash
-# Recommended — uv installs `freeflix` in an isolated venv and adds it to PATH
-uv tool install freeflix-cli
+curl -fsSL https://freeflix.app/install.py | python3
+```
 
-# Or with pipx
+This installs `uv` if missing, then `freeflix-cli` — on Linux, macOS, and Windows.
+
+### From PyPI (if you have the system deps)
+
+If `mpv`, `yt-dlp`, `ffmpeg`, `aria2` and `libnotify` are already on your machine :
+
+```bash
+uv tool install freeflix-cli     # recommended
+# or
 pipx install freeflix-cli
-
-# Or plain pip (user install)
+# or
 pip install --user freeflix-cli
 ```
 
@@ -70,49 +80,21 @@ Then :
 freeflix
 ```
 
-If you need the system deps installed for you (mpv, yt-dlp, ffmpeg, aria2, libnotify) and the Anime4K shaders auto-fetched, use the OS-specific installer script below — it's the same install + extras.
+### OS-specific installer scripts (system deps + shakers)
 
-### Linux (Fedora, Debian/Ubuntu, Arch, openSUSE, Alpine)
+Clone + run the script for your OS — it installs everything (players, codecs, Anime4K shaders, Python + FreeFlix) :
 
-```bash
-git clone https://github.com/freedy237/freeflix-cli.git
-cd freeflix-cli
-chmod +x scripts/install.sh
-./scripts/install.sh
-```
-
-The script detects your distro and installs : `mpv`, `yt-dlp`, `ffmpeg`, `aria2`, `libnotify`, Python deps, then the `freeflix` command via `uv` (preferred) or `pipx`.
-
-### macOS
-
-```bash
-git clone https://github.com/freedy237/freeflix-cli.git
-cd freeflix-cli
-chmod +x scripts/install-mac.sh
-./scripts/install-mac.sh
-```
-
-
-### Windows (10/11)
-
-Open PowerShell as a regular user :
-
-```powershell
-git clone https://github.com/freedy237/freeflix-cli.git
-cd freeflix-cli
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
-
-Uses `winget` for system deps. `mpv.net` is installed (the maintained Windows port of mpv).
+| Platform | Command |
+|----------|---------|
+| **Linux** | `git clone https://github.com/freedy237/freeflix-cli.git && cd freeflix-cli && chmod +x scripts/install.sh && ./scripts/install.sh` |
+| **macOS** | `git clone https://github.com/freedy237/freeflix-cli.git && cd freeflix-cli && chmod +x scripts/install-mac.sh && ./scripts/install-mac.sh` |
+| **Windows** | `git clone https://github.com/freedy237/freeflix-cli.git && cd freeflix-cli && powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1` |
 
 ### From source (developer mode)
 
 ```bash
 git clone https://github.com/freedy237/freeflix-cli.git
 cd freeflix-cli
-# Editable install — changes to source are picked up immediately
-pip install --user -e .
-# OR
 uv pip install -e .
 ```
 
@@ -184,6 +166,7 @@ freeflix-cli/
 │   ├── input.conf              # CTRL+1 / CTRL+0 Anime4K toggles
 │   └── freeflix_position.lua   # position-resume mpv script
 ├── scripts/
+│   ├── install.py              # cross-platform one-liner installer
 │   ├── install.sh              # Linux multi-distro
 │   ├── install-mac.sh          # macOS (Homebrew)
 │   └── install.ps1             # Windows (winget)
