@@ -130,7 +130,8 @@ def get_players(players_url: str) -> list[Player]:
     players = []
     for li in soup.find_all("li"):
         if "onclick" in li.attrs and "showVideo" in li.attrs["onclick"]:
-            player_name = li.find("span").text.strip()
+            span = li.find("span")
+            player_name = span.text.strip() if span else "Unknown"
             player_name = player_name.split(" /")[0]
             link = base64.b64decode(li.attrs["onclick"].split("'")[1].split("'")[0])
             players.append(Player(player_name, str(link, "utf-8")))
@@ -156,12 +157,16 @@ def get_episode(url: str) -> Episode:
 
     title: str = ""
     episodes_div = soup.find("div", {"class": "episodes"})
-    for episode in episodes_div.find_all("div", class_="episode"):
-        if episode.find("a").attrs["href"] == url:
-            title = episode.find("span", class_="fwb link-co").text.strip()
-            break
+    if episodes_div:
+        for episode in episodes_div.find_all("div", class_="episode"):
+            link = episode.find("a")
+            if link and link.attrs.get("href") == url:
+                span = episode.find("span", class_="fwb link-co")
+                title = span.text.strip() if span else ""
+                break
 
-    players_url = soup.find("iframe").attrs["src"]
+    iframe = soup.find("iframe")
+    players_url = iframe.attrs["src"] if iframe else ""
 
     players = get_players(players_url)
 
@@ -222,7 +227,8 @@ def get_movie(url: str) -> CoflixMovie:
 
     soup = BeautifulSoup(response.text, "html5lib")
 
-    title: str = soup.find("h1").text.strip()
+    h1 = soup.find("h1")
+    title: str = h1.text.strip() if h1 else url.rstrip("/").split("/")[-1].replace("-", " ").title()
     img: str = _extract_cover(soup, response.text)
 
     genres: list[str] = []
@@ -235,8 +241,9 @@ def get_movie(url: str) -> CoflixMovie:
     year_elem = soup.find("span", {"class": "fwb fz20 e-fz25 dib"})
     year = year_elem.text.strip() if year_elem else "Unknown"
 
-    players_url = soup.find("iframe").attrs["src"]
-    players = get_players(players_url)
+    iframe = soup.find("iframe")
+    players_url = iframe.attrs["src"] if iframe else ""
+    players = get_players(players_url) if players_url else []
 
     return CoflixMovie(title, url, img, genres, year, players)
 
@@ -247,7 +254,8 @@ def get_series(url: str) -> CoflixSeries:
 
     soup = BeautifulSoup(response.text, "html5lib")
 
-    title: str = soup.find("h1").text.strip()
+    h1 = soup.find("h1")
+    title: str = h1.text.strip() if h1 else url.rstrip("/").split("/")[-1].replace("-", " ").title()
     img: str = _extract_cover(soup, response.text)
 
     genres: list[str] = []

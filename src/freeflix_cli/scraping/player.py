@@ -260,9 +260,10 @@ def get_hls_link_sendvid(url: str) -> str:
 
     soup = BeautifulSoup(response.text, "html.parser")
 
-    link: str = soup.find("meta", {"property": "og:video"}).attrs["content"]
-
-    return link
+    og = soup.find("meta", {"property": "og:video"})
+    if og and og.attrs.get("content"):
+        return og.attrs["content"]
+    return None
 
 
 def get_hls_link_sibnet(url: str) -> str:
@@ -278,10 +279,11 @@ def get_hls_link_sibnet(url: str) -> str:
     response = _get(url, impersonate="chrome")
     response.raise_for_status()
 
-    relative_path = response.text.split('player.src([{src: "')[1].split('"')[0]
-    link = "https://video.sibnet.ru" + relative_path
-
-    return link
+    try:
+        relative_path = response.text.split('player.src([{src: "')[1].split('"')[0]
+        return "https://video.sibnet.ru" + relative_path
+    except (IndexError, AttributeError):
+        return None
 
 
 def get_hls_link_filemoon(url: str, headers: dict) -> str:
@@ -418,9 +420,10 @@ def get_hls_link_vidoza(url: str, headers: dict) -> str:
 
     soup = BeautifulSoup(response.text, "html.parser")
 
-    link: str = soup.find("source").attrs["src"]
-
-    return link
+    source = soup.find("source")
+    if source and source.attrs.get("src"):
+        return source.attrs["src"]
+    return None
 
 
 def get_hls_link_kakaflix(url: str, headers: dict) -> str:

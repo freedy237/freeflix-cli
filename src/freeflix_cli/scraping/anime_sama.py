@@ -50,7 +50,8 @@ def get_website_url(portal=portals["anime-sama"]):
 
     soup = BeautifulSoup(response.text, "html5lib")
 
-    recommanded_url = soup.find("a", {"class": "btn-primary"}).attrs["href"]
+    btn = soup.find("a", {"class": "btn-primary"})
+    recommanded_url = btn.attrs["href"] if btn else portal
 
     response = scraper.head(recommanded_url)
     response.raise_for_status()
@@ -81,13 +82,21 @@ def search(query: str) -> list[SearchResult]:
             if is_scan_only:
                 continue
 
-            url: str = result.find("a").attrs["href"]
-            img: str = result.find("a").img.attrs["src"]
+            link_tag = result.find("a")
+            if not link_tag:
+                continue
+            url: str = link_tag.attrs.get("href", "")
+            img_tag = link_tag.img
+            img: str = img_tag.attrs.get("src", "") if img_tag else ""
             info_block = result.find("div", {"class": "card-content"})
-            title: str = info_block.h2.text
-            genres: list[str] = info_block.find("p", {"class": info_class}).text.split(
-                ", "
-            )
+            if not info_block:
+                continue
+            h2 = info_block.h2
+            title: str = h2.text if h2 else ""
+            genre_p = info_block.find("p", {"class": info_class})
+            genres: list[str] = genre_p.text.split(", ") if genre_p else []
+            if not title:
+                continue
             results.append(SearchResult(title, url, img, genres))
 
     return results

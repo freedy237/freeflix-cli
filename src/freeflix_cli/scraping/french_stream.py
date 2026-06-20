@@ -7,7 +7,7 @@ from .objects import (
     Episode,
 )
 
-from curl_cffi import requests as cffi_requests
+from curl_cffi import requests as cffi_requests, CurlOpt
 
 from .config import portals
 
@@ -17,31 +17,89 @@ if not website_origin.startswith("http"):
 
 scraper = cffi_requests.Session(impersonate="chrome")
 
+_DOH_SESSION = None
+
+def _doh_session():
+    global _DOH_SESSION
+    if _DOH_SESSION is None:
+        _DOH_SESSION = cffi_requests.Session(
+            impersonate="chrome",
+            curl_options={
+                CurlOpt.DOH_URL: "https://1.1.1.1/dns-query",
+                CurlOpt.DOH_SSL_VERIFYPEER: 0,
+                CurlOpt.DOH_SSL_VERIFYHOST: 0,
+            },
+        )
+    return _DOH_SESSION
+
 
 
 from .. import cloudflare
 
 
 def _get(url, **kw):
-    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
-    return cloudflare.cf_get(scraper, url, **kw)
+    """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade).
 
+    Also detects the french-stream.one JS challenge (status 200 with
+    ``verification`` + ``anti-robot`` in the body) and retries with the
+    ``fsschal=1`` cookie set, same as `_post`.
 
-def _post(url, data=None, **kw):
-    """Cloudflare-aware POST — handles both standard Cloudflare challenges
-    (cf_clearance + FlareSolverr cascade) and the custom JS challenge used
-    by french-stream.one which sets a ``fsschal=1`` cookie."""
+    Falls back to DNS-over-HTTPS (1.1.1.1) when the system DNS fails."""
+    from time import sleep as _sl
+
     base_headers = kw.pop("headers", {})
 
     def _headers():
         cf = cloudflare.get_cf_headers(url)
         return {**cf, **base_headers} if cf else dict(base_headers)
 
-    def _fetch():
+    def _fetch(session=None):
+        s = session or scraper
         h = _headers()
-        return scraper.post(url, data=data, headers=h, **kw) if h else scraper.post(url, data=data, **kw)
+        return s.get(url, headers=h, **kw) if h else s.get(url, **kw)
 
-    resp = _fetch()
+    try:
+        resp = cloudflare.cf_get(scraper, url, headers=base_headers, **kw)
+    except Exception:
+        resp = _fetch(_doh_session())
+
+    need_retry = False
+    try:
+        body = (resp.text or "").lower()
+        if not cloudflare.is_blocked(resp) and "verification" in body and "anti-robot" in body:
+            scraper.cookies.set("fsschal", "1", domain="french-stream.one", path="/")
+            need_retry = True
+    except Exception:
+        pass
+
+    if need_retry:
+        _sl(0.5)
+        resp = _fetch()
+
+    return resp
+
+
+def _post(url, data=None, **kw):
+    """Cloudflare-aware POST — handles both standard Cloudflare challenges
+    (cf_clearance + FlareSolverr cascade) and the custom JS challenge used
+    by french-stream.one which sets a ``fsschal=1`` cookie.
+
+    Falls back to DNS-over-HTTPS (1.1.1.1) when the system DNS fails."""
+    base_headers = kw.pop("headers", {})
+
+    def _headers():
+        cf = cloudflare.get_cf_headers(url)
+        return {**cf, **base_headers} if cf else dict(base_headers)
+
+    def _fetch(session=None):
+        s = session or scraper
+        h = _headers()
+        return s.post(url, data=data, headers=h, **kw) if h else s.post(url, data=data, **kw)
+
+    try:
+        resp = _fetch()
+    except Exception:
+        resp = _fetch(_doh_session())
 
     # Detect challenge page (status 200 JS challenge with fsschal)
     need_retry = False
@@ -80,14 +138,16 @@ def search(query: str) -> list[SearchResult]:
         "Referer": f"{website_origin}/",
     }
 
-    response = _post(
-        website_origin + page_search,
-        data=data,
-        headers=headers,
-        timeout=15,
-    )
-
-    response.raise_for_status()
+    try:
+        response = _post(
+            website_origin + page_search,
+            data=data,
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
+    except Exception:
+        return []
 
     results: list[SearchResult] = []
 
@@ -99,9 +159,12 @@ def search(query: str) -> list[SearchResult]:
         except AttributeError:
             break  # no results
 
+        onclick = result.attrs.get("onclick", "")
+        if "location.href='" not in onclick:
+            continue
         link: str = (
             website_origin
-            + result.attrs["onclick"].split("location.href='")[1].split("'")[0]
+            + onclick.split("location.href='")[1].split("'")[0]
         )
         try:
             img: str = _abs_img(result.find("img").attrs["src"])
@@ -118,7 +181,11 @@ def search(query: str) -> list[SearchResult]:
 def get_movie(url: str, content: str) -> FrenchStreamMovie:
     soup = BeautifulSoup(content, "html5lib")
 
-    title: str = soup.find("meta", {"property": "og:title"}).attrs["content"]
+    og = soup.find("meta", {"property": "og:title"})
+    if og and og.attrs.get("content"):
+        title = og.attrs["content"]
+    else:
+        title = soup.title.get_text(strip=True) if soup.title else url.rstrip("/").split("/")[-1].replace("-", " ").title()
 
     img: str = ""
     try:
@@ -126,11 +193,13 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
     except AttributeError:
         img: str = ""
     genres: list[str] = []
-    genres_div = soup.find("ul", {"id": "s-list"}).find_all("li")[1]
-    if genres_div is not None:
-        for genre in genres_div.find_all("a"):
-            if genre.text:
-                genres.append(genre.text)
+    slist = soup.find("ul", {"id": "s-list"})
+    if slist:
+        li_tags = slist.find_all("li")
+        if len(li_tags) > 1:
+            for genre in li_tags[1].find_all("a"):
+                if genre.text:
+                    genres.append(genre.text)
 
     players: list[Player] = []
     movie_id = url.split("/")[-1].split("-")[0]
@@ -152,7 +221,11 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
 def get_series_season(url: str, content: str) -> FrenchStreamSeason:
     soup = BeautifulSoup(content, "html5lib")
 
-    title: str = soup.find("meta", {"property": "og:title"}).attrs["content"]
+    og = soup.find("meta", {"property": "og:title"})
+    if og and og.attrs.get("content"):
+        title = og.attrs["content"]
+    else:
+        title = soup.title.get_text(strip=True) if soup.title else url.rstrip("/").split("/")[-1].replace("-", " ").title()
     serie_id = url.split("/")[-1].split("-")[0]
 
     serie_info_response = _get(

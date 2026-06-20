@@ -41,6 +41,7 @@ def handle_french_stream():
 
     if not results:
         print_warning("No results found.")
+        print_info("French-Stream may be unreachable or blocking the request.")
         pause()
         return
 

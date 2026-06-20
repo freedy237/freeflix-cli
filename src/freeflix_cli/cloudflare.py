@@ -18,9 +18,10 @@ from urllib.parse import urlparse
 from .tracker import tracker
 
 try:
-    from curl_cffi import requests as _cffi
+    from curl_cffi import requests as _cffi, CurlOpt as _CurlOpt
 except Exception:  # pragma: no cover
     _cffi = None
+    _CurlOpt = None
 
 # Session-level cache : once we've found FlareSolverr to be unreachable we
 # stop hammering it (so a missing solver costs at most one quick failure).
@@ -163,7 +164,8 @@ def cf_get(session, url, **kw):
 
     # Transient "Connection reset by peer" / DNS hiccups are common with
     # these hosts (often the DoH resolver flaking). Retry a few times, then
-    # fall back to a plain request (system DNS, no DoH) as a last resort.
+    # fall back to a plain request (system DNS, no DoH), and finally to
+    # DNS-over-HTTPS (bypasses ISP DNS blocks) as a last resort.
     resp = None
     last_exc = None
     for attempt in range(3):
@@ -180,7 +182,19 @@ def cf_get(session, url, **kw):
             h = _headers()
             resp = _rq.get(url, impersonate="chrome", headers=h or None, **kw)
         except Exception:
-            raise last_exc
+            try:
+                _doh = _rq.Session(
+                    impersonate="chrome",
+                    curl_options={
+                        _CurlOpt.DOH_URL: "https://1.1.1.1/dns-query",
+                        _CurlOpt.DOH_SSL_VERIFYPEER: 0,
+                        _CurlOpt.DOH_SSL_VERIFYHOST: 0,
+                    },
+                )
+                h = _headers()
+                resp = _doh.get(url, headers=h or None, **kw) if h else _doh.get(url, **kw)
+            except Exception:
+                raise last_exc
 
     try:
         blocked = is_blocked(resp)
