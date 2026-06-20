@@ -20,36 +20,41 @@ Write-Host ""
 Log "FreeFlix CLI - Windows Bootstrap"
 Write-Host ""
 
+$localBin = "$env:USERPROFILE\.local\bin"
+$uvExe    = "$localBin\uv.exe"
+
 # ---- 1. Install uv (standalone binary — no execution-policy issues) ---
-if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
-    Log "Installing uv ..."
-    $uvUrl  = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
-    $tmpDir = "$env:TEMP\freeflix-uv"
-    $null = New-Item -ItemType Directory -Path $tmpDir -Force
-    $zip    = "$tmpDir\uv.zip"
+if (Get-Command "uv" -ErrorAction SilentlyContinue) {
+    Ok "uv already installed"
+} elseif (Test-Path $uvExe) {
+    $env:PATH = "$localBin;$env:PATH"
+    Ok "uv already installed (was on disk, added to PATH)"
+} else {
+    Log "Downloading uv ..."
+    $uvUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+    $tmp   = "$env:TEMP\freeflix-uv"
+    $null = New-Item -ItemType Directory -Path $tmp -Force
     try {
+        $zip = "$tmp\uv.zip"
+        Write-Host "       (≈10 MiB — no progress bar, please wait)"
         [Net.WebClient]::new().DownloadFile($uvUrl, $zip)
-        Expand-Archive -Path $zip -DestinationPath $tmpDir -Force
-        $uvBin = Get-ChildItem -Recurse -Filter "uv.exe" -Path $tmpDir | Select-Object -First 1
-        if (-not $uvBin) { throw "uv.exe not found in archive" }
-        $localBin = "$env:USERPROFILE\.local\bin"
+        Expand-Archive -Path $zip -DestinationPath $tmp -Force
+        $bin = Get-ChildItem -Recurse -Filter "uv.exe" -Path $tmp | Select-Object -First 1
+        if (-not $bin) { throw "uv.exe not found in archive" }
         $null = New-Item -ItemType Directory -Path $localBin -Force
-        Copy-Item -Path $uvBin.FullName -Destination "$localBin\uv.exe" -Force
+        Copy-Item -Path $bin.FullName -Destination $uvExe -Force
         $env:PATH = "$localBin;$env:PATH"
     } catch {
         Err "uv download/extract failed: $_"
-        Err "Visit https://docs.astral.sh/uv/#getting-started"
         exit 1
     } finally {
-        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
-        Err "uv not found on PATH after install."
+        Err "uv still not found after install."
         exit 1
     }
     Ok "uv installed"
-} else {
-    Ok "uv already installed"
 }
 
 # ---- 2. Install freeflix-cli + yt-dlp via uv -------------------------
@@ -70,7 +75,6 @@ if ($LASTEXITCODE -ne 0) {
 Ok "yt-dlp installed"
 
 # ---- 3. Add ~\.local\bin to user PATH --------------------------------
-$localBin = "$env:USERPROFILE\.local\bin"
 $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 if ($userPath -and $userPath -like "*$localBin*") {
     Ok "$localBin already in user PATH"
