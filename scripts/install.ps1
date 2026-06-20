@@ -54,11 +54,19 @@ if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
 
 # ---- 2. Install freeflix-cli + yt-dlp via uv -------------------------
 Log "Installing freeflix-cli ..."
-uv tool install freeflix-cli --force 2>&1 | Out-Null
+uv tool install freeflix-cli --force
+if ($LASTEXITCODE -ne 0) {
+    Err "freeflix-cli install failed (exit $LASTEXITCODE)"
+    exit 1
+}
 Ok "freeflix-cli installed"
 
 Log "Installing yt-dlp ..."
-uv tool install yt-dlp --force 2>&1 | Out-Null
+uv tool install yt-dlp --force
+if ($LASTEXITCODE -ne 0) {
+    Err "yt-dlp install failed (exit $LASTEXITCODE)"
+    exit 1
+}
 Ok "yt-dlp installed"
 
 # ---- 3. Add ~\.local\bin to user PATH --------------------------------
