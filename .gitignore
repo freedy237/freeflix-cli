@@ -26,6 +26,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Editor / IDE config & plans
+.opencode/
+
 # Runtime data that shouldn't be committed
 *.log
 *.bak
