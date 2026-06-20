@@ -2,10 +2,13 @@
 # FreeFlix CLI - Windows bootstrap
 #
 # Usage (no Python required):
-#   powershell -c "irm https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"
+#   powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"
 #
 # Installs uv (standalone, no pre-requisites), then installs freeflix-cli
 # and yt-dlp via uv.  Non-interactive.
+
+# Override execution policy for this process only — no system change.
+Set-ExecutionPolicy Bypass -Scope Process -Force 2>$null
 
 $ErrorActionPreference = "Stop"
 
@@ -23,7 +26,7 @@ Write-Host ""
 # ---- 1. Install uv (standalone, no Python needed) --------------------
 if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
     Log "Installing uv ..."
-    powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+    powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
     if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
         $env:PATH += ";$env:USERPROFILE\.local\bin"
     }
