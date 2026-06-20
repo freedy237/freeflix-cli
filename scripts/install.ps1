@@ -7,9 +7,6 @@
 # Installs uv (standalone, no pre-requisites), then installs freeflix-cli
 # and yt-dlp via uv.  Non-interactive.
 
-# Override execution policy for this process only — no system change.
-Set-ExecutionPolicy Bypass -Scope Process -Force 2>$null
-
 $ErrorActionPreference = "Stop"
 
 function Log($m)  { Write-Host "[*]  $m" -ForegroundColor Blue }
@@ -23,16 +20,31 @@ Write-Host ""
 Log "FreeFlix CLI - Windows Bootstrap"
 Write-Host ""
 
-# ---- 1. Install uv (standalone, no Python needed) --------------------
+# ---- 1. Install uv (standalone binary — no execution-policy issues) ---
 if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
     Log "Installing uv ..."
-    powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
-        $env:PATH += ";$env:USERPROFILE\.local\bin"
+    $uvUrl  = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+    $tmpDir = "$env:TEMP\freeflix-uv"
+    $null = New-Item -ItemType Directory -Path $tmpDir -Force
+    $zip    = "$tmpDir\uv.zip"
+    try {
+        [Net.WebClient]::new().DownloadFile($uvUrl, $zip)
+        Expand-Archive -Path $zip -DestinationPath $tmpDir -Force
+        $uvBin = Get-ChildItem -Recurse -Filter "uv.exe" -Path $tmpDir | Select-Object -First 1
+        if (-not $uvBin) { throw "uv.exe not found in archive" }
+        $localBin = "$env:USERPROFILE\.local\bin"
+        $null = New-Item -ItemType Directory -Path $localBin -Force
+        Copy-Item -Path $uvBin.FullName -Destination "$localBin\uv.exe" -Force
+        $env:PATH = "$localBin;$env:PATH"
+    } catch {
+        Err "uv download/extract failed: $_"
+        Err "Visit https://docs.astral.sh/uv/#getting-started"
+        exit 1
+    } finally {
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (-not (Get-Command "uv" -ErrorAction SilentlyContinue)) {
-        Err "uv did not install correctly."
-        Err "Visit https://docs.astral.sh/uv/#getting-started"
+        Err "uv not found on PATH after install."
         exit 1
     }
     Ok "uv installed"
