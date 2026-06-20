@@ -164,6 +164,10 @@ def _proxy_request_headers(url: str, player_config: dict, is_direct: bool,
     if referer:
         out["Referer"] = referer
 
+    origin_base = referer or out.get("Referer", "")
+    if origin_base and "Origin" not in out:
+        out["Origin"] = "/".join(origin_base.split("/")[:3])
+
     if player_config.get("alt-used") is True:
         try:
             out["Alt-Used"] = url.split("/")[2].lower()
@@ -179,12 +183,17 @@ def _proxy_request_headers(url: str, player_config: dict, is_direct: bool,
     return out
 
 
-def _probe_stream(stream_url: str, headers: dict) -> dict:
+def _probe_stream(stream_url: str, headers: dict,
+                  session=None) -> dict:
     """
     One fetch of the resolved stream that serves two purposes :
       1. detect an upstream block (Cloudflare 403, etc.) so we can warn
          the user clearly instead of letting mpv fail cryptically ;
       2. parse HLS quality variants for the quality-selection menu.
+
+    If *session* is provided (a curl_cffi Session), it is used instead of
+    creating a new one — needed when a CDN expects cookies or TLS state
+    from the extractor session (e.g. ``cdn.montmyoboku.net``).
 
     Returns {"variants": [...], "blocked": "cloudflare" | "httpNNN" | None}.
     Each variant : {"label","bandwidth","height","uri"}.
@@ -203,11 +212,14 @@ def _probe_stream(stream_url: str, headers: dict) -> dict:
         import m3u8 as _m3u8
         from curl_cffi import requests as _rq
 
-        sess = _rq.Session(impersonate="chrome")
-        try:
-            sess.curl_options.update(proxy.DNS_OPTIONS)
-        except Exception:
-            pass
+        if session is None:
+            sess = _rq.Session(impersonate="chrome")
+            try:
+                sess.curl_options.update(proxy.DNS_OPTIONS)
+            except Exception:
+                pass
+        else:
+            sess = session
         # Plain GET (HLS playlists — incl. .txt / .urlset masters — are
         # small text files ; we already skipped obvious direct video files
         # by extension above). A non-stream GET is reliable ; curl_cffi's
@@ -295,10 +307,17 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
     if not ff:
         return None
     hdr = ""
-    if headers.get("Referer"):
-        hdr += f"Referer: {headers['Referer']}\r\n"
-    if headers.get("User-Agent"):
-        hdr += f"User-Agent: {headers['User-Agent']}\r\n"
+    referer = headers.get("Referer", "")
+    if referer:
+        hdr += f"Referer: {referer}\r\n"
+        origin = "/".join(referer.split("/")[:3])
+        hdr += f"Origin: {origin}\r\n"
+    ua = headers.get("User-Agent") or (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+    hdr += f"User-Agent: {ua}\r\n"
     cmd = [ff, "-v", "quiet", "-print_format", "json",
            "-show_entries", "stream=width,height,bit_rate:format=bit_rate"]
     if hdr:
@@ -1089,7 +1108,7 @@ def play_video(
 
                 referer = f"{referer}/"
             except IndexError:
-                referer = ""
+                referer = headers.get("Referer", "")
         else:
             referer = headers.get("Referer", "")
 
@@ -1336,7 +1355,8 @@ def play_video(
                     subprocess.run(cmd, check=True)
                 else:
                     # MPV Command construction
-                    headers_mpv = f"Origin: {referer.split('/')[2]}"
+                    origin_domain = referer.split('/')[2] if referer else ""
+                    headers_mpv = f"Origin: https://{origin_domain}" if origin_domain else ""
                     add_default_sec_headers = False
 
                     if player_config.get("alt-used") is True:

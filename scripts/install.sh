@@ -3,7 +3,7 @@
 # Supports : Fedora/RHEL (dnf), Debian/Ubuntu (apt), Arch/Manjaro (pacman),
 #            openSUSE (zypper), Alpine (apk).
 # Installs system dependencies (mpv, yt-dlp, ffmpeg, aria2, libnotify)
-# then installs the freeflix package via uv (preferred) or pipx.
+# then installs the freeflix package via uv.
 
 set -euo pipefail
 
@@ -66,22 +66,48 @@ install_system_pkgs() {
     ok "System packages installed"
 }
 
-# ─── 3. Install freeflix-cli (uv preferred, pipx fallback) ───────────
-install_freeflix() {
+# ─── 3. Install freeflix-cli ─────────────────────────────────────────
+install_uv_if_missing() {
     if command -v uv >/dev/null 2>&1; then
-        log "Installing freeflix-cli via uv…"
-        uv tool install --force "$PROJECT_ROOT"
-    elif command -v pipx >/dev/null 2>&1; then
-        log "Installing freeflix-cli via pipx…"
-        pipx install --force "$PROJECT_ROOT"
-    else
-        warn "Neither uv nor pipx found. Installing pipx first…"
-        python3 -m pip install --user --upgrade pipx
-        python3 -m pipx ensurepath
-        export PATH="$HOME/.local/bin:$PATH"
-        pipx install --force "$PROJECT_ROOT"
+        return 0
     fi
+    log "uv not found — installing …"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! command -v uv >/dev/null 2>&1; then
+        err "Could not install uv automatically."
+        err "Visit https://docs.astral.sh/uv/#getting-started"
+        exit 1
+    fi
+    ok "uv installed"
+}
+
+install_freeflix() {
+    install_uv_if_missing
+    log "Installing freeflix-cli via uv…"
+    uv tool install --force "$PROJECT_ROOT"
     ok "freeflix command installed"
+}
+
+ensure_permanent_path() {
+    local bin_dir="$HOME/.local/bin"
+    # Already on PATH for this session → check if it's in the shell config
+    local rc
+    case "${SHELL:-}" in
+        *zsh*) rc="$HOME/.zshrc" ;;
+        *bash*) rc="$HOME/.bashrc" ;;
+        *) rc="$HOME/.profile" ;;
+    esac
+    if ! grep -qs "$bin_dir" "$rc" 2>/dev/null; then
+        {
+            echo ""
+            echo "# Added by FreeFlix CLI"
+            echo "export PATH=\"$bin_dir:\$PATH\""
+        } >> "$rc"
+        ok "$bin_dir added to $rc (source it or open a new terminal)"
+    else
+        ok "$bin_dir already in $rc"
+    fi
 }
 
 # ─── 4. Wire the shared mpv config (optional) ───────────────────────
@@ -141,6 +167,7 @@ log "Project root : $PROJECT_ROOT"
 
 install_system_pkgs
 install_freeflix
+ensure_permanent_path
 install_mpv_config
 install_nerd_font
 

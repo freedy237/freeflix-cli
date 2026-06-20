@@ -166,57 +166,6 @@ The Linux `install.sh` does this for you when it detects an Nvidia card.
 
 ---
 
-## 🛠 What got fixed vs. upstream autoflix-cli
-
-| Bug | Fix |
-|---|---|
-| `403` on anime-sama portal after `anime-sama.pw` shutdown | Override to `animes-sama.fr` + local `source_portal.jsonc` |
-| `404` on `/catalogue/?search=…` (new site rejects trailing slash) | Strip the slash + URL-encode the query |
-| Search results parser broken (no more `<h2>`) | Fall back to `<div class="card-title">` |
-| Season list empty (no more `panneauAnime()` JS) | Detect seasons via `<a href="/catalogue/<slug>/<season>">` |
-| Episode list empty (no more `episodes.js` endpoint) | Fetch `<season>/<lang>` HTML and parse inline `var epsN = […]` |
-| `parse_episodes_from_js` only matched single quotes | Now accepts single AND double quotes |
-| History entries with `//` in season URL → resume silently exits | `_absolutize()` collapses repeated slashes |
-| Settings menu : choosing options 0/1 immediately closes the menu | Refactor stray `if`s into a proper `if/elif/elif/else` chain |
-| Videasy/Vidlink 502 Bad Gateway in proxy | Propagate `selection["headers"]` (Origin + Referer) all the way through |
-| mpv infinite reconnect loop at byte 1506 | Remove `stream-lavf-o=reconnect=…` ; rely on the proxy retry |
-| mpv ytdl-hook crashes on autoflix proxy URLs | `ytdl=no` in `mpv.conf` |
-| Vulkan/`gpu-next` instability on Mesa | `vo=gpu` (stable renderer) |
-| DNS-over-HTTPS timeouts (1.1.1.1) | Automatic fallback to system DNS |
-
-## 🆕 What's new in v1.5.6
-
-- 🎴 **New source : French-Manga** (anime VF/VOSTFR) with the vidzy & luluvid players ;
-- 🌍 **First-launch wizard now asks your anime language first** (English VO/sub vs French VF/VOSTFR), *before* the interface language ;
-- 🎯 **Content-language source filtering** : picking **English** shows Anime-Sama, GoldenAnime, GoldenMS and Nyaa ; picking **French** shows Anime-Sama, GoldenAnime, French-Manga, French-Stream and Nyaa ;
-- 📝 **Subtitles follow your anime language** : choose English → English subtitles are fetched, French → French subtitles ;
-- 🔀 **Source menu reordered** : anime sources on top, movies/series in the middle, torrents (Nyaa) at the very bottom ;
-- ⚙️ New **"Update Anime Language"** entry in Settings ;
-- 🔊 **Audio fix** : selecting a quality on HLS streams (GoldenAnime/anizone) no longer drops the audio track ;
-- 🧹 **Coflix removed** (its player aggregator is Cloudflare-protected and unplayable from the terminal).
-
----
-
-## 🆕 What's new in v1.0
-
-- 📥 **Download** option in every player menu — yt-dlp for HLS, aria2c for direct mp4, sane defaults ;
-- 📥 **Batch "Download ALL episodes"** in the anime-sama flow ;
-- ▶️ **Position-in-episode resume** via mpv lua hook ;
-- 🔄 **AniList writeback** on mark-as-watched ;
-- 📝 **OpenSubtitles** fallback (requires free API key) ;
-- ⚡ **Parallel downloads** (configurable 1–4 workers) ;
-- 🔔 **Daily new-episode notifications** (systemd `--user` timer) ;
-- 🌊 **Nyaa torrent provider** (aria2c BitTorrent mode) ;
-- 📁 **My Downloads** menu in the home (local file browser + play) ;
-- ✓ **Mark an episode as watched (no play)** ;
-- 🌐 **Multi-portal fallback** : list of mirrors per source, tried in order ;
-- 💾 **Portal URL cache** (24 h TTL) ;
-- 🎨 **Anime4K Mode A_VL** pre-bundled (toggle CTRL+1 / CTRL+0) ;
-- 🇫🇷 **French localisation** of the whole UI ;
-- 🛡 Stability-first **mpv.conf** (anti-crash, anti-buffer-underrun, Anime4K toggle).
-
----
-
 ## 🔍 Project layout
 
 ```

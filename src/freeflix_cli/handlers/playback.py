@@ -156,8 +156,11 @@ def play_episode_flow(
         # Player Selection Menu
         player_options = []
         for p in supported_players:
-            host = p.url.split("/")[2].split(".")[-2]
-            label = f"{p.name} : {host}"
+            try:
+                host = p.url.split("/")[2].split(".")[-2]
+                label = f"{p.name} : {host}"
+            except IndexError:
+                label = p.name
             q = quality_map.get(p.url)
             if q:
                 label += f"  —  {q}"

@@ -75,6 +75,7 @@ def _refresh_remote_configs():
         rp = load_remote_jsonc(_PLAYERS_URL, None)
         if rp:
             players.update(rp)  # remote wins shared keys; our extras stay
+
     except Exception:
         pass
     try:

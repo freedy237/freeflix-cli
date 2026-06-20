@@ -39,19 +39,46 @@ fi
 # ─── 3. Install freeflix-cli ─────────────────────────────────────────
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if command -v uv >/dev/null 2>&1; then
-    log "Installing freeflix-cli via uv…"
-    uv tool install --force "$PROJECT_ROOT"
-elif command -v pipx >/dev/null 2>&1; then
-    log "Installing freeflix-cli via pipx…"
-    pipx install --force "$PROJECT_ROOT"
-else
-    log "Installing pipx then freeflix-cli…"
-    brew install --quiet pipx
-    pipx ensurepath
-    pipx install --force "$PROJECT_ROOT"
-fi
+install_uv_if_missing() {
+    if command -v uv >/dev/null 2>&1; then
+        return 0
+    fi
+    log "uv not found — installing …"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! command -v uv >/dev/null 2>&1; then
+        err "Could not install uv automatically."
+        err "Visit https://docs.astral.sh/uv/#getting-started"
+        exit 1
+    fi
+    ok "uv installed"
+}
+
+install_uv_if_missing
+log "Installing freeflix-cli via uv…"
+uv tool install --force "$PROJECT_ROOT"
 ok "freeflix command installed"
+
+ensure_permanent_path() {
+    local bin_dir="$HOME/.local/bin"
+    local rc
+    case "${SHELL:-}" in
+        *zsh*) rc="$HOME/.zshrc" ;;
+        *bash*) rc="$HOME/.bashrc" ;;
+        *) rc="$HOME/.profile" ;;
+    esac
+    if ! grep -qs "$bin_dir" "$rc" 2>/dev/null; then
+        {
+            echo ""
+            echo "# Added by FreeFlix CLI"
+            echo "export PATH=\"$bin_dir:\$PATH\""
+        } >> "$rc"
+        ok "$bin_dir added to $rc (source it or open a new terminal)"
+    else
+        ok "$bin_dir already in $rc"
+    fi
+}
+ensure_permanent_path
 
 # ─── 4. Optional : mpv config + Anime4K ──────────────────────────────
 log "Install default mpv config (Anime4K toggle, anti-crash) ?"

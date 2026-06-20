@@ -16,8 +16,8 @@ from .update_checker import check_update
 from . import setup_assistant
 from .tracker import tracker
 from .providers_registry import registry
-from .languages import LANGUAGES, get_language_display, get_all_languages
-from .player_manager import PLAYERS, get_player_display, get_all_players
+from .languages import get_language_display, get_all_languages
+from .player_manager import get_player_display, get_all_players
 from .handlers import (
     anime_sama,
     coflix,
@@ -33,7 +33,6 @@ from . import proxy
 import sys
 import os
 import time
-import signal
 
 
 def _browse_local_downloads():
@@ -177,11 +176,11 @@ def _show_about(version: str):
     body.append("  " + t("Watch movies, series and anime from your terminal.\n"),
                 style="white")
     body.append("\n")
-    body.append(f"  GitHub  : ", style=color("dim"))
+    body.append("  GitHub  : ", style=color("dim"))
     body.append("https://github.com/freedy237/freeflix-cli\n", style=link)
-    body.append(f"  PyPI    : ", style=color("dim"))
+    body.append("  PyPI    : ", style=color("dim"))
     body.append("https://pypi.org/project/freeflix-cli/\n", style=link)
-    body.append(f"  Issues  : ", style=color("dim"))
+    body.append("  Issues  : ", style=color("dim"))
     body.append("https://github.com/freedy237/freeflix-cli/issues\n", style=link)
     body.append("\n")
     body.append(f"  {t('License')} : ", style=color("dim"))
@@ -322,7 +321,7 @@ def check_language_setup(force=False):
 
         langs = get_all_languages()
 
-        choice = select_from_list([l[1] for l in langs], t("Choice:"))
+        choice = select_from_list([lang[1] for lang in langs], t("Choice:"))
         selected_lang = langs[choice][0]
         tracker.set_language(selected_lang)
         print_success(f"{t('Language set to:')} {langs[choice][1]}")
@@ -358,6 +357,7 @@ def _register_providers():
         category="anime",
     )
 
+
     # ── Films & Series sources ─────────────────────────────────
     registry.register(
         f"{icon('star')} GoldenMS (Movies & Series)",
@@ -383,6 +383,9 @@ def _register_providers():
 
 def main():
     # ── CLI flags (lightweight, before anything else) ──────────
+    if "--doctor" in sys.argv or "-D" in sys.argv:
+        from .doctor import cli_doctor
+        return cli_doctor()
     if "--setup" in sys.argv:
         # Redo the full first-launch experience : the language wizard
         # (anime language, then interface language) AND the dependency
@@ -401,6 +404,8 @@ def main():
         print("freeflix — terminal streaming for movies / series / anime\n")
         print("  freeflix           launch the TUI")
         print("  freeflix --setup   re-run setup : anime + interface language, then deps")
+        print("  freeflix --doctor  run system diagnostic")
+        print("  freeflix --doctor --upload  diagnostic + upload to Gist")
         print("  freeflix --version print the installed version")
         print("  freeflix --help    this message")
         return 0
@@ -645,7 +650,7 @@ def main():
                 elif s_choice == 1:
                     langs = get_all_languages()
                     l_choice = select_from_list(
-                        [l[1] for l in langs], t("Select Language:")
+                        [lang[1] for lang in langs], t("Select Language:")
                     )
                     tracker.set_language(langs[l_choice][0])
                     print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
@@ -653,7 +658,7 @@ def main():
                 elif s_choice == 2:
                     langs = get_all_languages()
                     a_choice = select_from_list(
-                        [l[1] for l in langs], t("Anime language:")
+                        [lang[1] for lang in langs], t("Anime language:")
                     )
                     tracker.set_anime_language(langs[a_choice][0])
                     print_success(

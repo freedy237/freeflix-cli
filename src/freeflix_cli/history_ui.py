@@ -51,6 +51,7 @@ def handle_resume(data, show_poster=True):
         goldenms.resume_goldenms(data)
 
 
+
 def handle_history():
     """Display history list and allow resume/delete."""
     while True:

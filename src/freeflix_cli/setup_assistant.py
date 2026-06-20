@@ -20,7 +20,7 @@ import urllib.request
 from pathlib import Path
 from typing import Dict
 
-from .cli_utils import print_info, print_success, print_warning, print_error
+from .cli_utils import print_info, print_success, print_warning
 from .tracker import tracker
 
 
@@ -142,6 +142,201 @@ def is_setup_complete() -> bool:
     return True
 
 
+# ─── Self-managed binary directory ────────────────────────────────────
+def _bin_dir() -> Path:
+    """Return FreeFlix's managed binary directory (created on demand)."""
+    from platformdirs import user_data_dir
+    return Path(user_data_dir("freeflix-cli", "PaulExplorer")) / "bin"
+
+
+def _ensure_bin_dir() -> Path:
+    d = _bin_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _managed_bin(bin_name: str) -> Path:
+    """Path to a managed binary inside our bin dir."""
+    return _bin_dir() / bin_name
+
+
+def _have_managed(bins: tuple[str, ...]) -> bool:
+    """Check if any of the given binary names exist in our managed dir."""
+    bd = _bin_dir()
+    if not bd.is_dir():
+        return False
+    is_win = sys.platform in ("win32", "cygwin")
+    for b in bins:
+        if is_win and not b.endswith(".exe"):
+            b += ".exe"
+        if (bd / b).is_file():
+            return True
+    return False
+
+
+# ─── Self-managed binary sources (per-OS download URLs) ─────────────
+# Each entry: label -> {url, type, binary, extras}
+#   url     : download URL of the archive
+#   type    : "tar.xz" | "tar.gz" | "zip"
+#   binary  : name of the executable inside the archive
+#   extras  : additional executables to also extract (e.g. ffprobe)
+#
+# Only ffmpeg + aria2c + mpv are self-managed on all OS.
+# chafa has no static builds on Linux/macOS, so Windows-only.
+_BINARY_SOURCES: dict[str, dict[str, dict]] = {
+    "linux": {
+        "ffmpeg": {
+            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-gpl.tar.xz",  # noqa: E501
+            "type": "tar.xz", "binary": "ffmpeg", "extras": ["ffprobe"],
+        },
+        # aria2c: no reliable static Linux build available
+        # mpv: no official static Linux build from mpv-player/mpv
+    },
+    "macos": {
+        "ffmpeg": {
+            "url": "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-macos-64.zip",
+            "type": "zip", "binary": "ffmpeg", "extras": [],
+        },
+        # aria2c: no reliable static macOS build available
+        "mpv": {
+            "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-macos-15-intel.zip",
+            "type": "zip", "binary": "mpv", "extras": [],
+        },
+    },
+    "windows": {
+        "ffmpeg": {
+            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
+            "type": "zip", "binary": "ffmpeg.exe", "extras": ["ffprobe.exe"],
+        },
+        "aria2c": {
+            "url": "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
+            "type": "zip", "binary": "aria2c.exe", "extras": [],
+        },
+        # chafa: no Windows binary in official releases (source-only)
+        "mpv": {
+            "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-x86_64-w64-mingw32.zip",
+            "type": "zip", "binary": "mpv.exe", "extras": [],
+        },
+    },
+}
+
+
+# ─── Archive extraction helpers ──────────────────────────────────────
+def _find_in_tar(archive: Path, target: str) -> Path | None:
+    """Find *target* (exact basename) inside a tar.xz/tar.gz and extract to a temp dir right next to it.  Returns the extracted path or None."""  # noqa: E501
+    import tarfile
+    parent = archive.parent
+    try:
+        with tarfile.open(archive, "r:*") as tar:
+            for m in tar.getmembers():
+                if m.name.endswith(f"/{target}") or m.name == target:
+                    tar.extract(m, parent, filter="data")
+                    return parent / m.name
+    except Exception:
+        return None
+    return None
+
+
+def _find_in_zip(archive: Path, target: str) -> Path | None:
+    """Same as _find_in_tar but for zip archives."""
+    import zipfile
+    parent = archive.parent
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            for name in zf.namelist():
+                if name.endswith(f"/{target}") or name == target:
+                    zf.extract(name, parent)
+                    return parent / name
+    except Exception:
+        return None
+    return None
+
+
+def _download_and_install_binary(label: str, info: dict) -> bool:
+    """Download a managed binary from *info["url"]*, extract, place in our bin dir.
+
+    Returns True on success.
+    """
+    import tempfile
+
+    url = info["url"]
+    bin_target = info["binary"]
+    extras = info.get("extras", [])
+    arc_type = info["type"]
+
+    with tempfile.TemporaryDirectory(prefix="freeflix-") as _td:
+        tmp = Path(_td)
+        arc_path = tmp / f"archive.{arc_type}"
+
+        _download(url, arc_path)
+        if not arc_path.is_file():
+            return False
+
+        if arc_type in ("tar.xz", "tar.gz"):
+            extracted = _find_in_tar(arc_path, bin_target)
+        elif arc_type == "zip":
+            extracted = _find_in_zip(arc_path, bin_target)
+        else:
+            return False
+
+        if extracted is None or not extracted.is_file():
+            return False
+
+        _ensure_bin_dir()
+        shutil.copy2(extracted, _managed_bin(bin_target))
+        _managed_bin(bin_target).chmod(0o755)
+
+        for extra in extras:
+            ex = _find_in_tar(arc_path, extra) if arc_type in ("tar.xz", "tar.gz") else _find_in_zip(arc_path, extra)
+            if ex and ex.is_file():
+                shutil.copy2(ex, _managed_bin(extra))
+                _managed_bin(extra).chmod(0o755)
+
+        return _managed_bin(bin_target).is_file()
+
+
+_LABEL_TO_SOURCE = {
+    "player": "mpv",
+    "ffmpeg": "ffmpeg",
+    "aria2": "aria2c",
+}
+
+
+def _auto_install_managed(os_name: str) -> None:
+    """Install every missing tool that has a self-managed source for *os_name*."""
+    sources = _BINARY_SOURCES.get(os_name, {})
+
+    # Ensure the bin dir exists early so tools can be placed there
+    _ensure_bin_dir()
+
+    if not sources:
+        return
+
+    for label, _id, bins in missing_tools():
+        src_key = _LABEL_TO_SOURCE.get(label)
+        if not src_key or src_key not in sources:
+            continue
+        info = sources[src_key]
+        if _have_managed(bins):
+            continue
+        print_info(f"  Installing {label} …")
+        ok = _download_and_install_binary(src_key, info)
+        if ok:
+            print_success(f"  ✓ {label}")
+        else:
+            print_warning(f"  ✗ {label} (download failed)")
+
+
+# ─── Version helper for cache invalidation ────────────────────────────
+def _get_installed_version() -> str:
+    """Return the installed freeflix-cli version, or 'dev' if unknown."""
+    try:
+        import importlib.metadata as _im
+        return _im.version("freeflix-cli")
+    except Exception:
+        return "dev"
+
+
 # ─── Runtime dependency gate (idempotent / resumable) ─────────────────
 # label -> (winget id for Windows, acceptable binary names, essential?)
 # Essential tools gate playback ; the rest are quality-of-life (posters,
@@ -156,7 +351,7 @@ _TOOLS = [
 
 
 def _have(bins) -> bool:
-    return any(shutil.which(b) for b in bins)
+    return any(shutil.which(b) for b in bins) or _have_managed(bins)
 
 
 def missing_essential_tools() -> list:
@@ -199,18 +394,33 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
 
     Returns True when the essential tools (a player + yt-dlp + ffmpeg) exist.
     """
+    _version = _get_installed_version()
+    _cached_version = tracker.data.get("system_deps_ok_version")
+
+    # Invalidate cache on version change — new version may have added
+    # or removed dependencies in _TOOLS.
+    if _cached_version is not None and _cached_version != _version:
+        tracker.data.pop("system_deps_ok", None)
+        tracker.data.pop("system_deps_ok_version", None)
+        tracker._save_data()
+
     if tracker.data.get("system_deps_ok"):
         return True
     if runtime_ready():
         tracker.data["system_deps_ok"] = True
+        tracker.data["system_deps_ok_version"] = _version
         tracker._save_data()
         return True
 
     os_name = detect_os()
 
-    # Windows can self-heal silently via winget (only the missing pieces),
-    # behind the big FreeFlix loading screen with a progress bar tracking
-    # which tool is installing.
+    # ── Self-managed binaries (primary) ────────────────────────────
+    # Download static builds from GitHub Releases into our own bin dir.
+    # Works on all OS, no sudo required.
+    if auto_install:
+        _auto_install_managed(os_name)
+
+    # ── Windows winget fallback ────────────────────────────────────
     if auto_install and os_name == "windows" and shutil.which("winget"):
         todo = missing_tools()
         if todo:
@@ -226,20 +436,22 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
 
     if runtime_ready():
         tracker.data["system_deps_ok"] = True
+        tracker.data["system_deps_ok_version"] = _version
         tracker._save_data()
         print_success("All required tools are installed.")
         return True
 
     # Still missing essentials → guide, and DON'T cache, so the next launch
     # picks up where this one left off.
+    missing_ess = missing_essential_tools()
     print_warning("Some required tools are still missing: "
-                  + ", ".join(missing_essential_tools()))
+                  + ", ".join(missing_ess))
     if os_name == "windows":
         print_info("Run this (re-runnable — installs only what's missing):")
         print_info("  powershell -ExecutionPolicy Bypass -File scripts\\install.ps1")
         print_info("then open a NEW Windows Terminal and run:  freeflix")
     elif os_name == "linux":
-        print_info("Run the installer:  ./scripts/install.sh")
+        _show_linux_commands(missing_ess)
     elif os_name == "macos":
         print_info("Run the installer:  ./scripts/install-mac.sh")
     return False
@@ -318,6 +530,29 @@ def _linux_pkg_cmd(pkg: str):
 def _linux_chafa_cmd():
     """Return the install command for chafa for the detected package manager."""
     return _linux_pkg_cmd("chafa")
+
+
+def _show_linux_commands(missing_ess: list[str]):
+    """Print distro-specific install commands for missing essential tools."""
+    pkg_map = {"player": "mpv", "ffmpeg": "ffmpeg"}
+    pkg_names = [pkg_map.get(tool, tool) for tool in missing_ess]
+    # Try each package manager until one works
+    candidates = [
+        ("apt-get", "sudo apt-get install -y " + " ".join(pkg_names)),
+        ("dnf",     "sudo dnf install -y " + " ".join(pkg_names)),
+        ("pacman",  "sudo pacman -S --needed --noconfirm " + " ".join(pkg_names)),
+        ("zypper",  "sudo zypper install -y " + " ".join(pkg_names)),
+        ("apk",     "sudo apk add " + " ".join(pkg_names)),
+    ]
+    pm_found = False
+    for binname, cmd_str in candidates:
+        if shutil.which(binname):
+            print_info(f"Install via {binname}:")
+            print_info(f"  {cmd_str}")
+            pm_found = True
+            break
+    if not pm_found:
+        print_info("Run the installer:  ./scripts/install.sh")
 
 
 # Per-OS install command for the media players FreeFlix can launch.

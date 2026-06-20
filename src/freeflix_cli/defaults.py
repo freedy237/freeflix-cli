@@ -109,6 +109,7 @@ DEFAULT_PLAYERS = {
     "coflix.upn": {"type": "embed4me"},
     "veev": {"type": "veev", "ext": "mp4"},
     "xtremestream": {"type": "xtremestream"},
+
 }
 
 DEFAULT_NEW_URL = {
@@ -137,6 +138,7 @@ DEFAULT_SOURCE_PORTAL = {
     "french-manga": "https://w16.french-manga.net",
     "anime-sama": "https://anime-sama.pw",
     "coflix": "https://coflix.cymru",
+
     "sudatchi": "https://sudatchi.com",
     "animetsu": "https://animetsu.live",
     "animetsu-api": "https://b.animetsu.live",
