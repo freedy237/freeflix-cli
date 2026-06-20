@@ -57,11 +57,7 @@
 No git, no package manager, no sudo needed. Just Python.
 
 ```bash
-# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py | python3
-
-# Windows (PowerShell 5+)
-powershell -c "[Net.WebClient]::new().DownloadFile('https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py','$env:TEMP\freeflix-install.py'); python3 '$env:TEMP\freeflix-install.py'"
 ```
 
 This installs `uv` if missing, then `freeflix-cli`.
