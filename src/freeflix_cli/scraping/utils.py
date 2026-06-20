@@ -1,5 +1,5 @@
 from typing import Optional, Union, List
-import re, json
+import re
 from bs4 import BeautifulSoup
 from .objects import Player, Episode
 

@@ -4,7 +4,6 @@ from ..cli_utils import (
     select_from_list,
     select_with_preview,
     make_preview,
-    print_header,
     print_info,
     print_error,
     print_warning,
@@ -12,7 +11,6 @@ from ..cli_utils import (
     console,
     pause,
 )
-from ..player_manager import play_video
 from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t

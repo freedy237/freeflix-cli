@@ -7,7 +7,6 @@ A systemd user timer at ~/.config/systemd/user/freeflix-notify.timer
 invokes it once a day. See `install_systemd_timer()` for setup.
 """
 
-import os
 import re
 import shutil
 import subprocess
@@ -102,7 +101,7 @@ def _notify(title: str, body: str):
         return
     try:
         subprocess.run(
-            [notify, "-a", "AutoFlix", "-i", "video-x-generic", title, body],
+            [notify, "-a", "FreeFlix", "-i", "video-x-generic", title, body],
             check=False,
             timeout=5,
         )
@@ -120,7 +119,7 @@ def main():
         lines.append(
             f"• {f['series']} — {f['season']} : ep {f['current']} → {f['available']}"
         )
-    _notify("New AutoFlix episodes available", "\n".join(lines))
+    _notify("New FreeFlix episodes available", "\n".join(lines))
     return 0
 
 

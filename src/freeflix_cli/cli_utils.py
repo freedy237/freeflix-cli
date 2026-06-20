@@ -7,8 +7,6 @@ from rich.text import Text
 from rich.live import Live
 from rich.cells import cell_len
 from rich.table import Table
-from rich import print as rprint
-
 from .themes import color
 from .icons import iconify, icon
 

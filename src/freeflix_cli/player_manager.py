@@ -19,7 +19,7 @@ from .cli_utils import (
 )
 from .scraping import player
 from . import proxy
-from typing import Dict, Any
+from typing import Dict
 from .tracker import tracker
 from .i18n import t
 

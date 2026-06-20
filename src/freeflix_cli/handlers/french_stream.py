@@ -4,7 +4,6 @@ from ..cli_utils import (
     select_from_list,
     select_with_preview,
     make_preview,
-    print_header,
     print_info,
     print_warning,
     get_user_input,

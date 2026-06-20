@@ -1,19 +1,16 @@
-from ..scraping import anime_sama, player
+from ..scraping import anime_sama
 from ..cli_utils import (
     select_from_list,
     select_with_preview,
     make_preview,
-    print_header,
     print_info,
     print_warning,
     print_success,
     print_error,
     get_user_input,
-    console,
     pause,
     spinner,
 )
-from ..player_manager import play_video
 from ..tracker import tracker
 from ..anilist import anilist_client
 from ..i18n import t

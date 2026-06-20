@@ -397,7 +397,7 @@ def proxy_player_ui():
     html_content = """<!DOCTYPE html>
 <html>
 <head>
-    <title>AutoFlix Web Player</title>
+    <title>FreeFlix Web Player</title>
     <meta charset="utf-8">
     <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
     <style>

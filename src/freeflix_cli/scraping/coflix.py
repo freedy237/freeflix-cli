@@ -10,7 +10,6 @@ from .objects import (
     Player,
     CoflixMovie,
 )
-from .utils import parse_episodes_from_js
 import base64
 import re
 from ..proxy import DNS_OPTIONS
