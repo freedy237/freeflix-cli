@@ -1,7 +1,8 @@
 """
 FreeFlix CLI — bootstrap installer.
 
-Usage:  curl -fsSL https://freeflix.app/install.py | python3
+Usage:
+  curl -fsSL https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py | python3
 
 Detects your OS, installs ``uv`` if missing, then installs FreeFlix
 via ``uv tool install freeflix-cli``.  No package manager, no sudo,
@@ -27,11 +28,12 @@ from pathlib import Path
 
 
 def _os_name() -> str | None:
-    if sys.platform.startswith("linux"):
+    m = sys.platform
+    if m.startswith("linux"):
         return "linux"
-    if sys.platform == "darwin":
+    if m == "darwin":
         return "macos"
-    if sys.platform in ("win32", "cygwin"):
+    if m in ("win32", "cygwin"):
         return "windows"
     return None
 
@@ -247,8 +249,29 @@ HEADER = r"""
   ╰────────────────────────────────╯
 """
 
+VERSION = "1.7.0"
+
+
+def _usage(exit_ok: bool = True):
+    print(__doc__.strip())
+    print()
+    print("Options:")
+    print("  -h, --help   Show this help and exit")
+    print("  --version    Show version and exit")
+    if not exit_ok:
+        sys.exit(0)
+    sys.exit(0)
+
 
 def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("-c")]  # -c from pipe
+    for a in args:
+        if a in ("-h", "--help"):
+            _usage()
+        if a in ("--version",):
+            print(f"FreeFlix CLI installer v{VERSION}")
+            sys.exit(0)
+
     print(HEADER)
 
     os_name = _os_name()

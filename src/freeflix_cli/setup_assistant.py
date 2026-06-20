@@ -181,16 +181,22 @@ def _have_managed(bins: tuple[str, ...]) -> bool:
 #   binary  : name of the executable inside the archive
 #   extras  : additional executables to also extract (e.g. ffprobe)
 #
-# Only ffmpeg + aria2c + mpv are self-managed on all OS.
-# chafa has no static builds on Linux/macOS, so Windows-only.
+# Only ffmpeg + aria2c + mpv are self-managed.
+# These are x86_64 builds ; aarch64 not yet included.
 _BINARY_SOURCES: dict[str, dict[str, dict]] = {
     "linux": {
         "ffmpeg": {
             "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-gpl.tar.xz",  # noqa: E501
             "type": "tar.xz", "binary": "ffmpeg", "extras": ["ffprobe"],
         },
-        # aria2c: no reliable static Linux build available
-        # mpv: no official static Linux build from mpv-player/mpv
+        "aria2c": {
+            "url": "https://github.com/q3aql/aria2-static-builds/releases/download/v1.37.0/aria2-1.37.0-linux-gnu-64bit-build1.tar.gz",  # noqa: E501
+            "type": "tar.gz", "binary": "aria2c", "extras": [],
+        },
+        "mpv": {
+            "url": "https://github.com/coletrammer/mpv-static/releases/download/continuous/mpv-x86_64-linux-gnu.tar.gz",  # noqa: E501
+            "type": "tar.gz", "binary": "mpv", "extras": [],
+        },
     },
     "macos": {
         "ffmpeg": {

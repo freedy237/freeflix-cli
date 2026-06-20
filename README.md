@@ -8,7 +8,7 @@
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
 
-> 🆕 **v1.7.0** — new `freeflix --doctor` diagnostic tool, cross-platform one-liner installer (`scripts/install.py`), ArkAnime source removed (CDN dead).
+> 🆕 **v1.7.0** — auto‑install deps (ffmpeg, mpv, aria2c) directly from GitHub — no package manager needed. New `freeflix --doctor` system diagnostic. Cross‑platform one‑liner installer. Origin header fixes for CDN playback. ArkAnime source removed (CDN dead).
 
 
 - A complete **download backend** (yt-dlp for HLS, aria2c for direct mp4, with quality selection 480p/720p/1080p) ;
@@ -57,14 +57,18 @@
 No git, no package manager, no sudo needed. Just Python.
 
 ```bash
-curl -fsSL https://freeflix.app/install.py | python3
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py | python3
+
+# Windows (PowerShell)
+# Not yet supported — use the installer script below
 ```
 
-This installs `uv` if missing, then `freeflix-cli` — on Linux, macOS, and Windows.
+This installs `uv` if missing, then `freeflix-cli`.
 
-### From PyPI (if you have the system deps)
+### From PyPI (if you already have the system deps)
 
-If `mpv`, `yt-dlp`, `ffmpeg`, `aria2` and `libnotify` are already on your machine :
+If `mpv`, `yt-dlp`, `ffmpeg`, `aria2` and `libnotify` are installed :
 
 ```bash
 uv tool install freeflix-cli     # recommended
@@ -80,15 +84,31 @@ Then :
 freeflix
 ```
 
-### OS-specific installer scripts (system deps + shakers)
+### Linux (install script — system deps + Anime4K shaders)
 
-Clone + run the script for your OS — it installs everything (players, codecs, Anime4K shaders, Python + FreeFlix) :
+```bash
+git clone https://github.com/freedy237/freeflix-cli.git
+cd freeflix-cli
+chmod +x scripts/install.sh
+./scripts/install.sh
+```
 
-| Platform | Command |
-|----------|---------|
-| **Linux** | `git clone https://github.com/freedy237/freeflix-cli.git && cd freeflix-cli && chmod +x scripts/install.sh && ./scripts/install.sh` |
-| **macOS** | `git clone https://github.com/freedy237/freeflix-cli.git && cd freeflix-cli && chmod +x scripts/install-mac.sh && ./scripts/install-mac.sh` |
-| **Windows** | `git clone https://github.com/freedy237/freeflix-cli.git && cd freeflix-cli && powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1` |
+### macOS (install script — system deps + Anime4K shaders)
+
+```bash
+git clone https://github.com/freedy237/freeflix-cli.git
+cd freeflix-cli
+chmod +x scripts/install-mac.sh
+./scripts/install-mac.sh
+```
+
+### Windows (install script — system deps + Anime4K shaders)
+
+```powershell
+git clone https://github.com/freedy237/freeflix-cli.git
+cd freeflix-cli
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
 
 ### From source (developer mode)
 
