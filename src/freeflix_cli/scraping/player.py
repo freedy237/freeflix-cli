@@ -4,7 +4,6 @@ from curl_cffi import requests
 from .deobfuscate import deobfuscate
 from bs4 import BeautifulSoup
 from ..proxy import DNS_OPTIONS
-from ..config_loader import load_remote_jsonc
 from ..defaults import DEFAULT_PLAYERS, DEFAULT_NEW_URL, DEFAULT_KAKAFLIX_PLAYERS
 import re, base64
 
@@ -41,20 +40,7 @@ def _get(url, **kw):
     """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade), per thread."""
     return cloudflare.cf_get(_scraper(), url, **kw)
 
-import threading
-
-# These three remote files are OPTIONAL upstream overrides of our bundled
-# defaults. Fetching them at IMPORT time was 3 blocking network calls (~3 s of
-# dead air before `freeflix` showed anything). So we apply the bundled defaults
-# SYNCHRONOUSLY (instant, fully functional offline) and pull the overrides in a
-# BACKGROUND thread kicked off at launch, merging them IN PLACE — they are ready
-# long before any extraction runs, and a slow/absent network never delays start.
-_PLAYERS_URL = "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/players_info.jsonc"
-_NEW_URL_URL = "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/new_url.jsonc"
-_KAKAFLIX_URL = "https://raw.githubusercontent.com/PaulExplorer/AutoFlix-CLI/refs/heads/main/data/kakaflix_players.jsonc"
-
 # vidmoly's live domain is .net ; .to is a PARKED ad domain, .biz/.me are 404.
-# These corrections must win even over the (stale) upstream new_url.jsonc.
 _VIDMOLY_FIX = {
     "vidmoly.to": "vidmoly.net",
     "vidmoly.biz": "vidmoly.net",
@@ -67,39 +53,10 @@ new_url.pop("vidmoly.net", None)
 new_url.update(_VIDMOLY_FIX)
 kakaflix_players = dict(DEFAULT_KAKAFLIX_PLAYERS)
 
-
-def _refresh_remote_configs():
-    """Background merge of the optional upstream overrides (zero startup cost).
-    Each dict is mutated in place so importers keep seeing the live object."""
-    try:
-        rp = load_remote_jsonc(_PLAYERS_URL, None)
-        if rp:
-            players.update(rp)  # remote wins shared keys; our extras stay
-
-    except Exception:
-        pass
-    try:
-        nu = load_remote_jsonc(_NEW_URL_URL, None)
-        if nu:
-            new_url.update(nu)
-        new_url.pop("vidmoly.net", None)  # re-assert our corrections over remote
-        new_url.update(_VIDMOLY_FIX)
-    except Exception:
-        pass
-    try:
-        kp = load_remote_jsonc(_KAKAFLIX_URL, None)
-        if kp:
-            kakaflix_players.update(kp)
-    except Exception:
-        pass
-
-
-threading.Thread(target=_refresh_remote_configs, daemon=True).start()
-
 # Per-thread current player config, so several extractions can run in
 # parallel (e.g. analysing every player's resolutions at once) without
 # clobbering each other.
-_apc = threading.local()
+_apc = _threading.local()
 
 
 def _set_apc(cfg):
