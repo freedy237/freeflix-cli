@@ -54,10 +54,14 @@
 
 ### 🚀 One-liner (anything with Python ≥ 3.9)
 
-No git, no package manager, no sudo needed. Just Python.
+No git, no package manager, no sudo needed. Just Python (or PowerShell on Windows).
 
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py | python3
+
+# Windows (PowerShell)
+powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"
 ```
 
 This installs `uv` if missing, then `freeflix-cli`.
