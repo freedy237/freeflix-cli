@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 # FreeFlix CLI - Windows bootstrap
 #
-# Usage (no Python required):
+# Usage:
 #   powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"
 #
-# Installs uv (standalone, no pre-requisites), then installs freeflix-cli
-# and yt-dlp via uv.  Non-interactive.
+# Installs uv + Python (if missing), then freeflix-cli and yt-dlp via uv.
+# No manual pre-requisites needed beyond a working internet connection.
 
 $ErrorActionPreference = "Stop"
 
@@ -21,9 +21,9 @@ Log "FreeFlix CLI - Windows Bootstrap"
 Write-Host ""
 
 $localBin = "$env:USERPROFILE\.local\bin"
-$uvExe    = "$localBin\uv.exe"
 
-# ---- 1. Install uv (standalone binary — no execution-policy issues) ---
+# ===== 1. Install uv (standalone binary) =====
+$uvExe = "$localBin\uv.exe"
 if (Get-Command "uv" -ErrorAction SilentlyContinue) {
     Ok "uv already installed"
 } elseif (Test-Path $uvExe) {
@@ -31,13 +31,15 @@ if (Get-Command "uv" -ErrorAction SilentlyContinue) {
     Ok "uv already installed (was on disk, added to PATH)"
 } else {
     Log "Downloading uv ..."
-    $uvUrl = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
-    $tmp   = "$env:TEMP\freeflix-uv"
+    $tmp = "$env:TEMP\freeflix-uv"
     $null = New-Item -ItemType Directory -Path $tmp -Force
     try {
         $zip = "$tmp\uv.zip"
-        Write-Host "       (≈10 MiB — no progress bar, please wait)"
-        [Net.WebClient]::new().DownloadFile($uvUrl, $zip)
+        Write-Host "       (≈10 MiB — please wait)"
+        [Net.WebClient]::new().DownloadFile(
+            "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
+            $zip
+        )
         Expand-Archive -Path $zip -DestinationPath $tmp -Force
         $bin = Get-ChildItem -Recurse -Filter "uv.exe" -Path $tmp | Select-Object -First 1
         if (-not $bin) { throw "uv.exe not found in archive" }
@@ -57,9 +59,34 @@ if (Get-Command "uv" -ErrorAction SilentlyContinue) {
     Ok "uv installed"
 }
 
-# ---- 2. Install freeflix-cli + yt-dlp via uv -------------------------
+# ===== 2. Ensure Python is on PATH (avoid uv downloading it) =====
+$havePy = (Get-Command "python3" -ErrorAction SilentlyContinue) -or
+          (Get-Command "python" -ErrorAction SilentlyContinue)
+
+if (-not $havePy -and (Get-Command "winget" -ErrorAction SilentlyContinue)) {
+    Log "Installing Python via winget ..."
+    winget install --silent --accept-source-agreements --accept-package-agreements Python.Python.3.12 2>$null
+    # winget installs Python; refresh PATH so uv can find it
+    $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("PATH", "User") + ";" +
+                "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\Scripts;" +
+                "$env:USERPROFILE\AppData\Local\Programs\Python\Python312"
+    $havePy = (Get-Command "python3" -ErrorAction SilentlyContinue) -or
+              (Get-Command "python" -ErrorAction SilentlyContinue)
+    if ($havePy) { Ok "Python installed" }
+}
+
+# ===== 3. Install freeflix-cli + yt-dlp via uv =====
+# If system Python was found (winget or pre-existing), tell uv to never
+# download a standalone build — avoids stalls on unreliable connections.
+$pyFlag = if ($havePy) { @("--python-preference", "only-system") } else { @() }
+
 Log "Installing freeflix-cli ..."
-uv tool install freeflix-cli --force
+uv tool install freeflix-cli --force @pyFlag
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "       (retrying without Python pin — may download Python)..."
+    uv tool install freeflix-cli --force
+}
 if ($LASTEXITCODE -ne 0) {
     Err "freeflix-cli install failed (exit $LASTEXITCODE)"
     exit 1
@@ -74,17 +101,17 @@ if ($LASTEXITCODE -ne 0) {
 }
 Ok "yt-dlp installed"
 
-# ---- 3. Add ~\.local\bin to user PATH --------------------------------
-$userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+# ===== 4. Add ~\.local\bin to user PATH =====
+$userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($userPath -and $userPath -like "*$localBin*") {
     Ok "$localBin already in user PATH"
 } else {
     try {
         $newPath = if ($userPath) { "$localBin;$userPath" } else { $localBin }
-        [System.Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+        [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
         Ok "$localBin added to user PATH (new terminal recommended)"
     } catch {
-        Warn "Could not update user PATH: $_"
+        Err "Could not update user PATH: $_"
     }
 }
 
