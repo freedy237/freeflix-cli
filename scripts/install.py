@@ -249,7 +249,7 @@ HEADER = r"""
   ╰────────────────────────────────╯
 """
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 
 
 def _usage(exit_ok: bool = True):

@@ -8,7 +8,7 @@
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
 
-> 🆕 **v1.7.0** — auto‑install deps (ffmpeg, mpv, aria2c) directly from GitHub — no package manager needed. New `freeflix --doctor` system diagnostic. Cross‑platform one‑liner installer. Origin header fixes for CDN playback. ArkAnime source removed (CDN dead).
+> 🆕 **v1.7.1** — massive code cleanup : unused imports removed, AutoFlix upstream references removed, legacy remote config fetches eliminated. Faster startup, smaller footprint.
 
 
 - A complete **download backend** (yt-dlp for HLS, aria2c for direct mp4, with quality selection 480p/720p/1080p) ;
