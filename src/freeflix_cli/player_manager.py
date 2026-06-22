@@ -828,7 +828,7 @@ def _download_stream(
                 "--min-split-size=1M",
                 "--auto-file-renaming=true",
                 "--summary-interval=1",
-                "--console-log-level=info",
+                "--console-log-level=notice",
                 f"--header=Referer: {referer}",
                 f"--header=User-Agent: {user_agent}",
                 f"--dir={DOWNLOAD_DIR}",

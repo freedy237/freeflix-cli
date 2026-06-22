@@ -174,30 +174,49 @@ def play_episode_flow(
         )
 
         if player_idx == len(supported_players):  # Download selected
-            dl_sp = supported_players[0]
-            dl_ok = play_video(
-                dl_sp.url,
-                headers=headers,
-                force_player="download",
-            )
-            if dl_ok:
-                tracker.save_progress(
-                    provider=provider_name,
-                    series_title=series_title,
-                    season_title=season_title,
-                    episode_title=episode.title,
-                    series_url=series_url,
-                    season_url=season_url,
-                    episode_url=episode.url if hasattr(episode, "url") else "",
-                    logo_url=logo_url,
-                )
+            # Let user pick quality for download
+            dl_opts = []
+            for p in supported_players:
                 try:
-                    tracker.record_watch(provider_name, series_title, genres)
-                except Exception:
-                    pass
-                if anilist_callback:
-                    anilist_callback()
-                print_success(t("Download completed!"))
+                    host = p.url.split("/")[2].split(".")[-2]
+                    label = f"{p.name} : {host}"
+                except IndexError:
+                    label = p.name
+                q = quality_map.get(p.url)
+                if q:
+                    label += f"  —  {q}"
+                dl_opts.append(label)
+            dl_opts.append(t("← Back"))
+            dl_idx = select_from_list(dl_opts, "📥 " + t("Select quality to download:"))
+            if dl_idx < len(supported_players):
+                dl_sp = supported_players[dl_idx]
+                clean_season = clean_season_title(series_title, season_title)
+                clean_episode = clean_episode_title(series_title, season_title, episode.title)
+                window_title = f"{series_title} - {clean_season} - {clean_episode}"
+                dl_ok = play_video(
+                    dl_sp.url,
+                    headers=headers,
+                    title=window_title,
+                    force_player="download",
+                )
+                if dl_ok:
+                    tracker.save_progress(
+                        provider=provider_name,
+                        series_title=series_title,
+                        season_title=season_title,
+                        episode_title=episode.title,
+                        series_url=series_url,
+                        season_url=season_url,
+                        episode_url=episode.url if hasattr(episode, "url") else "",
+                        logo_url=logo_url,
+                    )
+                    try:
+                        tracker.record_watch(provider_name, series_title, genres)
+                    except Exception:
+                        pass
+                    if anilist_callback:
+                        anilist_callback()
+                    print_success(t("Download completed!"))
             continue
 
         if player_idx == len(supported_players) + 1:  # Back selected
