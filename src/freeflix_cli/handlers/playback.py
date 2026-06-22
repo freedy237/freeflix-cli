@@ -165,6 +165,7 @@ def play_episode_flow(
             if q:
                 label += f"  —  {q}"
             player_options.append(label)
+        player_options.append("⬇ " + t("Download"))
         player_options.append(t("← Back"))
 
         player_idx = select_from_list(
@@ -172,7 +173,34 @@ def play_episode_flow(
             t("🎮 Select Player:"),
         )
 
-        if player_idx == len(supported_players):  # Back selected
+        if player_idx == len(supported_players):  # Download selected
+            dl_sp = supported_players[0]
+            dl_ok = play_video(
+                dl_sp.url,
+                headers=headers,
+                force_player="download",
+            )
+            if dl_ok:
+                tracker.save_progress(
+                    provider=provider_name,
+                    series_title=series_title,
+                    season_title=season_title,
+                    episode_title=episode.title,
+                    series_url=series_url,
+                    season_url=season_url,
+                    episode_url=episode.url if hasattr(episode, "url") else "",
+                    logo_url=logo_url,
+                )
+                try:
+                    tracker.record_watch(provider_name, series_title, genres)
+                except Exception:
+                    pass
+                if anilist_callback:
+                    anilist_callback()
+                print_success(t("Download completed!"))
+            continue
+
+        if player_idx == len(supported_players) + 1:  # Back selected
             return False
 
         selected_player = supported_players[player_idx]

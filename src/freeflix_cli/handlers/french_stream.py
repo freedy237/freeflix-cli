@@ -14,7 +14,7 @@ from ..cli_utils import (
 from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
-from .playback import play_episode_flow
+from .playback import play_episode_flow, download_episodes_batch
 
 
 def resolve_url(url, base):
@@ -134,11 +134,23 @@ def handle_french_stream():
             ep_idx = 0
             while True:  # ── Episode ──
                 ep_idx = select_from_list(
-                    [e.title for e in episodes] + [t("← Back")],
+                    [e.title for e in episodes] + ["📥 " + t("Download ALL episodes"), t("← Back")],
                     f"{icon('tv')} {t('Select Episode:')}",
                     default_index=min(ep_idx, len(episodes) - 1),
                 )
-                if ep_idx >= len(episodes):
+                if ep_idx == len(episodes):  # Download ALL
+                    download_episodes_batch(
+                        provider_name="French-Stream",
+                        series_title=content.title,
+                        season_title=content.title,
+                        episodes=episodes,
+                        series_url=content.url,
+                        season_url=content.url,
+                        logo_url=content.img,
+                        headers={"Referer": french_stream.website_origin},
+                    )
+                    continue
+                if ep_idx > len(episodes):
                     break  # back to the language picker
 
                 while True:  # ── Play (with next-episode chaining) ──

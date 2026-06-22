@@ -10,7 +10,7 @@ from ..cli_utils import (
     pause,
     spinner,
 )
-from .playback import play_episode_flow
+from .playback import play_episode_flow, download_episodes_batch
 from ..i18n import t
 from ..icons import icon
 
@@ -129,9 +129,22 @@ def handle_french_manga():
         episodes = data[selected_lang]
         ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
 
-        ep_options = [f"Episode {n}" for n in ep_nums] + [t("← Back")]
+        ep_options = [f"Episode {n}" for n in ep_nums] + ["📥 " + t("Download ALL episodes"), t("← Back")]
         ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
-        if ep_idx >= len(ep_nums):
+        if ep_idx == len(ep_nums):  # Download ALL
+            ep_objects = [_Ep(f"Episode {n}", episodes[n], selection.url) for n in ep_nums]
+            download_episodes_batch(
+                provider_name="French-Manga",
+                series_title=data.get("title") or selection.title,
+                season_title=selected_lang.upper(),
+                episodes=ep_objects,
+                series_url=selection.url,
+                season_url=selection.url,
+                logo_url=data.get("cover", ""),
+                headers={"Referer": french_manga.website_origin + "/"},
+            )
+            continue
+        if ep_idx > len(ep_nums):
             if len(langs) == 1:
                 return  # single language → back exits the handler
             continue  # back to the language picker

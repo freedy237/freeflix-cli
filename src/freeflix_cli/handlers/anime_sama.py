@@ -15,7 +15,7 @@ from ..tracker import tracker
 from ..anilist import anilist_client
 from ..i18n import t
 from ..icons import icon
-from .playback import play_episode_flow
+from .playback import play_episode_flow, download_episodes_batch
 import re
 
 
@@ -244,11 +244,23 @@ def handle_anime_sama():
             ep_idx = 0
             while True:  # ── Episode ──
                 ep_idx = select_from_list(
-                    [e.title for e in episodes] + [back],
+                    [e.title for e in episodes] + ["📥 " + t("Download ALL episodes"), back],
                     f"{icon('tv')} {t('Select Episode:')}",
                     default_index=min(ep_idx, len(episodes) - 1),
                 )
-                if ep_idx >= len(episodes):
+                if ep_idx == len(episodes):  # Download ALL
+                    download_episodes_batch(
+                        provider_name="Anime-Sama",
+                        series_title=series.title,
+                        season_title=season.title,
+                        episodes=episodes,
+                        series_url=series.url,
+                        season_url=selected_season_access.url,
+                        logo_url=series.img,
+                        headers={"Referer": anime_sama.website_origin},
+                    )
+                    continue
+                if ep_idx > len(episodes):
                     break  # back to language picker
 
                 # ── Play (with next-episode chaining) ──

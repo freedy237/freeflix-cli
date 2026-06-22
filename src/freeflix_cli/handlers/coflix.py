@@ -15,7 +15,7 @@ from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
 from .. import terminal_image
-from .playback import play_episode_flow
+from .playback import play_episode_flow, download_episodes_batch
 from ..cli_utils import spinner
 
 
@@ -156,10 +156,31 @@ def handle_coflix():
 
                 while True:  # ── Episode ──
                     ep_idx = select_from_list(
-                        [e.title for e in season.episodes] + [t("← Back")],
+                        [e.title for e in season.episodes] + ["📥 " + t("Download ALL episodes"), t("← Back")],
                         f"{icon('tv')} {t('Select Episode:')}",
                     )
-                    if ep_idx >= len(season.episodes):
+                    if ep_idx == len(season.episodes):  # Download ALL
+                        headers = {"Referer": "https://lecteurvideo.com/"}
+                        with spinner(t("Preparing episodes for download…")):
+                            full_episodes = []
+                            for e in season.episodes:
+                                try:
+                                    ep_details = coflix.get_episode(e.url)
+                                    full_episodes.append(ep_details)
+                                except Exception:
+                                    print_warning(f"{t('Could not load')} {e.title}, {t('skipping')}.")
+                        download_episodes_batch(
+                            provider_name="Coflix",
+                            series_title=content.title,
+                            season_title=selected_season_access.title,
+                            episodes=full_episodes,
+                            series_url=content.url,
+                            season_url=selected_season_access.url,
+                            logo_url=content.img,
+                            headers=headers,
+                        )
+                        continue
+                    if ep_idx > len(season.episodes):
                         break  # back to the season picker
 
                     while True:  # ── Play (with next-episode chaining) ──
