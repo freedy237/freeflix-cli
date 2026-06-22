@@ -165,7 +165,7 @@ _SPEED = re.compile(r"(\d+(?:\.\d+)?\s*[KMGT]i?B/s)")
 _DL_ARIA = re.compile(r"DL:\s*(\d+(?:\.\d+)?\s*[KMGT]i?B)")
 _SIZES = re.compile(r"(\d+(?:\.\d+)?\s*[KMGT]i?B)\s*/\s*(\d+(?:\.\d+)?\s*[KMGT]i?B)")
 _OF = re.compile(r"\bof\s+~?\s*(\d+(?:\.\d+)?\s*[KMGT]i?B)")
-_ETA = re.compile(r"ETA[:\s]+(\d{1,2}:\d{2}(?::\d{2})?|\d+s)")
+_ETA = re.compile(r"ETA[:\s]+([\d:mshdMSHD]+)")
 
 
 def parse_progress(line: str) -> dict:
