@@ -10,7 +10,7 @@ from ..cli_utils import (
     pause,
     spinner,
 )
-from .playback import play_episode_flow, download_episodes_batch
+from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 from ..i18n import t
 from ..icons import icon
 
@@ -133,6 +133,9 @@ def handle_french_manga():
         ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
         if ep_idx == len(ep_nums):  # Download ALL
             ep_objects = [_Ep(f"Episode {n}", episodes[n], selection.url) for n in ep_nums]
+            preferred = _pick_player_for_batch(ep_objects, {"Referer": french_manga.website_origin + "/"})
+            if preferred is None:
+                continue
             download_episodes_batch(
                 provider_name="French-Manga",
                 series_title=data.get("title") or selection.title,
@@ -142,6 +145,7 @@ def handle_french_manga():
                 season_url=selection.url,
                 logo_url=data.get("cover", ""),
                 headers={"Referer": french_manga.website_origin + "/"},
+                preferred_player=preferred,
             )
             continue
         if ep_idx > len(ep_nums):

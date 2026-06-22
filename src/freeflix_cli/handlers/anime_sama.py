@@ -15,7 +15,7 @@ from ..tracker import tracker
 from ..anilist import anilist_client
 from ..i18n import t
 from ..icons import icon
-from .playback import play_episode_flow, download_episodes_batch
+from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 import re
 
 
@@ -249,6 +249,9 @@ def handle_anime_sama():
                     default_index=min(ep_idx, len(episodes) - 1),
                 )
                 if ep_idx == len(episodes):  # Download ALL
+                    preferred = _pick_player_for_batch(episodes, {"Referer": anime_sama.website_origin})
+                    if preferred is None:
+                        continue
                     download_episodes_batch(
                         provider_name="Anime-Sama",
                         series_title=series.title,
@@ -258,6 +261,7 @@ def handle_anime_sama():
                         season_url=selected_season_access.url,
                         logo_url=series.img,
                         headers={"Referer": anime_sama.website_origin},
+                        preferred_player=preferred,
                     )
                     continue
                 if ep_idx > len(episodes):

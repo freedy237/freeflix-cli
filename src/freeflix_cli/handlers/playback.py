@@ -253,6 +253,63 @@ def play_episode_flow(
             # Loop continues to select list
 
 
+def _pick_player_for_batch(
+    episodes: list,
+    headers: dict,
+) -> str | None:
+    """
+    Analyze the first episode's players, probe qualities, and let the user
+    pick which one to use for the entire batch. Returns the chosen player
+    *name* (e.g. ``"vidmoly"``) or ``None`` if the user backs out.
+    """
+    if not episodes or not getattr(episodes[0], "players", None):
+        return None
+    supported = [p for p in episodes[0].players if player.is_supported(p.url)]
+    if not supported:
+        return None
+
+    quality_map = {}
+    if tracker.get_analyze_players():
+        from concurrent.futures import (
+            ThreadPoolExecutor, as_completed, TimeoutError as _FTimeout,
+        )
+        ANALYSIS_BUDGET = 14
+        ex = ThreadPoolExecutor(max_workers=8)
+        futs = {
+            ex.submit(analyze_stream_quality, p.url, headers): p
+            for p in supported
+        }
+        with spinner(t("Analyzing available qualities…")):
+            try:
+                for fut in as_completed(futs, timeout=ANALYSIS_BUDGET):
+                    p = futs[fut]
+                    try:
+                        quality_map[p.url] = format_quality_label(fut.result())
+                    except Exception:
+                        quality_map[p.url] = "✗"
+            except _FTimeout:
+                pass
+        ex.shutdown(wait=False)
+
+    opts = []
+    for p in supported:
+        try:
+            host = p.url.split("/")[2].split(".")[-2]
+            label = f"{p.name} : {host}"
+        except IndexError:
+            label = p.name
+        q = quality_map.get(p.url)
+        if q:
+            label += f"  —  {q}"
+        opts.append(label)
+    opts.append(t("← Back"))
+
+    idx = select_from_list(opts, "📥 " + t("Select quality for batch download:"))
+    if idx >= len(supported):
+        return None
+    return supported[idx].name
+
+
 def _download_one_episode(
     provider_name: str,
     series_title: str,
@@ -263,6 +320,7 @@ def _download_one_episode(
     logo_url: str,
     headers: dict,
     label: str,
+    preferred_player: str = None,
 ) -> bool:
     """Worker: download a single episode, trying each supported player URL."""
     if not getattr(episode, "players", None):
@@ -273,6 +331,12 @@ def _download_one_episode(
     if not supported_players:
         print_warning(f"{label} — no supported players, skipping.")
         return False
+
+    # Move preferred player to the front so it is tried first.
+    if preferred_player:
+        preferred = [p for p in supported_players if p.name == preferred_player]
+        if preferred:
+            supported_players = preferred + [p for p in supported_players if p.name != preferred_player]
 
     print_info(f"⬇ {label} — starting download")
     clean_season = clean_season_title(series_title, season_title)
@@ -314,6 +378,7 @@ def download_episodes_batch(
     season_url: str,
     logo_url: str = None,
     headers: dict = None,
+    preferred_player: str = None,
 ) -> dict:
     """
     Download every episode in `episodes` non-interactively.
@@ -333,6 +398,7 @@ def download_episodes_batch(
             results[episode.title] = _download_one_episode(
                 provider_name, series_title, season_title, episode,
                 series_url, season_url, logo_url, headers, label,
+                preferred_player,
             )
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -346,6 +412,7 @@ def download_episodes_batch(
                     _download_one_episode,
                     provider_name, series_title, season_title, episode,
                     series_url, season_url, logo_url, headers, label,
+                    preferred_player,
                 )
                 future_to_episode[future] = episode
 

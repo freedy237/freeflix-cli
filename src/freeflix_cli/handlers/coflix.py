@@ -15,7 +15,7 @@ from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
 from .. import terminal_image
-from .playback import play_episode_flow, download_episodes_batch
+from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 from ..cli_utils import spinner
 
 
@@ -169,6 +169,9 @@ def handle_coflix():
                                     full_episodes.append(ep_details)
                                 except Exception:
                                     print_warning(f"{t('Could not load')} {e.title}, {t('skipping')}.")
+                        preferred = _pick_player_for_batch(full_episodes, headers)
+                        if preferred is None:
+                            continue
                         download_episodes_batch(
                             provider_name="Coflix",
                             series_title=content.title,
@@ -178,6 +181,7 @@ def handle_coflix():
                             season_url=selected_season_access.url,
                             logo_url=content.img,
                             headers=headers,
+                            preferred_player=preferred,
                         )
                         continue
                     if ep_idx > len(season.episodes):

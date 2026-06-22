@@ -14,7 +14,7 @@ from ..cli_utils import (
 from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
-from .playback import play_episode_flow, download_episodes_batch
+from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 
 
 def resolve_url(url, base):
@@ -139,6 +139,9 @@ def handle_french_stream():
                     default_index=min(ep_idx, len(episodes) - 1),
                 )
                 if ep_idx == len(episodes):  # Download ALL
+                    preferred = _pick_player_for_batch(episodes, {"Referer": french_stream.website_origin})
+                    if preferred is None:
+                        continue
                     download_episodes_batch(
                         provider_name="French-Stream",
                         series_title=content.title,
@@ -148,6 +151,7 @@ def handle_french_stream():
                         season_url=content.url,
                         logo_url=content.img,
                         headers={"Referer": french_stream.website_origin},
+                        preferred_player=preferred,
                     )
                     continue
                 if ep_idx > len(episodes):
