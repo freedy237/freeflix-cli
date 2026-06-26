@@ -35,7 +35,7 @@ if (Get-Command "uv" -ErrorAction SilentlyContinue) {
     $null = New-Item -ItemType Directory -Path $tmp -Force
     try {
         $zip = "$tmp\uv.zip"
-        Write-Host "       (≈10 MiB — please wait)"
+        Write-Host "       (~10 MiB - please wait)"
         [Net.WebClient]::new().DownloadFile(
             "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
             $zip
@@ -78,7 +78,7 @@ if (-not $havePy -and (Get-Command "winget" -ErrorAction SilentlyContinue)) {
 
 # ===== 3. Install freeflix-cli + yt-dlp via uv =====
 # Pin a stable, well-tested CPython 3.12 (the code supports 3.9+, but pinning
-# avoids landing on the system's old/bleeding-edge Python — e.g. a system 3.9).
+# avoids landing on the system's old/bleeding-edge Python - e.g. a system 3.9).
 # --force so re-running the installer always upgrades to the latest. Falls back
 # to whatever Python uv can use if the 3.12 fetch fails (offline / locked-down).
 Log "Installing freeflix-cli ..."
