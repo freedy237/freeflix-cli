@@ -11,6 +11,8 @@ No package-data bundling : we fetch the configs straight from this
 repo's main branch, which keeps the wheel small.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import time

@@ -1,6 +1,7 @@
 import os
 import readchar
 import re
+import threading
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
@@ -354,8 +355,6 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         ready, an animated spinner while it loads, or a placeholder glyph if no
         cover exists. The panel has a FIXED height + vertical centering, so the
         box never jumps whatever the poster's real height turns out to be."""
-        from rich.align import Align
-        from rich.spinner import Spinner
         txt = _poster_text(cover, p_cols, p_rows)
         if txt is not None:
             txt.no_wrap = True       # crop, never wrap → can't spill the frame
@@ -441,7 +440,6 @@ def select_with_preview(labels, prompt, previews, default_index=0):
 
     def render():
         nonlocal start
-        from rich.align import Align
         h, left_w, right_w, p_cols, p_rows = _dims()
         win = max(3, h - 4)
         vis = visible
@@ -681,23 +679,34 @@ def print_header(text: str):
     console.print(_header_panel(text))
 
 
+_suppress_print = threading.local()
+
+
 def print_success(message: str):
     """Print a success message with a checkmark."""
+    if getattr(_suppress_print, "active", False):
+        return
     console.print(f"[{color('success')}]✓[/{color('success')}] {iconify(message)}")
 
 
 def print_error(message: str):
     """Print an error message with an X."""
+    if getattr(_suppress_print, "active", False):
+        return
     console.print(f"[{color('error')}]✗[/{color('error')}] {iconify(message)}")
 
 
 def print_info(message: str):
     """Print an info message."""
+    if getattr(_suppress_print, "active", False):
+        return
     console.print(f"[{color('info')}]ℹ[/{color('info')}] {iconify(message)}")
 
 
 def print_warning(message: str):
     """Print a warning message."""
+    if getattr(_suppress_print, "active", False):
+        return
     console.print(f"[{color('warning')}]⚠[/{color('warning')}] {iconify(message)}")
 
 

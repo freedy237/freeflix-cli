@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.7.3
+
+### ⬇️ Downloads
+- **Esc Esc to cancel** a download (single and whole-season batch). The box now
+  shows the hint; arrow keys don't count, so it's only a deliberate double-Esc.
+- **aria2c progress bar fixed**: the reader kept only progress lines, so aria2c's
+  `[#… (X%) …]` line (printed inside a summary block with FILE:/---- junk) is no
+  longer overwritten before the UI reads it — the bar climbs live instead of
+  sitting on "starting…".
+- **Unknown total size** (e.g. sibnet serves the mp4 with no Content-Length):
+  show the downloaded amount + speed instead of "starting…".
+- **Season download** quality menu now lists the **resolutions** (not the
+  players) with an **approximate size per episode**; pick one to download.
+
+### 🧭 Navigation
+- Pressing **Esc to leave a search now returns to the source list**, not the
+  home menu, so you can pick another source or re-search immediately.
+
+### 🔌 Coflix search
+- Rewritten: the query is **URL-encoded** (titles with spaces/accents work),
+  non-JSON / errors no longer crash, malformed entries are skipped, image URLs
+  are extracted robustly. On HTTP 429 (the site rate-limiting/blocking the
+  search) a clear message is shown instead of a misleading "no results".
+
+### 🐍 Python compatibility
+- Added `from __future__ import annotations` to every module using `X | Y`
+  type unions — fixes import crashes on **Python 3.9** (PEP 604 isn't evaluable
+  there at runtime).
+- Installer pins a stable **CPython 3.12** and passes `--force`, so re-running
+  the one-liner always upgrades existing installs to the latest fixes.
+
+### 🧹 Cleanup
+- Fixed latent `NameError`s (`print_warning` / `re` used but not imported),
+  removed duplicate i18n keys and dead code (ruff-clean on touched files).
+
 ## 1.6.11
 
 ### 🌐 French-Stream DNS timeout (fix)

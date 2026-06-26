@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import shutil
 import platform
 import os
@@ -15,7 +17,9 @@ from .cli_utils import (
     print_info,
     print_error,
     print_success,
+    print_warning,
     console,
+    _suppress_print,
 )
 from .scraping import player
 from . import proxy
@@ -419,10 +423,61 @@ def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> 
             q = _ffprobe_quality(stream_url, probe_headers, timeout=12)
             if q:
                 out["qualities"] = [q]
+        # Keep what's needed to estimate episode duration later (one media
+        # playlist holds the same EXTINF total for every variant), so the
+        # batch-download menu can show an approximate size per episode without
+        # re-resolving the player.
+        out["stream_url"] = stream_url
+        out["probe_headers"] = probe_headers
+        if variants:
+            out["variant_uri"] = variants[0].get("uri")
         out["ok"] = True
     except Exception:
         return out
     return out
+
+
+def estimate_episode_seconds(info: dict) -> float | None:
+    """
+    Best-effort episode duration (seconds) from an HLS media playlist : sum its
+    ``#EXTINF`` segment durations. One small text fetch, no ffprobe. Returns
+    None for direct (non-HLS) files or on any failure.
+    """
+    if not info:
+        return None
+    media_url = info.get("variant_uri") or info.get("stream_url")
+    if not media_url:
+        return None
+    low = media_url.split("?")[0].lower()
+    if low.endswith((".mp4", ".mkv", ".avi", ".webm", ".mov")):
+        return None  # would need ffprobe; not worth it for a size estimate
+    try:
+        from curl_cffi import requests as _rq
+        import m3u8 as _m3u8
+
+        sess = _rq.Session(impersonate="chrome")
+        try:
+            sess.curl_options.update(proxy.DNS_OPTIONS)
+        except Exception:
+            pass
+        headers = info.get("probe_headers") or {}
+        text = sess.get(media_url, headers=headers, timeout=10).text or ""
+        # If we landed on a master, descend into its first media playlist.
+        if "#EXT-X-STREAM-INF" in text:
+            obj = _m3u8.loads(text, uri=media_url)
+            if obj.playlists:
+                media_url = obj.playlists[0].absolute_uri
+                text = sess.get(media_url, headers=headers, timeout=10).text or ""
+        total = 0.0
+        for line in text.splitlines():
+            if line.startswith("#EXTINF:"):
+                try:
+                    total += float(line[8:].split(",", 1)[0])
+                except ValueError:
+                    pass
+        return total or None
+    except Exception:
+        return None
 
 
 def format_quality_label(info: dict) -> str:
@@ -662,7 +717,6 @@ def _mpv_position_args(title: str):
     if no saved position needs restoring AND no key can be built.
     """
     import hashlib
-    import tempfile
     import uuid
 
     if not title or title == "FreeFlix Stream":
@@ -749,6 +803,8 @@ def _download_stream(
     is_mp4: bool = False,
     local_subtitle_path: str = None,
     quality: int = None,
+    _with_ui: bool = True,
+    batch_view=None,
 ) -> bool:
     """
     Download a resolved stream to ~/Downloads/FreeFlix/.
@@ -858,30 +914,42 @@ def _download_stream(
                 cmd.extend(["-f", format_arg])
             cmd.append(stream_url)
 
-    print_info(
-        f"Downloading [bold cyan]{safe_title}[/bold cyan] via "
-        f"[bold cyan]{backend_name}[/bold cyan]"
-    )
-    print_info(f"Output: [cyan]{DOWNLOAD_DIR}[/cyan]")
+    output_suppressed = getattr(_suppress_print, "active", False)
 
-    # Swallow yt-dlp / aria2c's noisy logs and show a clean themed bar with
-    # speed + downloaded/total + ETA instead.
+    if not output_suppressed:
+        print_info(
+            f"Downloading [bold cyan]{safe_title}[/bold cyan] via "
+            f"[bold cyan]{backend_name}[/bold cyan]"
+        )
+        print_info(f"Output: [cyan]{DOWNLOAD_DIR}[/cyan]")
+
     dl_ok = False
     try:
         from . import progress as _progress
-        rc = _progress.run_download_with_bar(cmd, safe_title)
-        if rc != 0:
-            print_error(f"Download failed (exit code {rc}).")
+        if _with_ui:
+            label = title  # original display label (not sanitised)
+            cb = (lambda _safe, info: batch_view.update(label, info)) if batch_view else None
+            cancel = batch_view.is_cancelled if batch_view else None
+            rc = _progress.run_download_with_bar(
+                cmd, safe_title, batch_callback=cb, cancel_check=cancel
+            )
+            dl_ok = rc == 0
         else:
-            dl_ok = True
+            import subprocess as _sp
+            rc = _sp.run(cmd, env=None).returncode
+            dl_ok = rc == 0
+        if not dl_ok and not output_suppressed:
+            print_error(f"Download failed (exit code {rc}).")
     except KeyboardInterrupt:
-        print_info("\nDownload interrupted by user.")
+        if not output_suppressed:
+            print_info("\nDownload interrupted by user.")
     except Exception as e:
-        print_error(f"Download error: {e}")
+        if not output_suppressed:
+            print_error(f"Download error: {e}")
     finally:
-        _sweep_download_litter()  # tidy up whatever the backend left behind
+        _sweep_download_litter()
         if dl_ok and frag_tmp:
-            shutil.rmtree(frag_tmp, ignore_errors=True)  # success → cleanup
+            shutil.rmtree(frag_tmp, ignore_errors=True)
         # On failure/interrupt: keep frag_tmp so yt-dlp can resume next time
 
     if not dl_ok:
@@ -908,6 +976,8 @@ def play_video(
     is_direct: bool = False,
     is_mp4: bool = False,
     force_player: str = None,
+    _with_ui: bool = True,
+    batch_view=None,
 ) -> bool:
     """
     Attempt to play a video with the chosen player.
@@ -925,7 +995,10 @@ def play_video(
         for old, new in player.new_url.items():
             url = url.replace(old, new)
 
-    print_info(f"Resolving stream for: [cyan]{url}[/cyan]")
+    output_suppressed = getattr(_suppress_print, "active", False)
+
+    if not output_suppressed:
+        print_info(f"Resolving stream for: [cyan]{url}[/cyan]")
 
     # Determine player configuration
     player_config = {}
@@ -938,37 +1011,42 @@ def play_video(
         stream_url = url
     else:
         try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                progress.add_task(description="Getting stream URL...", total=None)
+            if output_suppressed:
                 stream_url = player.get_hls_link(url, headers)
-                if stream_url and stream_url.startswith("/"):
-                    stream_url = (
-                        "https://"
-                        + url.removeprefix("https://")
-                        .removeprefix("http://")
-                        .split("/")[0]
-                        + stream_url
-                    )
+            else:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    progress.add_task(description="Getting stream URL...", total=None)
+                    stream_url = player.get_hls_link(url, headers)
+            if stream_url and stream_url.startswith("/"):
+                stream_url = (
+                    "https://"
+                    + url.removeprefix("https://")
+                    .removeprefix("http://")
+                    .split("/")[0]
+                    + stream_url
+                )
         except Exception as e:
-            print_error(f"Error resolving stream URL: {e}")
+            if not output_suppressed:
+                print_error(f"Error resolving stream URL: {e}")
             return False
 
     if not stream_url:
-        print_error("Could not resolve stream URL.")
+        if not output_suppressed:
+            print_error("Could not resolve stream URL.")
         return False
 
-    print_success(f"Stream URL: [cyan]{stream_url}[/cyan]")
+    if not output_suppressed:
+        print_success(f"Stream URL: [cyan]{stream_url}[/cyan]")
 
     local_subtitle_path = subtitle_url
     if subtitle_url and subtitle_url.startswith("http"):
         print_info("Downloading subtitle file for compatibility...")
         try:
             from curl_cffi import requests
-            import tempfile
 
             r = requests.get(subtitle_url, timeout=10, impersonate="chrome")
             content = r.content
@@ -1147,6 +1225,8 @@ def play_video(
                 is_mp4=is_mp4,
                 local_subtitle_path=local_subtitle_path,
                 quality=selected_quality,
+                _with_ui=_with_ui,
+                batch_view=batch_view,
             )
             if success:
                 return True
@@ -1170,7 +1250,7 @@ def play_video(
                 return False
 
         if player_name == "browser":
-            print_info(f"Launching [bold cyan]Browser[/bold cyan] Player...")
+            print_info("Launching [bold cyan]Browser[/bold cyan] Player...")
 
             # Construct Proxy URL
             proxy_headers = headers.copy()

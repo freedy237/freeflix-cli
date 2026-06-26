@@ -32,7 +32,18 @@ def handle_coflix():
             break
 
         with spinner(f"Searching for {query}…"):
-            results = coflix.search(query)
+            try:
+                results = coflix.search(query)
+            except Exception as e:
+                if "429" in str(e):
+                    print_warning(
+                        "Coflix is rate-limiting / blocking searches right now "
+                        "(HTTP 429). Wait a few minutes, or use another source."
+                    )
+                else:
+                    print_warning(f"Search error: {e}")
+                pause()
+                continue
 
         if not results:
             print_warning("No results found.")
@@ -156,7 +167,7 @@ def handle_coflix():
 
                 while True:  # ── Episode ──
                     ep_idx = select_from_list(
-                        [e.title for e in season.episodes] + ["📥 " + t("Download ALL episodes"), t("← Back")],
+                        [e.title for e in season.episodes] + [f"{icon('download')} {t('Download ALL episodes')}", t("← Back")],
                         f"{icon('tv')} {t('Select Episode:')}",
                     )
                     if ep_idx == len(season.episodes):  # Download ALL

@@ -77,14 +77,14 @@ if (-not $havePy -and (Get-Command "winget" -ErrorAction SilentlyContinue)) {
 }
 
 # ===== 3. Install freeflix-cli + yt-dlp via uv =====
-# If system Python was found (winget or pre-existing), tell uv to never
-# download a standalone build — avoids stalls on unreliable connections.
-$pyFlag = if ($havePy) { @("--python-preference", "only-system") } else { @() }
-
+# Pin a stable, well-tested CPython 3.12 (the code supports 3.9+, but pinning
+# avoids landing on the system's old/bleeding-edge Python — e.g. a system 3.9).
+# --force so re-running the installer always upgrades to the latest. Falls back
+# to whatever Python uv can use if the 3.12 fetch fails (offline / locked-down).
 Log "Installing freeflix-cli ..."
-uv tool install freeflix-cli --force @pyFlag
+uv tool install freeflix-cli --force --python 3.12
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "       (retrying without Python pin — may download Python)..."
+    Write-Host "       (retrying without Python pin)..."
     uv tool install freeflix-cli --force
 }
 if ($LASTEXITCODE -ne 0) {

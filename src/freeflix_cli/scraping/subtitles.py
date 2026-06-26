@@ -28,7 +28,7 @@ class SubtitleExtractor:
             response.raise_for_status()
             data = response.json()
             return data.get("subtitles", [])
-        except Exception as e:
+        except Exception:
             # Uncomment for debugging:
             # print(f"Subtitles Error ({base_url}): {e}")
             # In library mode, we stay discreet about network errors

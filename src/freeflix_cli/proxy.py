@@ -202,7 +202,7 @@ def proxy_stream():
     # 2. Parsing with m3u8 library
     try:
         m3u8_obj = m3u8.loads(content, uri=target_url)
-    except Exception as e:
+    except Exception:
         # If parsing fails, return as is (fallback)
         return Response(content, mimetype="application/vnd.apple.mpegurl")
 

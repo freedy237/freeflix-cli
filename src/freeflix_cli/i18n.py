@@ -49,7 +49,6 @@ _FR = {
     "No": "Non",
 
     # ── History ─────────────────────────────────────────────────
-    "📜 My History": "📜 Mon historique",
     "No history found.": "Aucun historique trouvé.",
     "Select an entry to resume or delete:": "Choisis une entrée à reprendre ou à supprimer :",
     "Action:": "Action :",
@@ -92,7 +91,9 @@ _FR = {
     "Mark which episode as watched?": "Marquer quel épisode comme vu ?",
     "✓ Mark an episode as watched (no play)": "✓ Marquer un épisode comme vu (sans le lire)",
     "Download ALL episodes": "Télécharger TOUS les épisodes",
-    "Mark which episode as watched?": "Marquer quel épisode comme vu ?",
+    "Analyzing available qualities…": "Analyse des qualités disponibles…",
+    "Estimating episode size…": "Estimation de la taille par épisode…",
+    "Select quality for batch download:": "Choisis la qualité pour le téléchargement complet :",
     "Marked as watched.": "Marqué comme vu.",
     "Play next episode:": "Lire l'épisode suivant :",
     "Continue": "Continuer",
@@ -185,7 +186,6 @@ _FR = {
     # ── Playback feedback ───────────────────────────────────────
     "Try another server/player": "Essayer un autre serveur/lecteur",
     "← Back to main menu": "← Retour au menu principal",
-    "What would you like to do?": "Que veux-tu faire ?",
     "The player failed. What would you like to do?": "Le lecteur a échoué. Que veux-tu faire ?",
     "The download failed. What would you like to do?": "Le téléchargement a échoué. Que veux-tu faire ?",
     "Try another player": "Essayer un autre lecteur",

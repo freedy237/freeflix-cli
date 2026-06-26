@@ -244,7 +244,7 @@ def handle_anime_sama():
             ep_idx = 0
             while True:  # ── Episode ──
                 ep_idx = select_from_list(
-                    [e.title for e in episodes] + ["📥 " + t("Download ALL episodes"), back],
+                    [e.title for e in episodes] + [f"{icon('download')} {t('Download ALL episodes')}", back],
                     f"{icon('tv')} {t('Select Episode:')}",
                     default_index=min(ep_idx, len(episodes) - 1),
                 )

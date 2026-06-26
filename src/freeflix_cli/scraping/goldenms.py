@@ -1,5 +1,6 @@
 from curl_cffi import requests as cffi_requests
 import urllib.parse
+import re
 from .config import portals
 from ..proxy import DNS_OPTIONS
 

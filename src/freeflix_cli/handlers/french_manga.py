@@ -129,7 +129,7 @@ def handle_french_manga():
         episodes = data[selected_lang]
         ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
 
-        ep_options = [f"Episode {n}" for n in ep_nums] + ["📥 " + t("Download ALL episodes"), t("← Back")]
+        ep_options = [f"Episode {n}" for n in ep_nums] + [f"{icon('download')} {t('Download ALL episodes')}", t("← Back")]
         ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
         if ep_idx == len(ep_nums):  # Download ALL
             ep_objects = [_Ep(f"Episode {n}", episodes[n], selection.url) for n in ep_nums]

@@ -134,7 +134,7 @@ def handle_french_stream():
             ep_idx = 0
             while True:  # ── Episode ──
                 ep_idx = select_from_list(
-                    [e.title for e in episodes] + ["📥 " + t("Download ALL episodes"), t("← Back")],
+                    [e.title for e in episodes] + [f"{icon('download')} {t('Download ALL episodes')}", t("← Back")],
                     f"{icon('tv')} {t('Select Episode:')}",
                     default_index=min(ep_idx, len(episodes) - 1),
                 )
@@ -149,7 +149,7 @@ def handle_french_stream():
                         episodes=episodes,
                         series_url=content.url,
                         season_url=content.url,
-                        logo_url=content.img,
+                        logo_url=getattr(content, "img", None),
                         headers={"Referer": french_stream.website_origin},
                         preferred_player=preferred,
                     )
@@ -269,9 +269,6 @@ def resume_french_stream(data):
             selected_episode = episodes[ep_idx]
             if not selected_episode.players:
                 return
-            supported = [
-                p for p in selected_episode.players if player.is_supported(p.url)
-            ]
 
             success = play_episode_flow(
                 provider_name="French-Stream",

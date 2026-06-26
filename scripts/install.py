@@ -220,10 +220,18 @@ def _install_uv() -> bool:
 
 
 def _install_tool(name: str) -> bool:
-    """Run ``uv tool install <name>``."""
+    """Run ``uv tool install <name>``.
+
+    For freeflix-cli we pin a stable, well-tested CPython (3.12 — the code
+    itself supports 3.9+) so new installs never land on a bleeding-edge
+    release, and we pass --force so re-running the installer always upgrades
+    to the latest version (existing users get every fix)."""
+    cmd = ["uv", "tool", "install", name]
+    if name == "freeflix-cli":
+        cmd += ["--python", "3.12", "--force"]
     try:
         result = subprocess.run(
-            ["uv", "tool", "install", name],
+            cmd,
             capture_output=True,
             text=True,
         )

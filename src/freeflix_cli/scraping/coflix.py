@@ -12,6 +12,7 @@ from .objects import (
 )
 import base64
 import re
+import urllib.parse
 from ..proxy import DNS_OPTIONS
 
 website_origin = ""
@@ -25,7 +26,10 @@ def _get(url, **kw):
     GET that rides a cf_clearance cookie if set, and — on a Cloudflare block
     — asks FlareSolverr to auto-solve the challenge, then retries once.
     Cascade : curl_cffi → FlareSolverr → manual cf_clearance → block message.
+    On HTTP 429 (rate‑limit) sleeps 3 s and retries once.
     """
+    import time as _time
+
     base_headers = kw.pop("headers", {})
 
     def _fetch():
@@ -33,9 +37,14 @@ def _get(url, **kw):
         h = {**cf, **base_headers} if cf else dict(base_headers)
         return scraper.get(url, headers=h, **kw) if h else scraper.get(url, **kw)
 
-    resp = _fetch()
-    if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
+    for attempt in range(2):
         resp = _fetch()
+        if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
+            resp = _fetch()
+        if resp.status_code == 429 and attempt == 0:
+            _time.sleep(3)
+            continue
+        return resp
     return resp
 
 
@@ -57,25 +66,64 @@ def get_website_url(portal=portals["coflix"]):
     website_origin = response.url
 
 
-def search(query: str) -> list[SearchResult]:
-    page = website_origin + f"/suggest.php?query={query}"
+def _clean_image(raw: str) -> str:
+    """
+    Coflix's suggest endpoint returns the cover as an HTML ``<img …>`` snippet,
+    a protocol-relative ``//host/…`` URL, or sometimes a relative path. Pull a
+    usable absolute URL out of whatever it sends.
+    """
+    if not raw:
+        return ""
+    m = re.search(r'src=["\']([^"\']+)', raw)   # <img … src="…">
+    url = (m.group(1) if m else raw).strip()
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("http"):
+        return url
+    if url:
+        return website_origin.rstrip("/") + "/" + url.lstrip("/")
+    return ""
 
-    response = _get(page)
-    response.raise_for_status()
-    response = response.json()
+
+def search(query: str) -> list[SearchResult]:
+    """
+    Search Coflix via its suggest endpoint. Robust by design : the query is
+    URL-encoded (titles with spaces/accents now work), a non-JSON / blocked /
+    error response yields an empty list instead of crashing, and malformed
+    entries are skipped.
+    """
+    page = website_origin.rstrip("/") + "/suggest.php?query=" + urllib.parse.quote(query)
+
+    try:
+        response = _get(page)
+    except Exception:
+        return []  # network error → no results
+
+    # 429 = the site is rate-limiting / blocking the search endpoint. Raise so
+    # the handler can tell the user it's a temporary block (not "no results").
+    if getattr(response, "status_code", None) == 429:
+        raise RuntimeError("Coflix 429 — search temporarily blocked by the site")
+
+    try:
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return []  # other HTTP error / Cloudflare / non-JSON → no results
+
+    if not isinstance(data, list):
+        return []
 
     results: list[SearchResult] = []
-
-    for result in response:
-        image: str = result["image"]
-        # Handle cases where the image might not have the expected format
-        try:
-            image = "https://" + image.split("//")[1].split('"')[0]
-        except IndexError:
-            pass  # Keep the original url if the split fails
-
-        results.append(SearchResult(result["title"], result["url"], image, []))
-
+    for result in data:
+        if not isinstance(result, dict):
+            continue
+        title = result.get("title") or result.get("name")
+        url = result.get("url")
+        if not title or not url:
+            continue
+        results.append(
+            SearchResult(title, url, _clean_image(result.get("image", "")), [])
+        )
     return results
 
 

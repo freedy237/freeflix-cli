@@ -584,15 +584,19 @@ def main():
             if others:
                 group_headers[len(anime) + len(movies)] = t("Other")
 
-            p_items = [p["name"] for p in ordered] + [t("← Back")]
-            p_idx = select_from_list(
-                p_items,
-                t("Select a Provider:"),
-                header=f"{icon('globe')} {t('Sources')}",
-                group_headers=group_headers,
-            )
-
-            if p_idx < len(ordered):
+            # Stay in the source list : when a provider's flow ends (search
+            # cancelled with Esc, finished, or backed out), come back HERE —
+            # not to the home menu. Only the list's "← Back" returns home.
+            while True:
+                p_items = [p["name"] for p in ordered] + [t("← Back")]
+                p_idx = select_from_list(
+                    p_items,
+                    t("Select a Provider:"),
+                    header=f"{icon('globe')} {t('Sources')}",
+                    group_headers=group_headers,
+                )
+                if p_idx >= len(ordered):
+                    break  # ← Back → home menu
                 ordered[p_idx]["handler"]()
             continue
 
