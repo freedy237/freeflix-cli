@@ -23,6 +23,7 @@ from .handlers import (
     coflix,
     french_stream,
     french_manga,
+    papystreaming,
     anilist,
     goldenanime,
     goldenms,
@@ -371,6 +372,12 @@ def _register_providers():
         supported_languages=["fr"],
         category="movies",
     )
+    registry.register(
+        f"{icon('movie')} Papystreaming (Films & Séries VF)",
+        papystreaming.handle_papystreaming,
+        supported_languages=["fr"],
+        category="movies",
+    )
     # Coflix : self-heals (coflix.dance/.cymru…) ; on a Cloudflare captcha it
     # raises a clean "protégée par Cloudflare" message instead of crashing.
     registry.register(
@@ -513,21 +520,21 @@ def main():
             menu_items.append(f"{icon('play')} {t('Continue from AniList')}")
             anilist_resume_idx = len(menu_items) - 1
 
-        # 3. My History
+        # 3. Browse sources — right after Resume (the main action)
+        menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
+        providers_idx = len(menu_items) - 1
+
+        # 4. My History
         menu_items.append(f"{icon('history')} {t('My History')}")
         history_idx = len(menu_items) - 1
 
-        # 4. My Downloads (local files in ~/Downloads/FreeFlix/)
+        # 5. My Downloads (local files in ~/Downloads/FreeFlix/)
         menu_items.append(f"{icon('folder')} {t('My Downloads')}")
         downloads_idx = len(menu_items) - 1
 
-        # 4b. My Stats
+        # 6. My Stats
         menu_items.append(f"{icon('stats')} {t('My Stats')}")
         stats_idx = len(menu_items) - 1
-
-        # 5. Providers
-        menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
-        providers_idx = len(menu_items) - 1
 
         # 6. Settings / Exit
         menu_items.append(f"{icon('settings')} {t('Settings (AniList)')}")

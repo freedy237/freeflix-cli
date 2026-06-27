@@ -14,6 +14,7 @@ repo's main branch, which keeps the wheel small.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import shutil
@@ -436,11 +437,15 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
             with _progress.LoadingScreen(status="Installing dependencies…") as _ls:
                 total = len(todo)
                 for i, (label, pkg_id, bins) in enumerate(todo):
-                    _ls.status(f"Installing {label}…", frac=i / total)
+                    # Target the NEXT milestone so the bar keeps CLIMBING
+                    # smoothly toward it while this tool installs (winget gives
+                    # no real %), instead of sitting then jumping.
+                    _ls.status(f"Installing {label}… ({i + 1}/{total})",
+                               frac=(i + 1) / total)
                     if not _have(bins):
                         _winget_install(pkg_id)
                 _ls.status("Finishing up…", frac=1.0)
-                time.sleep(0.3)
+                time.sleep(0.5)
 
     if runtime_ready():
         tracker.data["system_deps_ok"] = True
@@ -1197,9 +1202,35 @@ def _ver_tuple(v):
 # first launch after upgrading PAST that version. Use it to install a newly
 # required tool, refresh configs, or clean up a removed feature.
 #   e.g. ("1.6.0", "Feature X removed — cleaning up", _cleanup_x)
+def _fix_anime4k_input_conf():
+    """Convert an old ':'-joined glsl-shaders `set` in input.conf to per-shader
+    `append` calls (cross-platform). The ':' separator broke the Anime4K toggle
+    on Windows, where mpv uses ';'. In-place, offline, only touches input.conf."""
+    inp = get_mpv_config_dir() / "input.conf"
+    if not inp.is_file():
+        return
+    try:
+        txt = inp.read_text(encoding="utf-8")
+        if 'glsl-shaders set "' not in txt:
+            return  # already migrated / new format
+
+        def _conv(m):
+            paths = [p for p in m.group(1).split(":") if p]
+            parts = ['change-list glsl-shaders clr ""']
+            parts += [f'change-list glsl-shaders append "{p}"' for p in paths]
+            return "; ".join(parts)
+
+        fixed = re.sub(r'change-list glsl-shaders set "([^"]+)"', _conv, txt)
+        if fixed != txt:
+            inp.write_text(fixed, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _migrations():
     return [
         ("1.5.7", "Anime posters need chafa", install_chafa),
+        ("1.7.4", "Fix Anime4K shader toggle on Windows", _fix_anime4k_input_conf),
     ]
 
 

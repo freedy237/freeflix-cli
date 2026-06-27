@@ -84,7 +84,8 @@ class LoadingScreen:
     def __init__(self, version: str = "", status: str = "Starting up…"):
         self.version = version
         self._status = status
-        self._frac = None          # None -> indeterminate animation
+        self._target_frac = None   # None -> indeterminate animation
+        self._disp_frac = None     # what's actually drawn (eases toward target)
         self._tick = 0
         self._stop = threading.Event()
         self._thread = None
@@ -95,7 +96,7 @@ class LoadingScreen:
     def status(self, text: str = None, frac: float = None):
         if text is not None:
             self._status = text
-        self._frac = frac
+        self._target_frac = frac   # the bar slides smoothly toward this
         if not self._active:  # fallback echo when there's no live screen
             return
 
@@ -129,6 +130,18 @@ class LoadingScreen:
     def _animate(self):
         while not self._stop.is_set():
             self._tick += 1
+            # Ease the drawn fraction toward the target so the bar CLIMBS
+            # smoothly (e.g. 20% -> 40%) instead of jumping between steps.
+            tgt = self._target_frac
+            if tgt is None:
+                self._disp_frac = None
+            else:
+                if self._disp_frac is None:
+                    self._disp_frac = 0.0
+                if self._disp_frac < tgt:
+                    self._disp_frac = min(tgt, self._disp_frac + 0.004)
+                elif self._disp_frac > tgt:
+                    self._disp_frac = tgt
             try:
                 if self._live:
                     self._live.update(self._render())
@@ -146,7 +159,7 @@ class LoadingScreen:
             body.append(Align.center(Text(f"v{self.version}", style=color("dim"))))
         body.append(Text(""))
 
-        track = self._frac if self._frac is not None else None
+        track = self._disp_frac
         b = bar(track, 28) if track is not None else indeterminate(self._tick, 28)
         pct = f"  {int(track * 100):3d}%" if track is not None else ""
         body.append(Align.center(Text.assemble(b, (pct, color("info")))))

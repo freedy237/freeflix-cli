@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.4
+
+### 🆕 New source: Papystreaming (FR — Films & Séries)
+- French TMDB-based catalog with a clean search (titles, posters, year, movie/tv).
+- Series show a **selectable seasons/episodes menu** (via Cinemeta) instead of
+  typing numbers, with ← Back at each level.
+- Streams resolved through the proven shared resolvers (Vidlink/…).
+
+### 🪟 Windows fixes
+- **Anime4K shaders now load on Windows.** The toggle joined shader paths with
+  `:` (Linux/macOS separator) — on Windows mpv uses `;`, so it failed with
+  "Cannot open file …". input.conf now appends each shader individually
+  (cross-platform); a migration rewrites existing configs.
+- **First-run dependency install bar climbs smoothly** (1%→100%) instead of
+  jumping 20/40/80 — it now eases toward the next milestone while each tool
+  installs (winget gives no real %).
+
+### 🧭 Home menu
+- **Browse sources** moved right after Resume (the main action), before
+  History/Downloads/Stats.
 ## 1.7.3
 
 ### ⬇️ Downloads
