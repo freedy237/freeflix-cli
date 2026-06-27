@@ -134,7 +134,7 @@ def handle_french_stream():
             ep_idx = 0
             while True:  # ── Episode ──
                 ep_idx = select_from_list(
-                    [e.title for e in episodes] + [f"{icon('download')} {t('Download ALL episodes')}", t("← Back")],
+                    [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
                     f"{icon('tv')} {t('Select Episode:')}",
                     default_index=min(ep_idx, len(episodes) - 1),
                 )

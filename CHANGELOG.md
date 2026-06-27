@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.7.5
+
+### ⬇️ Season downloads
+- The episode list now offers a simple **Download** (instead of "Download ALL"):
+  pick it, choose the quality, then **multi-select exactly which episodes** to
+  grab (Space to toggle, `a` for all). Episodes **already on disk are detected,
+  shown locked and skipped**.
+- Each season downloads into its **own folder** (`Downloads/FreeFlix/<Series -
+  Season>/`) with clean per-episode filenames.
+- Fixed the **doubled title** in movie/series filenames (e.g.
+  "Meilleurs ennemis - Movie - Meilleurs ennemis").
+- Fixed the **batch progress bar** not moving when downloading selected episodes.
+
+### ⎋ Escape = go back, everywhere
+- Pressing **Esc** in any menu now steps back one level / cancels — e.g. in the
+  episode list it returns to the season list — so you never scroll down to the
+  Back row.
+
+### 🌐 Faster posters
+- Cover images now go through a resizing CDN (wsrv.nl): anime-sama's ~1.3 MB
+  covers on the throttled raw.githubusercontent.com become ~30 KB in ~1 s
+  (instead of ~8 s / timing out). Falls back to the original URL.
+
+### 🪟 Windows
+- **Nerd Font now actually renders**: installing it also sets Windows Terminal's
+  font (`profiles.defaults.font.face`), then prompts to reopen the terminal.
+- On first launch, if a Nerd Font is already present, icons default to **nerd**.
+- First-run dependency install bar climbs smoothly instead of jumping 20/40/80.
+
+### 🔧 Other
+- **Papystreaming** moved to the **EN** sources (its streams are English) and
+  renamed (no more "VF").
+- **Subtitle download is OFF by default** (opt-in from Settings).
+- The default-player names (download/manual/browser) are now translated.
+- Removed the **Continue from AniList** home-menu entry.
+- Anime4K shader toggle made cross-platform (carried over from 1.7.4).
 ## 1.7.4
 
 ### 🆕 New source: Papystreaming (FR — Films & Séries)

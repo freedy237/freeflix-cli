@@ -167,7 +167,7 @@ def handle_coflix():
 
                 while True:  # ── Episode ──
                     ep_idx = select_from_list(
-                        [e.title for e in season.episodes] + [f"{icon('download')} {t('Download ALL episodes')}", t("← Back")],
+                        [e.title for e in season.episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
                         f"{icon('tv')} {t('Select Episode:')}",
                     )
                     if ep_idx == len(season.episodes):  # Download ALL

@@ -340,6 +340,8 @@ def _download_one_episode(
     preferred_player: str = None,
     _with_ui: bool = True,
     batch_view=None,
+    file_title: str = None,
+    subfolder: str = None,
 ) -> bool:
     """Worker: download a single episode, trying each supported player URL."""
     if not getattr(episode, "players", None):
@@ -363,10 +365,12 @@ def _download_one_episode(
         ok = play_video(
             sp.url,
             headers=headers,
-            title=label,
+            title=file_title or label,
             force_player="download",
             _with_ui=_with_ui,
             batch_view=batch_view,
+            subfolder=subfolder,
+            batch_label=label,
         )
         if ok:
             tracker.save_progress(
@@ -390,7 +394,7 @@ def _download_one_episode(
 def _batch_worker(
     provider_name, series_title, season_title, episode,
     series_url, season_url, logo_url, headers, label, preferred_player,
-    batch_view=None,
+    batch_view=None, file_title=None, subfolder=None,
 ) -> bool:
     """Download one episode in batch mode.
 
@@ -406,6 +410,7 @@ def _batch_worker(
             provider_name, series_title, season_title, episode,
             series_url, season_url, logo_url, headers, label,
             preferred_player, _with_ui=True, batch_view=batch_view,
+            file_title=file_title, subfolder=subfolder,
         )
         return ok
     finally:
@@ -436,11 +441,47 @@ def download_episodes_batch(
     from ..progress import BatchView
     from rich.live import Live as _Live
     from rich.align import Align
+    from ..cli_utils import select_multiple
+    from ..player_manager import (
+        clean_season_title, clean_episode_title, is_already_downloaded,
+    )
 
-    total = len(episodes)
-    labels = [f"[{i+1}/{total}] {ep.title}" for i, ep in enumerate(episodes)]
+    # One folder per season + clean per-episode filenames.
+    clean_season = clean_season_title(series_title, season_title)
+    subfolder = f"{series_title} - {clean_season}"
+    file_titles = [
+        clean_episode_title(series_title, season_title, ep.title) or ep.title
+        for ep in episodes
+    ]
+
+    # Episodes already on disk are shown locked (✓) and pre-skipped.
+    done_idx = {
+        i for i, ft in enumerate(file_titles)
+        if is_already_downloaded(ft, subfolder)
+    }
+
+    # Let the user choose WHICH episodes to download (default = all not yet
+    # downloaded). Esc cancels the whole batch.
+    options = []
+    for i, ep in enumerate(episodes):
+        tag = f"  [{t('already downloaded')}]" if i in done_idx else ""
+        options.append(f"{ep.title}{tag}")
+    picked = select_multiple(
+        options,
+        f"{icon('download')} {t('Select episodes to download:')}",
+        preselected={i for i in range(len(episodes)) if i not in done_idx},
+        disabled=done_idx,
+    )
+    if not picked:
+        return {ep.title: (i in done_idx) for i, ep in enumerate(episodes)}
+
+    sel = [(i, episodes[i]) for i in picked]
+    total = len(sel)
+    labels = [f"[{n+1}/{total}] {ep.title}" for n, (i, ep) in enumerate(sel)]
     batch = BatchView(labels)
     results: dict = {ep.title: False for ep in episodes}
+    for i in done_idx:
+        results[episodes[i].title] = True  # already present → counts as done
 
     from concurrent.futures import ThreadPoolExecutor
     parallel = tracker.get_parallel_downloads()
@@ -450,13 +491,14 @@ def download_episodes_batch(
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = []
-        for idx, episode in enumerate(episodes):
-            label = labels[idx]
+        for n, (i, episode) in enumerate(sel):
+            label = labels[n]
             fut = executor.submit(
                 _batch_worker,
                 provider_name, series_title, season_title, episode,
                 series_url, season_url, logo_url, headers, label,
                 preferred_player, batch,
+                file_titles[i], subfolder,
             )
             futures.append((fut, episode))
 

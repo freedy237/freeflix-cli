@@ -246,6 +246,13 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 live.update(generate_renderable())
             elif key == readchar.key.ENTER:
                 break
+            elif key == readchar.key.ESC:
+                # Esc = go back / cancel, anywhere in FreeFlix. Every menu in the
+                # app appends its Back / Cancel / Exit entry LAST, and callers
+                # treat the last index (idx >= len(real_items)) as "go back" — so
+                # selecting the last option reliably steps up one level.
+                selected_index = len(options) - 1
+                break
             elif key == readchar.key.CTRL_C:
                 raise KeyboardInterrupt("Menu cancelled by user")
 
@@ -254,6 +261,83 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         f"[{color('success')}]{iconify(options[selected_index])}[/{color('success')}]"
     )
     return selected_index
+
+
+def select_multiple(options, prompt, preselected=None, disabled=None):
+    """
+    Checkbox multi-select. ↑/↓ move · Space toggle · 'a' toggle all · Enter
+    confirm · Esc cancel.
+
+    `preselected` : iterable of indices checked initially (default: all enabled).
+    `disabled`    : iterable of indices shown but NOT toggleable (e.g. already
+                    downloaded) — never part of the result.
+
+    Returns the sorted list of checked indices, or None if cancelled (Esc).
+    """
+    n = len(options)
+    if n == 0:
+        return []
+    disabled = set(disabled or ())
+    if preselected is None:
+        checked = {i for i in range(n) if i not in disabled}
+    else:
+        checked = {i for i in preselected if i not in disabled}
+
+    cursor = next((i for i in range(n) if i not in disabled), 0)
+    page = 12
+
+    from .i18n import t as _t
+
+    def render():
+        lines = [Text(prompt, style=f"bold {color('accent')}"), Text("")]
+        start = max(0, min(cursor - page // 2, max(0, n - page)))
+        end = min(n, start + page)
+        if start > 0:
+            lines.append(Text("  ↑ ...", style=color("dim")))
+        for i in range(start, end):
+            box = "[x]" if i in checked else "[ ]"
+            if i in disabled:
+                box = "[✓]"
+            row = f"{box} {options[i]}"
+            if i == cursor:
+                lines.append(Text(f"❯ {row}", style=f"bold {color('accent')} reverse"))
+            elif i in disabled:
+                lines.append(Text(f"  {row}", style=color("dim")))
+            else:
+                lines.append(Text(f"  {row}", style="white"))
+        if end < n:
+            lines.append(Text("  ↓ ...", style=color("dim")))
+        lines.append(Text(""))
+        lines.append(Text(f"  {len(checked)} {_t('selected')}", style=color("info")))
+        # Bottom hint — highlight Space, which toggles the current line.
+        lines.append(Text(
+            f"  ↑/↓ · {_t('Space: select')} · {_t('a: all')} · "
+            f"{_t('Enter: confirm')} · {_t('Esc: back')}",
+            style=f"bold {color('accent')}"))
+        return Group(*lines)
+
+    with Live(render(), refresh_per_second=20, transient=True) as live:
+        while True:
+            key = readchar.readkey()
+            if key == readchar.key.UP:
+                cursor = (cursor - 1) % n
+            elif key == readchar.key.DOWN:
+                cursor = (cursor + 1) % n
+            elif key == " ":
+                if cursor not in disabled:
+                    checked.discard(cursor) if cursor in checked else checked.add(cursor)
+            elif key in ("a", "A"):
+                enabled = {i for i in range(n) if i not in disabled}
+                checked = set() if checked >= enabled else set(enabled)
+            elif key == readchar.key.ENTER:
+                break
+            elif key == readchar.key.ESC:
+                return None
+            elif key == readchar.key.CTRL_C:
+                raise KeyboardInterrupt("Menu cancelled by user")
+            live.update(render())
+
+    return sorted(checked)
 
 
 def _fit_w(text: str, max_w: int) -> str:

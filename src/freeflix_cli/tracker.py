@@ -249,7 +249,8 @@ class ProgressTracker:
 
     # Offer external-subtitle search before playback (on every source).
     def get_subtitle_search(self) -> bool:
-        return self.data.get("subtitle_search", True)
+        # Off by default — opt-in from Settings.
+        return self.data.get("subtitle_search", False)
 
     def set_subtitle_search(self, on: bool):
         self.data["subtitle_search"] = bool(on)

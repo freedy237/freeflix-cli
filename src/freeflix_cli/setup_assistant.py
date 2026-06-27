@@ -733,6 +733,71 @@ def detect_nerd_font() -> bool:
     return False
 
 
+def _set_windows_terminal_font(face: str) -> bool:
+    """
+    Point Windows Terminal at `face` so the Nerd glyphs actually render —
+    installing/registering the font isn't enough, the terminal must USE it.
+    Edits ``profiles.defaults.font.face`` in settings.json (backs it up first,
+    strips JSONC comments). All settings are preserved; only comments/format
+    are lost. Best-effort — returns True if at least one settings.json updated.
+    """
+    local = os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return False
+    import glob as _glob
+    import json
+    from .config_loader import strip_json_comments, strip_trailing_commas
+
+    candidates = _glob.glob(os.path.join(
+        local, "Packages", "Microsoft.WindowsTerminal_*", "LocalState", "settings.json"
+    )) + [os.path.join(local, "Microsoft", "Windows Terminal", "settings.json")]
+
+    done = False
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            raw = open(path, "r", encoding="utf-8").read()
+            data = json.loads(strip_trailing_commas(strip_json_comments(raw)))
+            profiles = data.setdefault("profiles", {})
+            if isinstance(profiles, list):  # very old schema
+                profiles = {"defaults": {}, "list": profiles}
+                data["profiles"] = profiles
+            defaults = profiles.setdefault("defaults", {})
+            font = defaults.get("font")
+            if not isinstance(font, dict):
+                font = {}
+            font["face"] = face
+            defaults["font"] = font
+            try:
+                if not os.path.exists(path + ".freeflix.bak"):
+                    shutil.copy2(path, path + ".freeflix.bak")
+            except Exception:
+                pass
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            done = True
+        except Exception:
+            pass
+    return done
+
+
+def maybe_default_nerd_icons() -> None:
+    """
+    One-time, on first launch only : if a Nerd Font is already installed,
+    default the icon style to 'nerd' (crisp glyphs). Skipped once the user (or
+    this) has set ``icon_style`` — so a manual choice is always respected.
+    """
+    if "icon_style" in tracker.data:
+        return
+    try:
+        if detect_nerd_font():
+            tracker.data["icon_style"] = "nerd"
+            tracker._save_data()
+    except Exception:
+        pass
+
+
 def install_nerd_font() -> bool:
     """
     Download and install CaskaydiaCove Nerd Font if missing.
@@ -816,7 +881,22 @@ def install_nerd_font() -> bool:
 
     if detect_nerd_font():
         print_success(f"  ✓ {NERD_FONT_NAME} installed")
-        print_info(f"Select '{NERD_FONT_NAME}' in your terminal settings")
+        if os_name == "windows":
+            # Installing the font isn't enough — Windows Terminal must USE it.
+            if _set_windows_terminal_font(NERD_FONT_NAME):
+                print_success("  ✓ Windows Terminal font set to the Nerd Font")
+                print_warning(
+                    "Close ALL Windows Terminal windows and reopen one for the "
+                    "new font to take effect, then the icons will render."
+                )
+            else:
+                print_info(
+                    f"Set your terminal font to '{NERD_FONT_NAME}' manually "
+                    "(Windows Terminal > Settings > Defaults > Appearance > "
+                    "Font face), then reopen the terminal."
+                )
+        else:
+            print_info(f"Select '{NERD_FONT_NAME}' in your terminal settings")
         return True
     print_warning(f"  ! {NERD_FONT_NAME} still not found — install manually")
     return False

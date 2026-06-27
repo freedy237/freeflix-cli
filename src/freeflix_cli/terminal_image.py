@@ -105,27 +105,40 @@ def _download(url: str, attempts: int = 3):
     if cached and os.path.exists(cached):
         return cached
 
-    suffix = ".jpg"
-    low = url.lower()
-    for ext in (".png", ".webp", ".jpeg", ".jpg", ".gif"):
-        if ext in low:
-            suffix = ext
-            break
+    # Route through wsrv.nl first : it resizes + serves from a fast CDN, so a
+    # 1.3 MB anime-sama cover on the THROTTLED raw.githubusercontent.com (which
+    # took ~8 s / timed out) becomes a ~30 KB image in ~1 s. Fall back to the
+    # original URL if wsrv is unreachable. Either way the file is cached under
+    # the ORIGINAL url so callers/keys are unchanged.
+    fetch_urls = [u for u in (_fast_url(url), url) if u]
 
-    for i in range(attempts):
-        try:
-            r = _rq.get(url, impersonate="chrome", timeout=12)
-            if r.status_code == 200 and r.content:
-                fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=suffix)
-                with os.fdopen(fd, "wb") as f:
-                    f.write(r.content)
-                _img_cache[url] = path
-                return path
-        except Exception:
-            pass
-        if i < attempts - 1:
-            time.sleep(0.4)
+    for fetch_url in fetch_urls:
+        for i in range(2):
+            try:
+                r = _rq.get(fetch_url, impersonate="chrome", timeout=12)
+                if r.status_code == 200 and r.content:
+                    fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(r.content)
+                    _img_cache[url] = path
+                    return path
+            except Exception:
+                pass
+            if i == 0:
+                time.sleep(0.3)
     return None
+
+
+def _fast_url(url: str, width: int = 400) -> str:
+    """Rewrite a cover URL to go through wsrv.nl, which resizes it to `width`px
+    and serves it from a fast CDN — small + quick, even when the source host is
+    slow/throttled. Returns "" for already-proxied URLs."""
+    if not url or "wsrv.nl" in url:
+        return ""
+    import urllib.parse
+    src = url.split("://", 1)[-1]  # wsrv wants the URL without the scheme
+    return ("https://wsrv.nl/?url=" + urllib.parse.quote(src, safe="")
+            + f"&w={width}&output=jpg")
 
 
 def prefetch(url: str):

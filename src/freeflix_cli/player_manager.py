@@ -671,8 +671,29 @@ def _stable_temp_dir(safe_title: str) -> str:
     return d
 
 
+def _dedupe_title_segments(title: str) -> str:
+    """
+    Collapse repeated ' - ' segments in a title, so a movie that arrives as
+    ``"Meilleurs ennemis - Movie - Meilleurs ennemis"`` becomes
+    ``"Meilleurs ennemis - Movie"``. Keeps the first occurrence of each segment
+    (case-insensitive), preserving order.
+    """
+    if " - " not in title:
+        return title
+    seen = set()
+    out = []
+    for seg in title.split(" - "):
+        key = seg.strip().lower()
+        if key and key in seen:
+            continue
+        seen.add(key)
+        out.append(seg)
+    return " - ".join(out)
+
+
 def _sanitize_filename(name: str, max_len: int = 200) -> str:
     """Make a string safe to use as a filename across filesystems."""
+    name = _dedupe_title_segments(name)
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
     cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
     if not cleaned:
@@ -805,9 +826,12 @@ def _download_stream(
     quality: int = None,
     _with_ui: bool = True,
     batch_view=None,
+    subfolder: str = None,
+    batch_label: str = None,
 ) -> bool:
     """
-    Download a resolved stream to ~/Downloads/FreeFlix/.
+    Download a resolved stream to ~/Downloads/FreeFlix/ (or a `subfolder` of it,
+    e.g. one folder per season for batch downloads).
 
     Routing:
       - HLS (.m3u8)     -> yt-dlp (handles segments via ffmpeg)
@@ -817,7 +841,9 @@ def _download_stream(
     Subtitles, if previously downloaded, are copied next to the video.
     """
     safe_title = _sanitize_filename(title)
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
+               if subfolder else DOWNLOAD_DIR)
+    os.makedirs(out_dir, exist_ok=True)
     _sweep_download_litter()  # clear any old fragment clutter up front
 
     url_lower = stream_url.lower()
@@ -865,7 +891,7 @@ def _download_stream(
             "--add-header", f"Referer:{referer}",
             "--add-header", f"User-Agent:{user_agent}",
             "--merge-output-format", "mp4",
-            "-P", f"home:{DOWNLOAD_DIR}",
+            "-P", f"home:{out_dir}",
             "-P", f"temp:{frag_tmp}",
             "-o", f"{safe_title}.%(ext)s",
         ]
@@ -887,7 +913,7 @@ def _download_stream(
                 "--console-log-level=notice",
                 f"--header=Referer: {referer}",
                 f"--header=User-Agent: {user_agent}",
-                f"--dir={DOWNLOAD_DIR}",
+                f"--dir={out_dir}",
                 f"--out={safe_title}.mp4",
                 stream_url,
             ]
@@ -908,7 +934,7 @@ def _download_stream(
                 "--no-overwrites",
                 "--add-header", f"Referer:{referer}",
                 "--add-header", f"User-Agent:{user_agent}",
-                "-o", os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s"),
+                "-o", os.path.join(out_dir, f"{safe_title}.%(ext)s"),
             ]
             if format_arg:
                 cmd.extend(["-f", format_arg])
@@ -921,13 +947,16 @@ def _download_stream(
             f"Downloading [bold cyan]{safe_title}[/bold cyan] via "
             f"[bold cyan]{backend_name}[/bold cyan]"
         )
-        print_info(f"Output: [cyan]{DOWNLOAD_DIR}[/cyan]")
+        print_info(f"Output: [cyan]{out_dir}[/cyan]")
 
     dl_ok = False
     try:
         from . import progress as _progress
         if _with_ui:
-            label = title  # original display label (not sanitised)
+            # The BatchView is keyed by the DISPLAY label ("[i/total] title"),
+            # which differs from `title` once a clean per-episode filename is
+            # used — so update by `batch_label` to keep the bar moving.
+            label = batch_label or title
             cb = (lambda _safe, info: batch_view.update(label, info)) if batch_view else None
             cancel = batch_view.is_cancelled if batch_view else None
             rc = _progress.run_download_with_bar(
@@ -957,15 +986,29 @@ def _download_stream(
 
     if local_subtitle_path and os.path.exists(local_subtitle_path):
         sub_ext = os.path.splitext(local_subtitle_path)[1] or ".srt"
-        final_sub = os.path.join(DOWNLOAD_DIR, f"{safe_title}{sub_ext}")
+        final_sub = os.path.join(out_dir, f"{safe_title}{sub_ext}")
         try:
             shutil.copy2(local_subtitle_path, final_sub)
             print_success(f"Subtitle saved: {final_sub}")
         except Exception as e:
             print_info(f"Could not save subtitle next to video: {e}")
 
-    print_success(f"Download completed in {DOWNLOAD_DIR}")
+    print_success(f"Download completed in {out_dir}")
     return True
+
+
+def is_already_downloaded(title: str, subfolder: str = None) -> bool:
+    """
+    True if a completed download for `title` already exists on disk (so a batch
+    can skip it). Mirrors the path `_download_stream` writes to.
+    """
+    out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
+               if subfolder else DOWNLOAD_DIR)
+    base = _sanitize_filename(title)
+    for ext in (".mp4", ".mkv", ".webm"):
+        if os.path.isfile(os.path.join(out_dir, base + ext)):
+            return True
+    return False
 
 
 def play_video(
@@ -978,6 +1021,8 @@ def play_video(
     force_player: str = None,
     _with_ui: bool = True,
     batch_view=None,
+    subfolder: str = None,
+    batch_label: str = None,
 ) -> bool:
     """
     Attempt to play a video with the chosen player.
@@ -1227,6 +1272,8 @@ def play_video(
                 quality=selected_quality,
                 _with_ui=_with_ui,
                 batch_view=batch_view,
+                subfolder=subfolder,
+                batch_label=batch_label,
             )
             if success:
                 return True

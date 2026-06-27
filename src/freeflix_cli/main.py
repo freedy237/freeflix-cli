@@ -24,7 +24,6 @@ from .handlers import (
     french_stream,
     french_manga,
     papystreaming,
-    anilist,
     goldenanime,
     goldenms,
     nyaa as nyaa_handler,
@@ -373,9 +372,9 @@ def _register_providers():
         category="movies",
     )
     registry.register(
-        f"{icon('movie')} Papystreaming (Films & Séries VF)",
+        f"{icon('movie')} Papystreaming (Movies & Series)",
         papystreaming.handle_papystreaming,
-        supported_languages=["fr"],
+        supported_languages=["en"],
         category="movies",
     )
     # Coflix : self-heals (coflix.dance/.cymru…) ; on a Cloudflare captcha it
@@ -423,6 +422,9 @@ def main():
     #    ahead with half the tools missing).
     setup_assistant.ensure_runtime_deps()
 
+    # ── First launch only : default to nerd icons if a Nerd Font is present ──
+    setup_assistant.maybe_default_nerd_icons()
+
     # ── First-launch setup (only if user hasn't declined) ──────
     if setup_assistant.should_prompt_setup():
         setup_assistant.run_setup(force=False)
@@ -437,6 +439,12 @@ def main():
     # ── Post-upgrade migrations : first launch after an upgrade finishes
     #    installing whatever the new version needs (and cleans up removals).
     setup_assistant.run_pending_migrations(_v)
+
+    # Safety net (runs every launch, idempotent + cheap): the migration above
+    # is skipped for users coming from a pre-migration version (last_setup
+    # unknown), so fix a stale Anime4K input.conf unconditionally — a no-op once
+    # it's already in the cross-platform format.
+    setup_assistant._fix_anime4k_input_conf()
 
     # ── Splash + provider registration ─────────────────────────
     #    Big FreeFlix wordmark with an animated ▰▰▱ loading bar while the
@@ -479,7 +487,6 @@ def main():
         last_watch = tracker.get_last_global()
         menu_items = []
         resume_idx = -1
-        anilist_resume_idx = -1
 
         if last_watch:
             series_name = last_watch["series_title"]
@@ -515,11 +522,6 @@ def main():
             menu_items.append(resume_text)
             resume_idx = 0
 
-        # 2. Continue from AniList
-        if tracker.get_anilist_token():
-            menu_items.append(f"{icon('play')} {t('Continue from AniList')}")
-            anilist_resume_idx = len(menu_items) - 1
-
         # 3. Browse sources — right after Resume (the main action)
         menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
         providers_idx = len(menu_items) - 1
@@ -550,10 +552,6 @@ def main():
 
         if last_watch and choice_idx == resume_idx:
             history_ui.handle_resume(last_watch)
-            continue
-
-        if choice_idx == anilist_resume_idx:
-            anilist.handle_anilist_continue()
             continue
 
         if choice_idx == history_idx:
@@ -618,7 +616,7 @@ def main():
 
 
                 lang_display = get_language_display(lang)
-                player_display = get_player_display(player)
+                player_display = t(get_player_display(player))
                 anime_lang = tracker.get_anime_language()
                 anime_lang_display = get_language_display(anime_lang)
 
@@ -630,6 +628,13 @@ def main():
                 from . import themes as themes_mod
                 theme_label = themes_mod.active_theme().get("label", "?")
                 notif_on = notif_mod.is_systemd_timer_installed()
+                # Sub-menu picker that always has a Back row, so Esc (which
+                # select_from_list maps to the last option) reliably goes back
+                # instead of silently picking the last item.
+                def _pick(items, prompt):
+                    i = select_from_list(list(items) + [t("← Back")], prompt)
+                    return None if i >= len(items) else i
+
                 opts = [
                     f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})",
                     f"{t('Update Language')} ({lang_display})",
@@ -660,45 +665,42 @@ def main():
                         pause()
                 elif s_choice == 1:
                     langs = get_all_languages()
-                    l_choice = select_from_list(
-                        [lang[1] for lang in langs], t("Select Language:")
-                    )
-                    tracker.set_language(langs[l_choice][0])
-                    print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
-                    pause()
+                    l_choice = _pick([lang[1] for lang in langs], t("Select Language:"))
+                    if l_choice is not None:
+                        tracker.set_language(langs[l_choice][0])
+                        print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
+                        pause()
                 elif s_choice == 2:
                     langs = get_all_languages()
-                    a_choice = select_from_list(
-                        [lang[1] for lang in langs], t("Anime language:")
-                    )
-                    tracker.set_anime_language(langs[a_choice][0])
-                    print_success(
-                        f"{t('Anime language updated to:')} {langs[a_choice][1]}"
-                    )
-                    pause()
+                    a_choice = _pick([lang[1] for lang in langs], t("Anime language:"))
+                    if a_choice is not None:
+                        tracker.set_anime_language(langs[a_choice][0])
+                        print_success(
+                            f"{t('Anime language updated to:')} {langs[a_choice][1]}"
+                        )
+                        pause()
                 elif s_choice == 3:
                     tlist = themes_mod.list_themes()
-                    t_choice = select_from_list(
-                        [lbl for _, lbl in tlist], t("Select theme:")
-                    )
-                    tracker.set_theme(tlist[t_choice][0])
-                    print_success(f"{t('Theme set to:')} {tlist[t_choice][1]}")
-                    pause()
+                    t_choice = _pick([lbl for _, lbl in tlist], t("Select theme:"))
+                    if t_choice is not None:
+                        tracker.set_theme(tlist[t_choice][0])
+                        print_success(f"{t('Theme set to:')} {tlist[t_choice][1]}")
+                        pause()
                 elif s_choice == 4:
                     players = get_all_players()
-                    p_choice = select_from_list(
-                        [p[1] for p in players], t("Select default player:")
-                    )
-                    tracker.set_player(players[p_choice][0])
-                    print_success(f"{t('Player updated to:')} {players[p_choice][1]}")
-                    pause()
+                    p_choice = _pick([t(p[1]) for p in players], t("Select default player:"))
+                    if p_choice is not None:
+                        tracker.set_player(players[p_choice][0])
+                        print_success(f"{t('Player updated to:')} {t(players[p_choice][1])}")
+                        pause()
                 elif s_choice == 5:
                     q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
                     q_vals = ["auto", "1080", "720", "480"]
-                    q_choice = select_from_list(q_opts, t("Select download quality:"))
-                    tracker.set_download_quality(q_vals[q_choice])
-                    print_success(f"{t('Download quality set to:')} {q_opts[q_choice]}")
-                    pause()
+                    q_choice = _pick(q_opts, t("Select download quality:"))
+                    if q_choice is not None:
+                        tracker.set_download_quality(q_vals[q_choice])
+                        print_success(f"{t('Download quality set to:')} {q_opts[q_choice]}")
+                        pause()
                 elif s_choice == 6:
                     print_info("Register at https://www.opensubtitles.com/en/consumers")
                     print_info("to get a free API key, then paste it here.")
@@ -709,10 +711,11 @@ def main():
                         pause()
                 elif s_choice == 7:
                     n_opts = ["1 (sequential)", "2", "3", "4"]
-                    n_choice = select_from_list(n_opts, t("Max parallel downloads:"))
-                    tracker.set_parallel_downloads(n_choice + 1)
-                    print_success(f"{t('Parallel downloads set to')} {n_choice + 1}")
-                    pause()
+                    n_choice = _pick(n_opts, t("Max parallel downloads:"))
+                    if n_choice is not None:
+                        tracker.set_parallel_downloads(n_choice + 1)
+                        print_success(f"{t('Parallel downloads set to')} {n_choice + 1}")
+                        pause()
                 elif s_choice == 8:
                     if notif_on:
                         if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
@@ -738,10 +741,11 @@ def main():
                     print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
                     nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
                     nv_vals = ["auto", "on", "off"]
-                    c = select_from_list(nv_opts, t("Nvidia GPU offload:"))
-                    tracker.set_nvidia_offload(nv_vals[c])
-                    print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
-                    pause()
+                    c = _pick(nv_opts, t("Nvidia GPU offload:"))
+                    if c is not None:
+                        tracker.set_nvidia_offload(nv_vals[c])
+                        print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
+                        pause()
                 elif s_choice == 10:
                     from . import terminal_image
                     has_chafa = terminal_image.chafa_available()
@@ -756,18 +760,21 @@ def main():
                             "chafa is not installed — posters won't show until you "
                             "install it (e.g. sudo dnf install chafa)."
                         )
-                    c = select_from_list(p_opts, t("Show Posters:"))
-                    tracker.set_poster_mode(p_vals[c])
-                    terminal_image.reset_cache()
-                    print_success(f"{t('Show Posters')}: {p_vals[c]}")
-                    pause()
+                    c = _pick(p_opts, t("Show Posters:"))
+                    if c is not None:
+                        tracker.set_poster_mode(p_vals[c])
+                        terminal_image.reset_cache()
+                        print_success(f"{t('Show Posters')}: {p_vals[c]}")
+                        pause()
                 elif s_choice == 11:
                     i_opts = [
                         "emoji (works everywhere)",
                         "nerd (crisp icons, needs a Nerd Font)",
                     ]
                     i_vals = ["emoji", "nerd"]
-                    c = select_from_list(i_opts, t("Icon Style:"))
+                    c = _pick(i_opts, t("Icon Style:"))
+                    if c is None:
+                        continue
                     picked = i_vals[c]
                     if picked == "nerd":
                         if not setup_assistant.detect_nerd_font():
