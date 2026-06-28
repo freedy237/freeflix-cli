@@ -424,6 +424,8 @@ def main():
 
     # ── First launch only : default to nerd icons if a Nerd Font is present ──
     setup_assistant.maybe_default_nerd_icons()
+    # Windows: make sure the terminal actually USES the Nerd Font (once).
+    setup_assistant.ensure_nerd_terminal_font()
 
     # ── First-launch setup (only if user hasn't declined) ──────
     if setup_assistant.should_prompt_setup():

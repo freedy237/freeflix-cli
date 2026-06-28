@@ -798,6 +798,30 @@ def maybe_default_nerd_icons() -> None:
         pass
 
 
+def ensure_nerd_terminal_font() -> None:
+    """
+    Windows only, runs once : if icons are set to 'nerd' and a Nerd Font is
+    installed but Windows Terminal isn't using it yet (older installs registered
+    the font without setting the terminal's font), set it now so the glyphs
+    render. Guarded by a flag so it never rewrites settings.json twice.
+    """
+    if detect_os() != "windows":
+        return
+    if tracker.data.get("wt_nerd_font_set"):
+        return
+    try:
+        if tracker.get_icon_style() == "nerd" and detect_nerd_font():
+            if _set_windows_terminal_font(NERD_FONT_NAME):
+                tracker.data["wt_nerd_font_set"] = True
+                tracker._save_data()
+                print_info(
+                    "Windows Terminal font set to the Nerd Font — reopen the "
+                    "terminal to see the icons."
+                )
+    except Exception:
+        pass
+
+
 def install_nerd_font() -> bool:
     """
     Download and install CaskaydiaCove Nerd Font if missing.
@@ -805,6 +829,16 @@ def install_nerd_font() -> bool:
     """
     if detect_nerd_font():
         print_success(f"{NERD_FONT_NAME} already installed")
+        # Already installed, but the terminal may still not USE it (older
+        # installs registered the font without setting Windows Terminal's font).
+        if detect_os() == "windows":
+            if _set_windows_terminal_font(NERD_FONT_NAME):
+                print_success("  ✓ Windows Terminal font set to the Nerd Font")
+                print_warning("Close ALL Windows Terminal windows and reopen one.")
+            else:
+                print_info(
+                    f"Set your terminal font to '{NERD_FONT_NAME}' manually."
+                )
         return True
 
     os_name = detect_os()
@@ -1283,28 +1317,51 @@ def _ver_tuple(v):
 # required tool, refresh configs, or clean up a removed feature.
 #   e.g. ("1.6.0", "Feature X removed — cleaning up", _cleanup_x)
 def _fix_anime4k_input_conf():
-    """Convert an old ':'-joined glsl-shaders `set` in input.conf to per-shader
-    `append` calls (cross-platform). The ':' separator broke the Anime4K toggle
-    on Windows, where mpv uses ';'. In-place, offline, only touches input.conf."""
-    inp = get_mpv_config_dir() / "input.conf"
-    if not inp.is_file():
-        return
-    try:
-        txt = inp.read_text(encoding="utf-8")
-        if 'glsl-shaders set "' not in txt:
-            return  # already migrated / new format
+    """
+    Make the bundled mpv configs render Anime4K on Windows. Two separate issues,
+    both from mpv's path-list separator being ';' on Windows but ':' on Unix:
 
-        def _conv(m):
-            paths = [p for p in m.group(1).split(":") if p]
-            parts = ['change-list glsl-shaders clr ""']
-            parts += [f'change-list glsl-shaders append "{p}"' for p in paths]
-            return "; ".join(parts)
+      1. input.conf  : the CTRL+1/2 toggle joined shaders with ':' in a single
+         `set` → rewrite to per-shader `append` (cross-platform, no separator).
+      2. mpv.conf    : the STARTUP `glsl-shaders="A:B:C"` line (loads on every
+         video) — on Windows rewrite ':' to ';' between shader paths. This is
+         the one that printed "Cannot open file …A.glsl:/shaders/B.glsl" when a
+         video started.
 
-        fixed = re.sub(r'change-list glsl-shaders set "([^"]+)"', _conv, txt)
-        if fixed != txt:
-            inp.write_text(fixed, encoding="utf-8")
-    except Exception:
-        pass
+    In-place, offline, idempotent — safe to run on every launch.
+    """
+    cfg = get_mpv_config_dir()
+    is_win = sys.platform in ("win32", "cygwin")
+
+    # 1) input.conf toggle → append form
+    inp = cfg / "input.conf"
+    if inp.is_file():
+        try:
+            txt = inp.read_text(encoding="utf-8")
+            if 'glsl-shaders set "' in txt:
+                def _conv(m):
+                    paths = [p for p in m.group(1).split(":") if p]
+                    parts = ['change-list glsl-shaders clr ""']
+                    parts += [f'change-list glsl-shaders append "{p}"' for p in paths]
+                    return "; ".join(parts)
+
+                fixed = re.sub(r'change-list glsl-shaders set "([^"]+)"', _conv, txt)
+                if fixed != txt:
+                    inp.write_text(fixed, encoding="utf-8")
+        except Exception:
+            pass
+
+    # 2) mpv.conf startup line → ';' separator on Windows
+    if is_win:
+        mpv = cfg / "mpv.conf"
+        if mpv.is_file():
+            try:
+                txt = mpv.read_text(encoding="utf-8")
+                fixed = txt.replace(".glsl:~~/", ".glsl;~~/")
+                if fixed != txt:
+                    mpv.write_text(fixed, encoding="utf-8")
+            except Exception:
+                pass
 
 
 def _migrations():

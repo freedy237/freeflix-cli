@@ -122,6 +122,55 @@ def pause():
     console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
 
 
+def _read_menu_key():
+    """
+    Read one keypress for the arrow menus, returning readchar key constants.
+
+    Why not just ``readchar.readkey()``? On POSIX, readchar reads Esc (``\\x1b``)
+    then BLOCKS on a 2nd byte to tell a lone Esc from an arrow sequence
+    (``\\x1b[A``) — so a lone Esc never fires until another key is pressed (that's
+    why "Esc did nothing" on Linux but worked on Windows). Here we peek with a
+    50 ms timeout: no follow-up byte ⇒ a real Esc. Windows / non-tty fall back
+    to readchar (where Esc already returns immediately).
+    """
+    import sys
+    try:
+        import termios, tty, select as _sel
+        is_tty = sys.stdin.isatty()
+    except Exception:
+        is_tty = False
+    if not is_tty or os.name == "nt":
+        return readchar.readkey()
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ch = os.read(fd, 1)
+        if ch == b"\x1b":
+            r, _, _ = _sel.select([fd], [], [], 0.05)
+            if not r:
+                return readchar.key.ESC          # lone Esc → go back
+            seq = ch + os.read(fd, 2)
+            return {
+                b"\x1b[A": readchar.key.UP,   b"\x1bOA": readchar.key.UP,
+                b"\x1b[B": readchar.key.DOWN,  b"\x1bOB": readchar.key.DOWN,
+                b"\x1b[C": readchar.key.RIGHT, b"\x1b[D": readchar.key.LEFT,
+            }.get(seq, "")
+        if ch in (b"\r", b"\n"):
+            return readchar.key.ENTER
+        if ch == b"\x03":
+            return readchar.key.CTRL_C
+        if ch in (b"\x7f", b"\x08"):
+            return readchar.key.BACKSPACE
+        try:
+            return ch.decode("utf-8", "ignore")
+        except Exception:
+            return ""
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                      header: str = None, group_headers: dict = None) -> int:
     """
@@ -236,7 +285,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     )
     with Live(generate_renderable(), **live_kwargs) as live:
         while True:
-            key = readchar.readkey()
+            key = _read_menu_key()
 
             if key == readchar.key.UP:
                 selected_index = (selected_index - 1) % len(options)
@@ -318,7 +367,7 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
 
     with Live(render(), refresh_per_second=20, transient=True) as live:
         while True:
-            key = readchar.readkey()
+            key = _read_menu_key()
             if key == readchar.key.UP:
                 cursor = (cursor - 1) % n
             elif key == readchar.key.DOWN:

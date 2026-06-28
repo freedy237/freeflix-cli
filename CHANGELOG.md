@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.6
+
+### ⎋ Esc now works on Linux too
+- The arrow menus read keys via readchar, which on POSIX **blocks on a lone Esc**
+  waiting for a 2nd byte (to tell Esc from an arrow sequence) — so Esc appeared
+  to do nothing on Linux while working on Windows. Menus now use a raw reader
+  that detects a standalone Esc with a 50 ms peek. Esc reliably goes back one
+  level (e.g. episode list → season list) on every OS.
+
+### 🪟 Anime4K shaders fixed on Windows (for real this time)
+- The actual culprit was **mpv.conf** (loaded on every video at startup), not
+  just input.conf: its `glsl-shaders="A:B:C"` line uses ':' which is the wrong
+  list separator on Windows (it's ';'), so mpv failed with
+  "Cannot open file …A.glsl:/shaders/B.glsl". The startup-launch repair now also
+  rewrites mpv.conf to ';' on Windows (':' stays on Linux/macOS).
+
+### 🔤 Nerd Font now renders for existing installs
+- Selecting "nerd" when the font was **already installed** previously did nothing
+  (it returned early without configuring the terminal). It now sets Windows
+  Terminal's font even then, plus a one-time launch check applies it
+  automatically if your icon style is already "nerd".
+- A small hint at the bottom of the episode multi-select shows "Space: select".
 ## 1.7.5
 
 ### ⬇️ Season downloads
