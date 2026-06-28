@@ -98,15 +98,18 @@ class TestStableTempDir:
         d2 = _stable_temp_dir("my_show_-_Ep1")
         assert d1 == d2
         assert os.path.isdir(d1)
-        # Cleanup
-        shutil.rmtree(os.path.dirname(os.path.dirname(d1)), ignore_errors=True)
+        # Cleanup ONLY the dir this test created — never its parents (the
+        # grandparent is the user's real ~/Downloads/FreeFlix folder!).
+        shutil.rmtree(d1, ignore_errors=True)
 
     def test_different_titles_different_dirs(self):
         """Different downloads land in separate temp dirs."""
         d1 = _stable_temp_dir("show_a_-_Ep1")
         d2 = _stable_temp_dir("show_b_-_Ep2")
         assert d1 != d2
-        shutil.rmtree(os.path.dirname(os.path.dirname(d1)), ignore_errors=True)
+        # Only the test's own dirs — NOT the parent FreeFlix download folder.
+        shutil.rmtree(d1, ignore_errors=True)
+        shutil.rmtree(d2, ignore_errors=True)
 
     def test_temp_dir_is_hidden(self):
         """.temp/ is a dot-prefixed hidden directory."""
