@@ -18,9 +18,6 @@
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
 
-> 🆕 **v1.7.2** — download overhaul : aria2c progress bar fix (log-level notice), ⬇ Download option per episode, 📥 Download ALL episodes per season (Anime-Sama, Coflix, French-Stream, French-Manga). Coflix batch downloads each episode's players before downloading.
-
-
 - A complete **download backend** (yt-dlp for HLS, aria2c for direct mp4, with quality selection 480p/720p/1080p) ;
 - **Batch "download whole season"** ;
 - **Position-in-episode resume** (mpv lua hook + tracker) ;
