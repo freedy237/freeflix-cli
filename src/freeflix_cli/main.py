@@ -35,47 +35,94 @@ import os
 import time
 
 
+def _handle_partial_download(it):
+    """Resume or delete an interrupted download from .temp/."""
+    import shutil as _sh
+    from .player_manager import resume_download
+
+    act = select_from_list(
+        [t("Resume download"), t("Delete partial"), t("← Back")],
+        f"{it['title']} — {t('interrupted')}",
+    )
+    if act == 0:
+        clear_screen()
+        if resume_download(it["meta"]):
+            print_success(t("Download completed."))
+        else:
+            print_warning(
+                t("Could not resume — the stream link may have expired; "
+                  "re-download it from the source.")
+            )
+        pause()
+    elif act == 1:
+        _sh.rmtree(it["dir"], ignore_errors=True)
+        print_success(t("Partial deleted."))
+        pause()
+
+
 def _browse_local_downloads():
-    """List videos in ~/Downloads/FreeFlix and let the user play one locally."""
+    """List videos in ~/Downloads/FreeFlix and let the user play one locally,
+    plus any interrupted downloads (resume / delete)."""
     import shutil
     import subprocess
 
-    from .player_manager import DOWNLOAD_DIR
+    from .player_manager import DOWNLOAD_DIR, list_interrupted_downloads
 
     clear_screen()
-    print_header(f"{icon('folder')} My Downloads")
+    print_header(f"{icon('folder')} {t('My Downloads')}")
 
-    if not os.path.isdir(DOWNLOAD_DIR):
-        print_info(f"No downloads folder yet ({DOWNLOAD_DIR}).")
+    video_exts = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts"}
+    files = []
+    if os.path.isdir(DOWNLOAD_DIR):
+        for root, dirs, names in os.walk(DOWNLOAD_DIR):
+            dirs[:] = [d for d in dirs if d != ".temp"]  # never list partials
+            for n in names:
+                if os.path.splitext(n)[1].lower() in video_exts:
+                    full = os.path.join(root, n)
+                    rel = os.path.relpath(full, DOWNLOAD_DIR)
+                    try:
+                        size_mb = os.path.getsize(full) / (1024 * 1024)
+                    except OSError:
+                        size_mb = 0
+                    files.append((rel, full, size_mb))
+    files.sort(key=lambda x: x[0].lower())
+
+    interrupted = list_interrupted_downloads()
+
+    if not files and not interrupted:
+        print_info(f"No downloads yet ({DOWNLOAD_DIR}).")
         print_info('Use the "download" option from a video to start.')
         pause()
         return
 
-    video_exts = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts"}
-    files = []
-    for root, _dirs, names in os.walk(DOWNLOAD_DIR):
-        for n in names:
-            if os.path.splitext(n)[1].lower() in video_exts:
-                full = os.path.join(root, n)
-                rel = os.path.relpath(full, DOWNLOAD_DIR)
-                try:
-                    size_mb = os.path.getsize(full) / (1024 * 1024)
-                except OSError:
-                    size_mb = 0
-                files.append((rel, full, size_mb))
+    # Combined menu : finished files, then an "Interrupted" section.
+    entries = []          # (kind, payload) parallel to labels
+    labels = []
+    group_headers = {}
+    for rel, full, size in files:
+        entries.append(("file", full))
+        labels.append(f"{rel}  ({size:.1f} MB)")
+    if interrupted:
+        group_headers[len(labels)] = t("Interrupted downloads")
+        for it in interrupted:
+            entries.append(("partial", it))
+            pct = (f"{it['percent']}%" if it["percent"] is not None
+                   else f"{it['size_mb']:.0f} MB")
+            labels.append(f"{icon('download')} {it['title']} — "
+                          f"{t('interrupted')} ({pct})")
+    labels.append(t("← Back"))
 
-    if not files:
-        print_info(f"No video files found in {DOWNLOAD_DIR}.")
-        pause()
+    choice = select_from_list(labels, t("Select a file to play:"),
+                              group_headers=group_headers)
+    if choice >= len(entries):
         return
 
-    files.sort(key=lambda x: x[0].lower())
-    labels = [f"{rel}  ({size:.1f} MB)" for rel, _full, size in files] + ["← Back"]
-    choice = select_from_list(labels, "Select a file to play:")
-    if choice == len(files):
+    kind, payload = entries[choice]
+    if kind == "partial":
+        _handle_partial_download(payload)
         return
 
-    selected_path = files[choice][1]
+    selected_path = payload
 
     preferred = tracker.get_player() or "mpv"
     candidates = [preferred, "mpv", "vlc"]

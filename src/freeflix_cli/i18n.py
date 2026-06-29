@@ -98,6 +98,16 @@ _FR = {
     "Download": "Télécharger",
     "Select episodes to download:": "Choisis les épisodes à télécharger :",
     "already downloaded": "déjà téléchargé",
+    "Interrupted downloads": "Téléchargements interrompus",
+    "interrupted": "interrompu",
+    "Resume download": "Reprendre le téléchargement",
+    "Delete partial": "Supprimer le partiel",
+    "Download completed.": "Téléchargement terminé.",
+    "Could not resume — the stream link may have expired; "
+    "re-download it from the source.":
+        "Reprise impossible — le lien a peut-être expiré ; "
+        "relance-le depuis la source.",
+    "Partial deleted.": "Partiel supprimé.",
     "selected": "sélectionné(s)",
     "Space: select": "Espace : sélectionner",
     "a: all": "a : tout",

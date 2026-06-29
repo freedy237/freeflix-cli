@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.7.7
+
+### ⬇️ No more half-downloaded files in your folder
+- Every backend now downloads into the hidden `.temp/` dir; the finished file
+  lands in `Downloads/FreeFlix/` (or the season folder) **only at 100%**.
+  Previously aria2c wrote the `.mp4` straight into your folder, so a dropped
+  connection left a partial file there. Now an interrupted download stays in
+  `.temp/` (resumable) and never pollutes your folder.
+
+### ⏸ Resume interrupted downloads
+- **My Downloads** now shows an **Interrupted downloads** section listing what
+  stopped mid-way (with % for HLS or MB downloaded). Select one to **Resume**
+  (picks up where it stopped via aria2 `--continue` / yt-dlp `.ytdl` state) or
+  **Delete** the partial. Resume works while the stream link is still valid;
+  otherwise re-download it from the source.
+- `.temp/` partials are never listed as playable files anymore.
 ## 1.7.6
 
 ### ⎋ Esc now works on Linux too

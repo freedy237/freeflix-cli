@@ -671,6 +671,99 @@ def _stable_temp_dir(safe_title: str) -> str:
     return d
 
 
+_RESUME_META = ".freeflix-resume.json"
+
+
+def _write_resume_meta(frag_tmp: str, **fields) -> None:
+    """Persist what's needed to resume this download later (kept in .temp/,
+    deleted with the dir on success)."""
+    try:
+        with open(os.path.join(frag_tmp, _RESUME_META), "w", encoding="utf-8") as f:
+            json.dump(fields, f)
+    except Exception:
+        pass
+
+
+def _partial_size_mb(d: str) -> float:
+    """MB already on disk for a temp dir (its largest file)."""
+    best = 0
+    try:
+        for n in os.listdir(d):
+            if n == _RESUME_META:
+                continue
+            p = os.path.join(d, n)
+            if os.path.isfile(p):
+                best = max(best, os.path.getsize(p))
+    except OSError:
+        pass
+    return best / (1024 * 1024)
+
+
+def _hls_percent(d: str):
+    """For yt-dlp HLS, derive % from the .ytdl resume state (fragment index)."""
+    try:
+        for n in os.listdir(d):
+            if n.endswith(".ytdl"):
+                with open(os.path.join(d, n), encoding="utf-8") as f:
+                    data = json.load(f)
+                dl = data.get("downloader", {}) or {}
+                cur = (dl.get("current_fragment", {}) or {}).get("index")
+                total = dl.get("fragment_count")
+                if cur and total:
+                    return min(99, int(cur / total * 100))
+    except Exception:
+        pass
+    return None
+
+
+def list_interrupted_downloads() -> list:
+    """
+    Scan the hidden .temp/ for interrupted downloads (a partial file + a stored
+    resume-meta). Returns dicts: {title, percent|None, size_mb, dir, meta}.
+    """
+    out = []
+    if not os.path.isdir(TEMP_DIR):
+        return out
+    try:
+        for name in sorted(os.listdir(TEMP_DIR)):
+            d = os.path.join(TEMP_DIR, name)
+            meta_p = os.path.join(d, _RESUME_META)
+            if not os.path.isdir(d) or not os.path.isfile(meta_p):
+                continue
+            try:
+                with open(meta_p, encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+            out.append({
+                "title": meta.get("title", name),
+                "percent": _hls_percent(d),
+                "size_mb": _partial_size_mb(d),
+                "dir": d,
+                "meta": meta,
+            })
+    except OSError:
+        pass
+    return out
+
+
+def resume_download(meta: dict) -> bool:
+    """Re-run a download from stored resume-meta. The stable .temp dir + aria2
+    --continue / yt-dlp .ytdl make it pick up where it stopped (works while the
+    stream URL is still valid). Returns True on completion."""
+    if not meta or not meta.get("stream_url"):
+        return False
+    return _download_stream(
+        stream_url=meta["stream_url"],
+        referer=meta.get("referer", ""),
+        user_agent=meta.get("user_agent", ""),
+        title=meta.get("title", "video"),
+        is_mp4=meta.get("is_mp4", False),
+        quality=meta.get("quality"),
+        subfolder=meta.get("subfolder"),
+    )
+
+
 def _dedupe_title_segments(title: str) -> str:
     """
     Collapse repeated ' - ' segments in a title, so a movie that arrives as
@@ -851,7 +944,8 @@ def _download_stream(
 
     backend_name = None
     cmd = None
-    frag_tmp = None  # temp dir for HLS fragments (kept out of Downloads)
+    frag_tmp = None  # temp dir for fragments / partial file (kept out of Downloads)
+    needs_move = False  # True when the finished file must be moved temp → out_dir
 
     # Use user-selected quality from probe, or fall back to tracker default
     quality_str = str(quality) if quality else tracker.get_download_quality()
@@ -902,18 +996,24 @@ def _download_stream(
         aria = shutil.which("aria2c")
         if aria:
             backend_name = "aria2c"
+            # Download into the hidden temp dir, NOT straight into Downloads, so a
+            # dropped connection never leaves a half-finished .mp4 in the user's
+            # folder. The finished file is moved to out_dir only on success
+            # (--continue=true + the .aria2 control file resume the same partial).
+            frag_tmp = _stable_temp_dir(safe_title)
+            needs_move = True
             cmd = [
                 aria,
                 "--continue=true",
                 "--max-connection-per-server=16",
                 "--split=16",
                 "--min-split-size=1M",
-                "--auto-file-renaming=true",
+                "--auto-file-renaming=false",
                 "--summary-interval=1",
                 "--console-log-level=notice",
                 f"--header=Referer: {referer}",
                 f"--header=User-Agent: {user_agent}",
-                f"--dir={out_dir}",
+                f"--dir={frag_tmp}",
                 f"--out={safe_title}.mp4",
                 stream_url,
             ]
@@ -927,6 +1027,9 @@ def _download_stream(
                 )
                 return False
             backend_name = "yt-dlp"
+            # Same idea: the .part lives in temp, the final file lands in out_dir
+            # only when complete (yt-dlp renames atomically on success).
+            frag_tmp = _stable_temp_dir(safe_title)
             cmd = [
                 ytdlp,
                 "--no-warnings",
@@ -934,11 +1037,21 @@ def _download_stream(
                 "--no-overwrites",
                 "--add-header", f"Referer:{referer}",
                 "--add-header", f"User-Agent:{user_agent}",
-                "-o", os.path.join(out_dir, f"{safe_title}.%(ext)s"),
+                "-P", f"home:{out_dir}",
+                "-P", f"temp:{frag_tmp}",
+                "-o", f"{safe_title}.%(ext)s",
             ]
             if format_arg:
                 cmd.extend(["-f", format_arg])
             cmd.append(stream_url)
+
+    # Remember how to resume this exact download if the connection drops.
+    if frag_tmp:
+        _write_resume_meta(
+            frag_tmp,
+            stream_url=stream_url, referer=referer, user_agent=user_agent,
+            title=title, is_mp4=is_mp4, quality=quality, subfolder=subfolder,
+        )
 
     output_suppressed = getattr(_suppress_print, "active", False)
 
@@ -977,9 +1090,26 @@ def _download_stream(
             print_error(f"Download error: {e}")
     finally:
         _sweep_download_litter()
-        if dl_ok and frag_tmp:
-            shutil.rmtree(frag_tmp, ignore_errors=True)
-        # On failure/interrupt: keep frag_tmp so yt-dlp can resume next time
+
+    # Only a TRULY complete download leaves .temp for the user's folder. aria2c
+    # wrote the .mp4 into frag_tmp — move it to out_dir now that it finished.
+    if dl_ok and needs_move:
+        try:
+            src = os.path.join(frag_tmp, f"{safe_title}.mp4")
+            if os.path.exists(src):
+                os.makedirs(out_dir, exist_ok=True)
+                shutil.move(src, os.path.join(out_dir, f"{safe_title}.mp4"))
+            else:
+                dl_ok = False  # nothing to move → treat as incomplete
+        except Exception as e:
+            if not output_suppressed:
+                print_error(f"Could not finalize download: {e}")
+            dl_ok = False
+
+    # Clean the temp dir ONLY on success; keep it on failure/interrupt so the
+    # next attempt resumes the partial instead of restarting from zero.
+    if dl_ok and frag_tmp:
+        shutil.rmtree(frag_tmp, ignore_errors=True)
 
     if not dl_ok:
         return False
