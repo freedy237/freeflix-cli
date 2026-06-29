@@ -1,10 +1,20 @@
-# FreeFlix CLI 🍿
+<p align="center">
+  <img src="https://raw.githubusercontent.com/freedy237/freeflix-cli/main/assets/logo.png" alt="FreeFlix CLI" width="220">
+</p>
 
-[![PyPI version](https://img.shields.io/pypi/v/freeflix-cli.svg?color=blue)](https://pypi.org/project/freeflix-cli/)
-[![Python](https://img.shields.io/pypi/pyversions/freeflix-cli.svg)](https://pypi.org/project/freeflix-cli/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+<h1 align="center">FreeFlix CLI 🍿</h1>
 
-> Watch movies, series and anime from your terminal — multi-language, multi-source, no browser, no ads.
+<p align="center">
+  <a href="https://pypi.org/project/freeflix-cli/"><img src="https://img.shields.io/pypi/v/freeflix-cli.svg?color=blue" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/freeflix-cli/"><img src="https://img.shields.io/pypi/pyversions/freeflix-cli.svg" alt="Python"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
+</p>
+
+<p align="center">
+  <em>Watch movies, series and anime from your terminal — multi-language, multi-source, no browser, no ads.</em>
+</p>
+
+---
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
 
