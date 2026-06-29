@@ -24,6 +24,7 @@ from .handlers import (
     french_stream,
     french_manga,
     papystreaming,
+    anilist,
     goldenanime,
     goldenms,
     nyaa as nyaa_handler,
@@ -536,6 +537,7 @@ def main():
         last_watch = tracker.get_last_global()
         menu_items = []
         resume_idx = -1
+        anilist_resume_idx = -1
 
         if last_watch:
             series_name = last_watch["series_title"]
@@ -571,6 +573,11 @@ def main():
             menu_items.append(resume_text)
             resume_idx = 0
 
+        # 2. Continue from AniList (only if a token is configured)
+        if tracker.get_anilist_token():
+            menu_items.append(f"{icon('play')} {t('Continue from AniList')}")
+            anilist_resume_idx = len(menu_items) - 1
+
         # 3. Browse sources — right after Resume (the main action)
         menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
         providers_idx = len(menu_items) - 1
@@ -601,6 +608,10 @@ def main():
 
         if last_watch and choice_idx == resume_idx:
             history_ui.handle_resume(last_watch)
+            continue
+
+        if choice_idx == anilist_resume_idx:
+            anilist.handle_anilist_continue()
             continue
 
         if choice_idx == history_idx:
