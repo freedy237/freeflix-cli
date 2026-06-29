@@ -175,37 +175,6 @@ The Linux `install.sh` does this for you when it detects an Nvidia card.
 
 ---
 
-## 🔍 Project layout
-
-```
-freeflix-cli/
-├── src/freeflix_cli/
-│   ├── main.py                 # entry point (`freeflix` command)
-│   ├── tracker.py              # local progress / settings store
-│   ├── player_manager.py       # mpv/vlc/download dispatcher
-│   ├── i18n.py                 # FR/EN translations
-│   ├── subtitles.py            # OpenSubtitles client
-│   ├── notifications.py        # daily scan + systemd setup
-│   ├── handlers/               # per-provider flows
-│   └── scraping/               # site-specific scrapers
-├── config/
-│   ├── mpv.conf                # anti-crash + Anime4K config (shared)
-│   ├── input.conf              # CTRL+1 / CTRL+0 Anime4K toggles
-│   └── freeflix_position.lua   # position-resume mpv script
-├── scripts/
-│   ├── install.py              # cross-platform one-liner installer
-│   ├── install.sh              # Linux multi-distro
-│   ├── install-mac.sh          # macOS (Homebrew)
-│   └── install.ps1             # Windows (winget)
-├── data/
-│   └── source_portal.jsonc     # portal URL overrides
-├── pyproject.toml
-├── LICENSE                     # GPL v3 (inherited from upstream)
-└── README.md
-```
-
----
-
 ## 🤝 Credits
 
 - **Original project** : [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by [PaulExplorer](https://github.com/PaulExplorer) — all the heavy scraping lift comes from there.
@@ -229,30 +198,3 @@ This project is for **educational purposes only**.
 ## 📜 License
 
 GNU General Public License v3.0 — same as upstream. See [LICENSE](./LICENSE).
-
----
-
-## 🇫🇷 Résumé en français
-
-FreeFlix est un fork stabilisé d'autoflix-cli avec :
-
-- 5 lecteurs (mpv, VLC, navigateur, download-only) ;
-- Téléchargement vidéo (yt-dlp / aria2c, choix qualité, batch saison complète) ;
-- Reprise à la seconde près dans mpv ;
-- Sync AniList, fallback OpenSubtitles ;
-- Téléchargements parallèles + notifications quotidiennes ;
-- Source Nyaa torrents en plus ;
-- Nouvelle source **French-Manga** (anime VF/VOSTFR, lecteurs vidzy & luluvid) ;
-- **Au premier lancement, on te demande d'abord la langue des animes** (anglais VO/sous-titres ou français VF/VOSTFR), puis la langue de l'interface ;
-- Les sources et les sous-titres téléchargés **suivent la langue des animes choisie** (anglais → sous-titres anglais, etc.) ;
-- UI 100 % traduite en français ;
-- Config mpv anti-crash + Anime4K déjà préinstallé ;
-- Tous les bugs liés au refacto d'animes-sama.fr de mai 2026 fixés.
-
-Installer :
-
-```bash
-uv tool install freeflix-cli    # ou pipx install freeflix-cli
-```
-
-…puis tape `freeflix`. Si tu n'as pas encore `mpv`, `yt-dlp`, `ffmpeg`, `aria2` et `libnotify` installés sur ta machine, lance plutôt le script d'install dédié à ton OS (`scripts/install.sh`, `install-mac.sh` ou `install.ps1`) qui prend tout en charge.
