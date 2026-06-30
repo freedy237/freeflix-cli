@@ -3,6 +3,8 @@ from ..tracker import tracker
 import re
 from ..cli_utils import (
     select_from_list,
+    select_with_preview,
+    make_preview,
     print_info,
     print_warning,
     print_error,
@@ -12,8 +14,6 @@ from ..cli_utils import (
 )
 from .anime_sama import anime_sama
 from . import goldenanime
-from ..player_manager import play_video
-from ..scraping import player
 
 
 def handle_anilist_continue():
@@ -37,24 +37,24 @@ def handle_anilist_continue():
         print_warning("No anime currently watching found on AniList.")
         return
 
-    # Create display options
-    display_options = []
+    # Selection list WITH posters (chafa), like the regular source flows.
+    labels, previews = [], []
     for e in entries:
         title = e["media"]["title"]["english"] or e["media"]["title"]["romaji"]
         progress = e["progress"] or 0
         total = e["media"]["episodes"] or "?"
-
         if isinstance(total, int) and progress >= total:
             status = f"Finished {progress}/{total}"
         else:
             status = f"Ep {progress+1}/{total}"
+        cover = (e["media"].get("coverImage", {}) or {}).get("large") \
+            or (e["media"].get("coverImage", {}) or {}).get("medium") or ""
+        labels.append(f"{title} ({status})")
+        previews.append(make_preview(cover=cover, title=title,
+                                     lines=[status], panel_title="AniList"))
 
-        display_options.append(f"{title} ({status})")
-
-    display_options.append("← Back")
-
-    choice_idx = select_from_list(display_options, "Select Anime to Continue:")
-    if choice_idx == len(entries):  # Back
+    choice_idx = select_with_preview(labels, "Select Anime to Continue:", previews)
+    if choice_idx >= len(entries):  # Esc / Back
         return
 
     selected_entry = entries[choice_idx]
@@ -258,68 +258,35 @@ def handle_anilist_continue():
 
     ep_idx = start_ep_idx
 
+    # Reuse the shared playback flow so AniList gets the SAME tech as the normal
+    # sources: quality/bitrate analysis, subtitle search, position-resume, stats.
+    from .playback import play_episode_flow
+
     while True:
         selected_episode = episodes[ep_idx]
-        if not selected_episode.players:
-            return
 
-        supported = [p for p in selected_episode.players if player.is_supported(p.url)]
-        if not supported:
-            print_warning("No supported players found.")
-            return
+        def _anilist_update(ep=selected_episode):
+            m = re.search(r"(\d+)", ep.title)
+            if m and anilist_client.update_progress(media_id, int(m.group(1))):
+                print_success("AniList updated!")
 
-        playback_success = False
-        while True:
-            player_idx = select_from_list(
-                [f"{p.name} : {p.url.split('/')[2].split('.')[-2]}" for p in supported]
-                + ["← Back"],
-                "🎮 Select Player:",
-            )
-            if player_idx == len(supported):
-                return
+        success = play_episode_flow(
+            provider_name="Anime-Sama",
+            series_title=series.title,
+            season_title=season.title,
+            episode=selected_episode,
+            series_url=series.url,
+            season_url=selected_season_access.url,
+            logo_url=series.img,
+            headers={"Referer": anime_sama.website_origin},
+            anilist_callback=_anilist_update,
+        )
+        if not success:
+            break  # Back / failed → leave
 
-            success = play_video(
-                supported[player_idx].url,
-                headers={"Referer": anime_sama.website_origin},
-                title=f"{series.title} - {season.title} - {selected_episode.title}",
-            )
-
-            if success:
-                tracker.save_progress(
-                    provider="Anime-Sama",
-                    series_title=series.title,
-                    season_title=season.title,
-                    episode_title=selected_episode.title,
-                    series_url=series.url,
-                    season_url=selected_season_access.url,
-                    episode_url="",
-                    logo_url=series.img,
-                )
-                playback_success = True
-                break
-            else:
-                if select_from_list(["Retry", "Back"], "Action?") == 1:
-                    return
-
-        if playback_success:
-            # Auto update AniList since we are in AniList mode!
-            print_info(f"Updating AniList to episode {next_episode_num}...")
-            # Recalculate episode num from title just in case user changed episode
-            match = re.search(r"(\d+)", selected_episode.title)
-            if match:
-                current_ep_num = int(match.group(1))
-                if anilist_client.update_progress(media_id, current_ep_num):
-                    print_success("AniList updated!")
-
-            if ep_idx + 1 < len(episodes):
-                if (
-                    select_from_list(
-                        ["Yes", "No"], f"Play next: {episodes[ep_idx+1].title}?"
-                    )
-                    == 0
-                ):
-                    ep_idx += 1
-                    # Update local next_episode_num for next loop AniList update?
-                    # The loop recalculates it from title.
-                    continue
-            break
+        if ep_idx + 1 < len(episodes) and select_from_list(
+            ["Yes", "No"], f"Play next: {episodes[ep_idx+1].title}?"
+        ) == 0:
+            ep_idx += 1
+            continue
+        break

@@ -237,7 +237,7 @@ _FR = {
     "Update available": "Mise à jour disponible",
     "Installed": "Installée",
     "Latest": "Dernière",
-    "Upgrade with one of": "Mets à jour avec une de ces commandes",
+    "Upgrade with": "Mets à jour avec",
 
     # ── Misc ────────────────────────────────────────────────────
     "Resuming": "Reprise de",

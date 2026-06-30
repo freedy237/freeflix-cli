@@ -8,6 +8,7 @@ from .cli_utils import (
     print_warning,
     get_user_input,
     pause,
+    toast,
     console,
 )
 from .i18n import t
@@ -721,15 +722,13 @@ def main():
                     new_token = get_user_input(t("Enter new AniList Token"))
                     if new_token:
                         tracker.set_anilist_token(new_token)
-                        print_success(t("Token saved."))
-                        pause()
+                        toast(t("Token saved."))
                 elif s_choice == 1:
                     langs = get_all_languages()
                     l_choice = _pick([lang[1] for lang in langs], t("Select Language:"))
                     if l_choice is not None:
                         tracker.set_language(langs[l_choice][0])
-                        print_success(f"{t('Language updated to:')} {langs[l_choice][1]}")
-                        pause()
+                        toast(f"{t('Language updated to:')} {langs[l_choice][1]}")
                 elif s_choice == 2:
                     langs = get_all_languages()
                     a_choice = _pick([lang[1] for lang in langs], t("Anime language:"))
@@ -751,16 +750,14 @@ def main():
                     p_choice = _pick([t(p[1]) for p in players], t("Select default player:"))
                     if p_choice is not None:
                         tracker.set_player(players[p_choice][0])
-                        print_success(f"{t('Player updated to:')} {t(players[p_choice][1])}")
-                        pause()
+                        toast(f"{t('Player updated to:')} {t(players[p_choice][1])}")
                 elif s_choice == 5:
                     q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
                     q_vals = ["auto", "1080", "720", "480"]
                     q_choice = _pick(q_opts, t("Select download quality:"))
                     if q_choice is not None:
                         tracker.set_download_quality(q_vals[q_choice])
-                        print_success(f"{t('Download quality set to:')} {q_opts[q_choice]}")
-                        pause()
+                        toast(f"{t('Download quality set to:')} {q_opts[q_choice]}")
                 elif s_choice == 6:
                     print_info("Register at https://www.opensubtitles.com/en/consumers")
                     print_info("to get a free API key, then paste it here.")
@@ -853,13 +850,11 @@ def main():
                 elif s_choice == 13:
                     new = not tracker.get_analyze_players()
                     tracker.set_analyze_players(new)
-                    print_success(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
-                    pause()
+                    toast(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
                 elif s_choice == 14:
                     new = not tracker.get_subtitle_search()
                     tracker.set_subtitle_search(new)
-                    print_success(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
-                    pause()
+                    toast(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
                 elif s_choice == 15:
                     _show_about(_VERSION)
                     pause()

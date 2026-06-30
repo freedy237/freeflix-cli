@@ -122,6 +122,27 @@ def pause():
     console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
 
 
+def toast(message: str, kind: str = "success", seconds: float = 1.1):
+    """
+    Non-blocking confirmation: flash a brief styled message that clears itself
+    (no "press Enter"). Plain print on a non-tty.
+    """
+    import time as _time
+    styles = {"success": color("success"), "info": color("info"),
+              "warning": color("warning"), "error": color("error")}
+    marks = {"success": "✓", "info": "i", "warning": "!", "error": "✗"}
+    style = styles.get(kind, color("info"))
+    text = Text(f"  {marks.get(kind, 'i')} {message}", style=f"bold {style}")
+    if not console.is_terminal:
+        console.print(text)
+        return
+    try:
+        with Live(text, console=console, refresh_per_second=4, transient=True):
+            _time.sleep(seconds)
+    except Exception:
+        console.print(text)
+
+
 def _read_menu_key():
     """
     Read one keypress for the arrow menus, returning readchar key constants.

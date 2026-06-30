@@ -98,11 +98,8 @@ def check_update(package_name: str = "freeflix-cli") -> bool:
     body.append(f"{current}\n", style="bold red")
     body.append(f"     {t('Latest')}:     ", style="white")
     body.append(f"{latest}\n\n", style="bold green")
-    body.append(f"  {t('Upgrade with one of')}:\n\n", style="bold white")
+    body.append(f"  {t('Upgrade with')}:\n\n", style="bold white")
     body.append(f"     uv tool upgrade {package_name}\n", style="cyan")
-    body.append(f"     pipx upgrade {package_name}\n", style="cyan")
-    body.append(f"     pip install --user --upgrade {package_name}\n",
-                style="cyan")
 
     console.print(
         Panel(

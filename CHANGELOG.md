@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.7.8
+
+### 🐧 Linux install fixed (Kubuntu & co)
+- The static-build repos for **mpv and aria2 vanished (404)**. Both are no longer
+  self-managed on Linux — FreeFlix installs them via the distro **package
+  manager** (apt/dnf/pacman/zypper/apk) with a confirmation, then re-checks. No
+  more "✗ player (download failed)". **VLC** is installed too (parity with the
+  install scripts). ffmpeg stays self-managed (its build still works).
+
+### 🔤 Nerd Font is now a standard dependency
+- First-run setup **installs the Nerd Font** on every OS and defaults icons to
+  **nerd**. Existing users get it via a one-time upgrade migration.
+
+### ▶️ "Continue from AniList" — back & upgraded
+- The home-menu entry is back (shown when an AniList token is set).
+- It now has the **same tech as the normal sources**: poster previews (chafa),
+  **quality/bitrate analysis**, subtitle search, position-resume, stats, and
+  automatic AniList progress sync.
+
+### 😌 Comfort
+- **Last server remembered**: the player menu pre-selects the host you used last.
+- **Quality/language badges** in the player menu (`[VF]` `[VOSTFR]` + resolution).
+- **Toasts**: setting changes confirm with a brief self-dismissing message
+  instead of "press Enter".
+
+### 🔧 Other
+- The "update available" notice now shows the single **`uv tool upgrade`**
+  command (we ship via uv).
 ## 1.7.7
 
 ### ⬇️ No more half-downloaded files in your folder

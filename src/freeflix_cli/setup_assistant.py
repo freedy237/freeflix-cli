@@ -192,14 +192,11 @@ _BINARY_SOURCES: dict[str, dict[str, dict]] = {
             "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linux64-gpl.tar.xz",  # noqa: E501
             "type": "tar.xz", "binary": "ffmpeg", "extras": ["ffprobe"],
         },
-        "aria2c": {
-            "url": "https://github.com/q3aql/aria2-static-builds/releases/download/v1.37.0/aria2-1.37.0-linux-gnu-64bit-build1.tar.gz",  # noqa: E501
-            "type": "tar.gz", "binary": "aria2c", "extras": [],
-        },
-        "mpv": {
-            "url": "https://github.com/coletrammer/mpv-static/releases/download/continuous/mpv-x86_64-linux-gnu.tar.gz",  # noqa: E501
-            "type": "tar.gz", "binary": "mpv", "extras": [],
-        },
+        # NOTE: mpv AND aria2 are NOT self-managed on Linux — the static builds
+        # we used vanished (coletrammer/mpv-static and q3aql/aria2-static-builds
+        # both 404 now). Both ship in every distro's repos, so they're installed
+        # via the package manager instead (see _linux_install_missing).
+        # Only ffmpeg (BtbN, still maintained) stays self-managed.
     },
     "macos": {
         "ffmpeg": {
@@ -464,6 +461,13 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
         print_info("  powershell -ExecutionPolicy Bypass -File scripts\\install.ps1")
         print_info("then open a NEW Windows Terminal and run:  freeflix")
     elif os_name == "linux":
+        # Try to auto-install via the package manager (mpv etc.), then re-check.
+        if _linux_install_missing(missing_ess) and runtime_ready():
+            tracker.data["system_deps_ok"] = True
+            tracker.data["system_deps_ok_version"] = _version
+            tracker._save_data()
+            print_success("All required tools are installed.")
+            return True
         _show_linux_commands(missing_ess)
     elif os_name == "macos":
         print_info("Run the installer:  ./scripts/install-mac.sh")
@@ -543,6 +547,57 @@ def _linux_pkg_cmd(pkg: str):
 def _linux_chafa_cmd():
     """Return the install command for chafa for the detected package manager."""
     return _linux_pkg_cmd("chafa")
+
+
+def _linux_install_missing(missing_ess: list) -> bool:
+    """
+    Auto-install missing essentials (mpv, ffmpeg…) via the distro package
+    manager. Asks once, then runs `sudo <pm> install …` (sudo prompts for the
+    password). Returns True only if an install command actually ran to success.
+    Falls back to False (caller then prints the manual command).
+    """
+    pkg_map = {"player": "mpv", "ffmpeg": "ffmpeg", "aria2": "aria2"}
+    pkgs = [pkg_map.get(t, t) for t in missing_ess]
+    # aria2 isn't "essential" (HLS uses yt-dlp natively) but it's the fast path
+    # for direct .mp4 — grab it too while the package manager is open.
+    if not _have(("aria2c",)) and "aria2" not in pkgs:
+        pkgs.append("aria2")
+    # VLC is the fallback player (install.sh / install-mac.sh / Windows players
+    # already pull it) — add it here too so the uv-based install has parity.
+    if not _have(("vlc",)) and "vlc" not in pkgs:
+        pkgs.append("vlc")
+    if not pkgs:
+        return False
+
+    managers = [
+        ("apt-get", ["sudo", "apt-get", "install", "-y", *pkgs]),
+        ("dnf",     ["sudo", "dnf", "install", "-y", *pkgs]),
+        ("pacman",  ["sudo", "pacman", "-S", "--needed", "--noconfirm", *pkgs]),
+        ("zypper",  ["sudo", "zypper", "install", "-y", *pkgs]),
+        ("apk",     ["sudo", "apk", "add", *pkgs]),
+    ]
+    chosen = next(((b, c) for b, c in managers if shutil.which(b)), None)
+    if not chosen:
+        return False
+
+    if not sys.stdin.isatty():
+        return False
+    try:
+        ans = input(
+            f"Install missing tools ({', '.join(pkgs)}) now via "
+            f"{chosen[0]}? [Y/n] "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if ans in ("n", "no"):
+        return False
+
+    print_info(f"Installing {', '.join(pkgs)} (sudo may ask your password)…")
+    try:
+        return subprocess.run(chosen[1]).returncode == 0
+    except Exception as e:
+        print_warning(f"Auto-install failed: {e}")
+        return False
 
 
 def _show_linux_commands(missing_ess: list[str]):
@@ -1256,7 +1311,7 @@ def run_setup(force: bool = False) -> bool:
     print_info("This will :")
     print_info("  1. Install tuned mpv.conf + input.conf + position-resume hook")
     print_info("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)")
-    print_info("  3. Offer to install chafa (anime posters in the terminal)")
+    print_info("  3. Install the Nerd Font + chafa (crisp icons & posters)")
     print_info("  4. Offer to set up FlareSolverr (auto-solve Cloudflare, optional)")
     if os_name == "linux" and (gpus["nvidia"] or gpus["amd_discrete"]):
         gpu = "Nvidia" if gpus["nvidia"] else "AMD"
@@ -1280,6 +1335,11 @@ def run_setup(force: bool = False) -> bool:
     install_anime4k_shaders()
     print_info("\n[+] Anime posters (chafa)…")
     install_chafa()
+    # Nerd Font is a required dependency for crisp icons — install it on every
+    # OS and make 'nerd' the default icon style once it's present.
+    print_info("\n[+] Installing Nerd Font (crisp icons)…")
+    if install_nerd_font():
+        tracker.set_icon_style("nerd")
     print_info("\n[+] Cloudflare auto-solver (FlareSolverr, optional)…")
     install_flaresolverr()
     if os_name == "linux":
@@ -1364,10 +1424,26 @@ def _fix_anime4k_input_conf():
                 pass
 
 
+def _migrate_install_nerd_font():
+    """
+    Nerd Font became a standard dependency in 1.7.8 (first-run setup installs
+    it). Existing users' run_setup won't re-run, so install it for them on
+    upgrade and default to nerd icons if they never picked a style. Idempotent.
+    """
+    try:
+        if not detect_nerd_font():
+            install_nerd_font()
+        if detect_nerd_font() and "icon_style" not in tracker.data:
+            tracker.set_icon_style("nerd")
+    except Exception:
+        pass
+
+
 def _migrations():
     return [
         ("1.5.7", "Anime posters need chafa", install_chafa),
         ("1.7.4", "Fix Anime4K shader toggle on Windows", _fix_anime4k_input_conf),
+        ("1.7.8", "Install Nerd Font for crisp icons", _migrate_install_nerd_font),
     ]
 
 

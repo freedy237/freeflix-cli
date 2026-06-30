@@ -83,6 +83,27 @@ def _search_subtitle(series_title, season_title, episode_title):
     return None
 
 
+def _player_label(name: str, host: str, quality: str) -> str:
+    """Player-menu label with language + quality badges, e.g.
+    ``premium : sibnet  —  1080p  [VF]``."""
+    low = name.lower()
+    tags = []
+    if "vostfr" in low:
+        tags.append("VOSTFR")
+    elif "vfq" in low:
+        tags.append("VFQ")
+    elif "vff" in low or low.endswith(" vf") or low == "vf":
+        tags.append("VF")
+    elif low.endswith(" vo") or low == "vo":
+        tags.append("VO")
+    label = f"{name} : {host}" if host else name
+    if quality and quality != "✗":
+        label += f"  —  {quality}"
+    if tags:
+        label += "  " + " ".join(f"[{x}]" for x in tags)
+    return label
+
+
 def play_episode_flow(
     provider_name: str,
     series_title: str,
@@ -161,29 +182,33 @@ def play_episode_flow(
         )
 
     while True:
-        # Player Selection Menu
+        # Player Selection Menu (with language/quality badges)
         player_options = []
         for p in supported_players:
             try:
                 host = p.url.split("/")[2].split(".")[-2]
-                label = f"{p.name} : {host}"
             except IndexError:
-                label = p.name
-            q = quality_map.get(p.url)
-            if q:
-                label += f"  —  {q}"
-            player_options.append(label)
+                host = ""
+            player_options.append(_player_label(p.name, host, quality_map.get(p.url, "")))
         player_options.append(t("← Back"))
+
+        # Pre-select the last server the user picked, for fewer clicks.
+        last = tracker.get_last_server()
+        default_idx = next(
+            (i for i, p in enumerate(supported_players) if p.name == last), 0
+        )
 
         player_idx = select_from_list(
             player_options,
             t("🎮 Select Player:"),
+            default_index=default_idx,
         )
 
         if player_idx == len(supported_players):  # Back selected
             return False
 
         selected_player = supported_players[player_idx]
+        tracker.set_last_server(selected_player.name)
 
         # Construct title for player window (de-duplicate season + episode)
         clean_season = clean_season_title(series_title, season_title)

@@ -199,6 +199,16 @@ class ProgressTracker:
         self.data["icon_style"] = style
         self._save_data()
 
+    def get_last_server(self) -> str:
+        """Name of the last stream server/host the user picked (e.g. 'vidmoly'),
+        so the player menu can pre-select it next time."""
+        return self.data.get("last_server", "")
+
+    def set_last_server(self, name: str):
+        if name:
+            self.data["last_server"] = name
+            self._save_data()
+
     # Cloudflare cf_clearance fallback, per host. Stored as
     #   {"coflix.cymru": {"token": "...", "ua": "..."}}
     # The UA must match the browser that obtained the cookie (cf_clearance
