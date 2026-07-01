@@ -377,7 +377,7 @@ def _flow_goldenanime_stream(
         or "sudatchi.com/api/streams" in final_url
     ):
         try:
-            resp = requests.get(final_url, headers=headers, impersonate="chrome").json()
+            resp = requests.get(final_url, headers=headers, impersonate="chrome", timeout=15).json()
             if isinstance(resp, list) and len(resp) > 0:
                 final_url = resp[0].get("url", final_url)
         except Exception:

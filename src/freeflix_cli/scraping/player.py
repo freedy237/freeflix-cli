@@ -406,7 +406,7 @@ def get_hls_link_kakaflix(url: str, headers: dict) -> str:
 
     try:
         link: str = soup.find("iframe").attrs["src"]
-    except:
+    except Exception:
         return get_hls_link(response.url, headers)
     else:
         return get_hls_link(link, headers)
@@ -556,7 +556,7 @@ def get_hls_link_veev(url):
         dl_url = f"https://veev.to/dl?op=player_api&cmd=gi&file_code={media_id}&r=https://veev.to&ch={ch}&ie=1"
         try:
             resp = _get(dl_url, impersonate="chrome").json()
-        except:
+        except Exception:
             continue
 
         file_obj = resp.get("file")

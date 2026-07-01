@@ -153,6 +153,7 @@ def cf_get(session, url, **kw):
     import time as _t
 
     base_headers = kw.pop("headers", {})
+    kw.setdefault("timeout", 20)  # never hang a fetch on a dead host
 
     def _headers():
         cf = get_cf_headers(url)

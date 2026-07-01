@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.7.9
+
+### 📺 VLC fixes
+- **Quiet playback**: VLC no longer floods the terminal with libav/libva/codec
+  chatter — only the essentials are shown (its console output is hidden).
+- **Respects the chosen quality**: on HLS, VLC used to ramp up to the highest
+  variant, ignoring the resolution you picked. It's now capped with
+  `--adaptive-maxheight`, so 720p stays 720p.
+
+### 🧹 Internal cleanup (healthier base for 1.8)
+- All **bare `except:`** replaced with `except Exception:` (13) — Ctrl-C and real
+  errors are no longer swallowed.
+- **Network timeouts** added everywhere they were missing (scraper wrappers,
+  portal-resolution calls, the Cloudflare fetch helper, GoldenAnime) so a dead
+  host can never hang FreeFlix.
 ## 1.7.8
 
 ### 🐧 Linux install fixed (Kubuntu & co)

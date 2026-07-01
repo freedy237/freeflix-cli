@@ -188,7 +188,7 @@ def proxy_stream():
 
     try:
         headers = json.loads(headers_str)
-    except:
+    except Exception:
         headers = {}
 
     # 1. Fetch original M3U8 content
@@ -296,7 +296,7 @@ def proxy_ts():
 
     try:
         headers = json.loads(headers_str)
-    except:
+    except Exception:
         headers = {}
 
     # Fetch in stream mode
@@ -346,7 +346,7 @@ def proxy_video():
 
     try:
         headers = json.loads(headers_str)
-    except:
+    except Exception:
         headers = {}
 
     # Fetch stream

@@ -623,18 +623,22 @@ def _resolve_or_install(player_name: str):
     return exe
 
 
-def _run_with_data_meter(cmd, env=None):
+def _run_with_data_meter(cmd, env=None, quiet=False):
     """
     Launch the player (proxy mode) and report the TOTAL data consumed once
     it exits. We deliberately do NOT print a live counter during playback :
     mpv writes its own status lines to the same terminal, and a competing
     \\r line garbles both. So the player's output stays clean, and we print
     the total on a fresh line afterwards.
+
+    `quiet` hides the player's console spam (VLC floods stderr with libav /
+    libva / codec chatter the user doesn't want).
     """
     from .icons import icon
 
     proxy.reset_bytes_counter()
-    rc = subprocess.run(cmd, env=env).returncode
+    out = subprocess.DEVNULL if quiet else None
+    rc = subprocess.run(cmd, env=env, stdout=out, stderr=out).returncode
 
     total = proxy.get_bytes_served() / (1024 * 1024)
     if total > 0:
@@ -1558,6 +1562,12 @@ def play_video(
             try:
                 cmd = [player_executable, local_stream_url]
                 if player_name == "vlc":
+                    # Quiet the libav/libva/codec flood, and cap the adaptive
+                    # (HLS) ladder to the chosen resolution so VLC doesn't ramp
+                    # up to the highest variant, ignoring the picked quality.
+                    cmd.append("--quiet")
+                    if selected_quality:
+                        cmd.append(f"--adaptive-maxheight={selected_quality}")
                     if local_subtitle_path:
                         print_warning(
                             "Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead."
@@ -1582,7 +1592,7 @@ def play_video(
 
                 run_env = _nvidia_env() if player_name == "mpv" else None
                 # Proxy mode : show live data usage and the total at the end.
-                _run_with_data_meter(cmd, env=run_env)
+                _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
                 print_success("Playback completed successfully!")
@@ -1596,20 +1606,24 @@ def play_video(
             )
             try:
                 if player_name == "vlc":
-                    # VLC Command construction
+                    # VLC Command construction (quiet + capped adaptive quality)
                     cmd = [
                         player_executable,
+                        "--quiet",
                         stream_url,
                         f":http-referrer={referer}",
                         f":http-user-agent={user_agent}",
                         f"--meta-title={title}",
                     ]
+                    if selected_quality:
+                        cmd.append(f"--adaptive-maxheight={selected_quality}")
                     if local_subtitle_path:
                         print_warning(
                             "Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead."
                         )
                         cmd.append(f"--sub-file={local_subtitle_path}")
-                    subprocess.run(cmd, check=True)
+                    subprocess.run(cmd, check=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
                     # MPV Command construction
                     origin_domain = referer.split('/')[2] if referer else ""

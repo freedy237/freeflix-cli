@@ -31,6 +31,7 @@ def _get(url, **kw):
     import time as _time
 
     base_headers = kw.pop("headers", {})
+    kw.setdefault("timeout", 20)  # never hang on a dead host
 
     def _fetch():
         cf = cloudflare.get_cf_headers(url)
@@ -58,9 +59,9 @@ def get_website_url(portal=portals["coflix"]):
         return
 
     if portal.startswith("http"):
-        response = scraper.head(portal)
+        response = scraper.head(portal, timeout=20)
     else:
-        response = scraper.head("https://" + portal)
+        response = scraper.head("https://" + portal, timeout=20)
     response.raise_for_status()
 
     website_origin = response.url

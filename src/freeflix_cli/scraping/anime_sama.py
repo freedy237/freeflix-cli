@@ -18,6 +18,7 @@ def _get(url, **kw):
     — asks FlareSolverr to auto-solve the challenge, then retries once.
     """
     base_headers = kw.pop("headers", {})
+    kw.setdefault("timeout", 20)  # never hang on a dead host
 
     def _fetch():
         cf = cloudflare.get_cf_headers(url)
@@ -43,9 +44,9 @@ def get_website_url(portal=portals["anime-sama"]):
         return
 
     if portal.startswith("http"):
-        response = scraper.get(portal)
+        response = scraper.get(portal, timeout=20)
     else:
-        response = scraper.get("https://" + portal)
+        response = scraper.get("https://" + portal, timeout=20)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html5lib")
@@ -53,7 +54,7 @@ def get_website_url(portal=portals["anime-sama"]):
     btn = soup.find("a", {"class": "btn-primary"})
     recommanded_url = btn.attrs["href"] if btn else portal
 
-    response = scraper.head(recommanded_url)
+    response = scraper.head(recommanded_url, timeout=20)
     response.raise_for_status()
 
     website_origin = response.url

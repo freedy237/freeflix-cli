@@ -119,7 +119,7 @@ class MediaExtractor:
                                 "headers": headers,
                             }
                         )
-            except:
+            except Exception:
                 continue
         return results
 
@@ -160,7 +160,7 @@ class MediaExtractor:
                         "headers": headers,
                     }
                 ]
-        except:
+        except Exception:
             pass
         return []
 
@@ -220,7 +220,7 @@ class MediaExtractor:
                         }
                     )
                 return results
-        except:
+        except Exception:
             pass
         return []
 
@@ -303,10 +303,10 @@ class MediaExtractor:
                                     "headers": {"Referer": f"{base_url}/"},
                                 }
                             )
-                except:
+                except Exception:
                     continue
             return results
-        except:
+        except Exception:
             return []
 
     def search_xpass(self, tmdb_id, season=None, episode=None):
@@ -349,10 +349,10 @@ class MediaExtractor:
                                     "headers": {"Referer": f"{base_url}/"},
                                 }
                             )
-                except:
+                except Exception:
                     continue
             return results
-        except:
+        except Exception:
             return []
 
     def extract(

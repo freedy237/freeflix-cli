@@ -85,7 +85,7 @@ class SubtitleExtractor:
                     }
                 )
             return normalized
-        except:
+        except Exception:
             return []
 
     def search(self, imdb_id, season=None, episode=None, lang_filter=None):
