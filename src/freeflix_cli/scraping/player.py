@@ -5,7 +5,8 @@ from .deobfuscate import deobfuscate
 from bs4 import BeautifulSoup
 from ..proxy import DNS_OPTIONS
 from ..defaults import DEFAULT_PLAYERS, DEFAULT_NEW_URL, DEFAULT_KAKAFLIX_PLAYERS
-import re, base64
+import re
+import base64
 
 import json
 import binascii
@@ -33,7 +34,7 @@ def _scraper():
 scraper = _scraper()
 
 
-from .. import cloudflare
+from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
 
 
 def _get(url, **kw):
@@ -315,7 +316,7 @@ def get_hls_link_filemoon(url: str, headers: dict) -> str:
         payload = decode_base64(playback.get("payload"))
 
         # 3. Test all key combinations
-        for i, key in enumerate(potential_keys):
+        for _i, key in enumerate(potential_keys):
             result = try_decrypt(key, iv, payload)
             if result:
                 return result
@@ -593,7 +594,7 @@ def get_hls_link_xtremestream(url, headers):
     return f"https://{url_root}/player/xs1.php?data={data_id}"
 
 
-def get_hls_link(url: str, headers: dict = {}) -> str | None:
+def get_hls_link(url: str, headers: dict = None) -> str | None:
     """
     Extract HLS/video link from a player URL.
     Automatically detects the player type and uses the appropriate parser.
@@ -605,6 +606,7 @@ def get_hls_link(url: str, headers: dict = {}) -> str | None:
     Returns:
         HLS/video stream URL if successful, None otherwise
     """
+    headers = headers or {}
     # Find matching player and parse accordingly
     for player_name, config in players.items():
         if player_name in url.lower():

@@ -10,6 +10,7 @@ from ..cli_utils import (
     get_user_input,
     pause,
     spinner,
+    crumb,
 )
 from ..tracker import tracker
 from ..anilist import anilist_client
@@ -37,8 +38,8 @@ def _update_anilist_progress(series, season, selected_episode):
     if not media_id:
         # Ask user if they want to link
         link_choice = select_from_list(
-            ["Yes", "No"],
-            f"Link '{series.title}' to AniList for auto-tracking?",
+            [t("Yes"), t("No")],
+            f"{t('Link to AniList for auto-tracking?')} ({series.title})",
         )
         if link_choice == 0:
             results = anilist_client.search_media(series.title)
@@ -46,8 +47,8 @@ def _update_anilist_progress(series, season, selected_episode):
                 media_options = [
                     f"{m['title']['english'] or m['title']['romaji']} ({m['seasonYear']})"
                     for m in results
-                ] + ["Cancel"]
-                m_idx = select_from_list(media_options, "Select AniList Match:")
+                ] + [t("Cancel")]
+                m_idx = select_from_list(media_options, t("Select AniList Match:"))
                 if m_idx < len(results):
                     media_id = results[m_idx]["id"]
                     tracker.set_anilist_mapping(
@@ -95,8 +96,8 @@ def _update_anilist_progress(series, season, selected_episode):
 
                 if (
                     select_from_list(
-                        ["Yes", "No"],
-                        f"Switch AniList mapping to sequel '{sequel_title}'?",
+                        [t("Yes"), t("No")],
+                        f"{t('Switch AniList mapping to sequel')} '{sequel_title}' ?",
                     )
                     == 0
                 ):
@@ -125,14 +126,14 @@ def handle_anime_sama():
     anime_sama.get_website_url()
 
     query = get_user_input(
-        "Search query (or 'exit' to back)",
+        t("Search query (or 'exit' to back)"),
         header=f"{icon('anime')} Anime-Sama",
     )
     if not query or query.lower() == "exit":
         return
 
     try:
-        with spinner(f"Searching for {query}…"):
+        with spinner(f"{t('Searching for')} {query}…"):
             results = anime_sama.search(query)
     except Exception as e:
         print_error(f"Search failed (network/source issue): {type(e).__name__}")
@@ -193,10 +194,10 @@ def handle_anime_sama():
     if saved_progress:
         choice = select_from_list(
             [
-                f"Resume {saved_progress['season_title']} - {saved_progress['episode_title']}",
-                "Browse Seasons",
+                f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
+                t("Browse Seasons"),
             ],
-            f"Found saved progress for {series.title}:",
+            f"{t('Found saved progress for')} {series.title} :",
         )
         if choice == 0:
             resume_anime_sama(saved_progress)
@@ -206,10 +207,11 @@ def handle_anime_sama():
     # UP one level (Back at the season picker leaves the series entirely).
     back = t("← Back")
     while True:  # ── Season ──
-        season_idx = select_from_list(
-            [s.title for s in series.seasons] + [back],
-            f"{icon('tv')} {t('Select Season:')}",
-        )
+        with crumb(series.title):
+            season_idx = select_from_list(
+                [s.title for s in series.seasons] + [back],
+                f"{icon('tv')} {t('Select Season:')}",
+            )
         if season_idx >= len(series.seasons):
             return  # leave the series → back to source menu
 
@@ -233,9 +235,10 @@ def handle_anime_sama():
             if len(langs) == 1:
                 selected_lang = langs[0]
             else:
-                lang_idx = select_from_list(
-                    langs + [back], f"{icon('globe')} {t('Select Language:')}"
-                )
+                with crumb(series.title), crumb(season.title):
+                    lang_idx = select_from_list(
+                        langs + [back], f"{icon('globe')} {t('Select Language:')}"
+                    )
                 if lang_idx >= len(langs):
                     break  # back to season picker
                 selected_lang = langs[lang_idx]
@@ -243,11 +246,12 @@ def handle_anime_sama():
 
             ep_idx = 0
             while True:  # ── Episode ──
-                ep_idx = select_from_list(
-                    [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", back],
-                    f"{icon('tv')} {t('Select Episode:')}",
-                    default_index=min(ep_idx, len(episodes) - 1),
-                )
+                with crumb(series.title), crumb(season.title), crumb(selected_lang):
+                    ep_idx = select_from_list(
+                        [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", back],
+                        f"{icon('tv')} {t('Select Episode:')}",
+                        default_index=min(ep_idx, len(episodes) - 1),
+                    )
                 if ep_idx == len(episodes):  # Download ALL
                     preferred = _pick_player_for_batch(episodes, {"Referer": anime_sama.website_origin})
                     if preferred is None:
@@ -279,9 +283,8 @@ def handle_anime_sama():
                         season_url=selected_season_access.url,
                         logo_url=series.img,
                         headers={"Referer": anime_sama.website_origin},
-                        anilist_callback=lambda: _update_anilist_progress(
-                            series, season, selected_episode
-                        ),
+                        anilist_callback=lambda _se=season, _ep=selected_episode:
+                            _update_anilist_progress(series, _se, _ep),
                         genres=getattr(series, "genres", None),
                     )
                     if not success:
@@ -387,9 +390,8 @@ def resume_anime_sama(data):
             season_url=data["season_url"],
             logo_url=data.get("logo_url"),
             headers={"Referer": anime_sama.website_origin},
-            anilist_callback=lambda: _update_anilist_progress(
-                series_dummy, season, selected_episode
-            ),
+            anilist_callback=lambda _ep=selected_episode:
+                _update_anilist_progress(series_dummy, season, _ep),
         )
 
         if success:

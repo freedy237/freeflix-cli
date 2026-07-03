@@ -417,11 +417,11 @@ def proxy_player_ui():
     <div id="controls-overlay">
         <button id="closeBtn" class="action-btn">Mark as watched & Close</button>
     </div>
-    
+
     <video id="video" controls crossorigin="anonymous" playsinline>
         <!-- Title and captions will be injected via JS -->
     </video>
-    
+
     <div id="finishedMsg" class="message">
         Video finished! You can safely close this tab.<br>
         <button onclick="window.close()">Close Tab</button>
@@ -433,7 +433,7 @@ def proxy_player_ui():
             const urlParams = new URLSearchParams(window.location.search);
             const source = urlParams.get('url');
             const subPath = urlParams.get('sub_path');
-            
+
             const isMp4 = source && source.indexOf('/video') !== -1;
             const closeBtn = document.getElementById('closeBtn');
 
@@ -471,15 +471,15 @@ def proxy_player_ui():
                             xhr.withCredentials = false; // Important to avoid CORS issues if not needed
                         }
                     });
-                    
+
                     hls.loadSource(source);
                     hls.attachMedia(video);
-                    
+
                     hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
                         // Extract available qualities
                         const availableQualities = hls.levels.map((l) => l.height);
                         // Add Auto option
-                        availableQualities.unshift(0); 
+                        availableQualities.unshift(0);
 
                         defaultOptions.quality = {
                             default: 0, // 0 means auto
@@ -495,7 +495,7 @@ def proxy_player_ui():
                         };
 
                         player = new Plyr(video, defaultOptions);
-                        
+
                         // Play immediately after setup
                         player.play();
                     });

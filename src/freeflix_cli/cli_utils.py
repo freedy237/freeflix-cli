@@ -122,6 +122,102 @@ def pause():
     console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
 
 
+# ─── Breadcrumb trail (1.8) ────────────────────────────────────────────
+# A tiny global stack rendered above every menu :
+#   🏠 Home › Anime-Sama › Naruto › Season 2
+# Handlers call crumb_reset()/crumb_push()/crumb_pop() at each level, so the
+# user always knows where they are and what Esc will go back to.
+_crumbs: list = []
+
+
+def crumb_reset(*labels):
+    """Replace the whole trail (e.g. entering a screen from Home)."""
+    _crumbs[:] = [x for x in labels if x]
+
+
+def crumb_push(label):
+    if label:
+        _crumbs.append(str(label))
+
+
+def crumb_pop():
+    if _crumbs:
+        _crumbs.pop()
+
+
+def crumbs_text() -> str:
+    return " › ".join(_crumbs)
+
+
+class crumb:
+    """Scoped breadcrumb level : ``with crumb(series.title): …`` — the trail is
+    restored on exit no matter how the block ends (break/return/exception)."""
+
+    def __init__(self, label):
+        self.label = label
+
+    def __enter__(self):
+        self._n = len(_crumbs)
+        crumb_push(self.label)
+        return self
+
+    def __exit__(self, *exc):
+        del _crumbs[self._n:]
+        return False
+
+
+def _crumb_line(max_w: int) -> Text:
+    """The breadcrumb as a single dim line, truncated from the LEFT so the
+    deepest (most useful) levels stay visible."""
+    txt = crumbs_text()
+    if cell_len(txt) > max_w - 4:
+        while _crumbs and cell_len("… › " + txt) > max_w - 4:
+            txt = txt.split(" › ", 1)[-1] if " › " in txt else txt[-(max_w - 8):]
+            if " › " not in txt and cell_len("… › " + txt) <= max_w - 4:
+                break
+        txt = "… › " + txt
+    return Text(f"  {txt}", style=color("dim"))
+
+
+def _status_bar() -> Text:
+    """Bottom hint line shown under every menu (consistent across screens)."""
+    from .i18n import t as _t
+    return Text(
+        f"  ↑/↓ · {_t('Enter: select')} · {_t('Esc: back')} · {_t('?: help')}",
+        style=color("dim"),
+    )
+
+
+def _help_overlay() -> Panel:
+    """The '?' help overlay : every keyboard shortcut in one panel."""
+    from .i18n import t as _t
+    rows = [
+        ("↑ / ↓",      _t("navigate")),
+        ("Enter",      _t("select")),
+        ("Esc",        _t("go back / cancel")),
+        ("Space",      _t("toggle episode (multi-select)")),
+        ("a",          _t("select all (multi-select)")),
+        ("Esc Esc",    _t("cancel a running download")),
+        ("Ctrl+C",     _t("quit FreeFlix")),
+        ("? ",         _t("show / hide this help")),
+    ]
+    body = Text()
+    body.append(f"\n  {_t('Keyboard shortcuts')}\n\n", style=f"bold {color('accent')}")
+    for key_label, desc in rows:
+        body.append(f"   {key_label:<9}", style=f"bold {color('info')}")
+        body.append(f" {desc}\n", style="white")
+    body.append(f"\n  {_t('In the player (mpv)')}\n\n", style=f"bold {color('accent')}")
+    for key_label, desc in [
+        ("CTRL+1/2", _t("Anime4K quality (max / light)")),
+        ("CTRL+0",   _t("Anime4K off")),
+        ("q",        _t("close the player")),
+    ]:
+        body.append(f"   {key_label:<9}", style=f"bold {color('info')}")
+        body.append(f" {desc}\n", style="white")
+    return Panel(body, border_style=color("accent"),
+                 title=f"[bold]{_t('Help')}[/bold]", expand=False)
+
+
 def toast(message: str, kind: str = "success", seconds: float = 1.1):
     """
     Non-blocking confirmation: flash a brief styled message that clears itself
@@ -156,7 +252,9 @@ def _read_menu_key():
     """
     import sys
     try:
-        import termios, tty, select as _sel
+        import termios
+        import tty
+        import select as _sel
         is_tty = sys.stdin.isatty()
     except Exception:
         is_tty = False
@@ -216,6 +314,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     """
     selected_index = max(0, min(default_index, len(options) - 1))
     start_index = 0
+    show_help = {"on": False}
 
     def _fit(text: str) -> str:
         """Truncate an option to the terminal width (in DISPLAY columns, so
@@ -234,12 +333,17 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     def generate_renderable():
         nonlocal start_index
 
+        # '?' help overlay replaces the menu until any key is pressed.
+        if show_help["on"]:
+            return _help_overlay()
+
         # Calculate dynamic window size based on terminal height
         term_height = console.size.height
-        # Reserve lines for prompt (2), header/spacing (2), arrows (2) -> ~6 lines reserve.
-        # The in-Live header panel eats 3 more rows when present ; each section
-        # header line eats ~2 more.
-        reserved_lines = 6 + (3 if header else 0)
+        # Reserve lines for prompt (2), header/spacing (2), arrows (2),
+        # breadcrumb (1) and status bar (2) -> ~9 lines reserve. The in-Live
+        # header panel eats 3 more rows when present ; each section header
+        # line eats ~2 more.
+        reserved_lines = 9 + (3 if header else 0)
         if group_headers:
             reserved_lines += 2 * len(group_headers)
         available_height = max(3, term_height - reserved_lines)
@@ -260,6 +364,9 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         # on resize (no static full-width panel left to wrap/stack above).
         if header:
             lines.append(_header_panel(header))
+        # Breadcrumb trail : where you are, what Esc goes back to.
+        if _crumbs:
+            lines.append(_crumb_line(console.size.width))
         lines.append(Text(f"\n❯ {iconify(prompt)}", style=f"bold {color('accent')}"))
 
         # Up arrow indicator
@@ -291,6 +398,10 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         if end_index < len(options):
             lines.append(Text("  ↓ ...", style=color("dim")))
 
+        # Status bar : consistent bottom hints on every menu.
+        lines.append(Text(""))
+        lines.append(_status_bar())
+
         return Group(*lines)
 
     # Full-screen menus (those carrying a banner) render in the ALTERNATE
@@ -308,7 +419,18 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         while True:
             key = _read_menu_key()
 
-            if key == readchar.key.UP:
+            # Help overlay open → any key closes it (arrows don't navigate).
+            if show_help["on"]:
+                if key == readchar.key.CTRL_C:
+                    raise KeyboardInterrupt("Menu cancelled by user")
+                show_help["on"] = False
+                live.update(generate_renderable())
+                continue
+
+            if key == "?":
+                show_help["on"] = True
+                live.update(generate_renderable())
+            elif key == readchar.key.UP:
                 selected_index = (selected_index - 1) % len(options)
                 live.update(generate_renderable())
             elif key == readchar.key.DOWN:
@@ -722,7 +844,9 @@ def select_with_preview(labels, prompt, previews, default_index=0):
 
     use_raw = False
     try:
-        import termios, tty, select as _sel  # noqa: F401
+        import termios  # noqa: F401
+        import tty  # noqa: F401
+        import select as _sel  # noqa: F401
         use_raw = sys.stdin.isatty()
     except Exception:
         use_raw = False
@@ -731,7 +855,9 @@ def select_with_preview(labels, prompt, previews, default_index=0):
 
     try:
         if use_raw:
-            import termios, tty, select as _sel
+            import termios
+            import tty
+            import select as _sel
             fd = sys.stdin.fileno()
             old = termios.tcgetattr(fd)
             try:

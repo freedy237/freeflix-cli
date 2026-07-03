@@ -18,7 +18,7 @@ from ..proxy import DNS_OPTIONS
 website_origin = ""
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
-from .. import cloudflare
+from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
 
 
 def _get(url, **kw):
@@ -49,7 +49,7 @@ def _get(url, **kw):
     return resp
 
 
-from .config import portals
+from .config import portals  # noqa: E402 (deliberate late import — order matters)
 
 
 def get_website_url(portal=portals["coflix"]):

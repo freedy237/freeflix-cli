@@ -22,6 +22,7 @@ from ..cli_utils import (
 )
 from ..scraping import nyaa
 from ..player_manager import DOWNLOAD_DIR
+from ..i18n import t
 
 
 TORRENT_DIR = os.path.join(DOWNLOAD_DIR, "Torrents")
@@ -90,7 +91,7 @@ def handle_nyaa():
         pause()
         return
 
-    query = get_user_input("Search nyaa.si (e.g. 'Naruto 1080p'), or 'exit'")
+    query = get_user_input(t("Search nyaa.si (e.g. 'Naruto 1080p'), or 'exit'"))
     if not query or query.lower() == "exit":
         return
 
@@ -103,7 +104,7 @@ def handle_nyaa():
         return
 
     labels = [_format_row(r) for r in results] + ["← Back"]
-    idx = select_from_list(labels, "Pick a torrent:")
+    idx = select_from_list(labels, t("Pick a torrent:"))
     if idx == len(results):
         return
 

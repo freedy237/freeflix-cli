@@ -9,7 +9,7 @@ website_origin = ""
 
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
-from .. import cloudflare
+from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
 
 
 def _get(url, **kw):
@@ -34,7 +34,7 @@ def _get(url, **kw):
 info_class = "info-value"
 
 
-from .config import portals
+from .config import portals  # noqa: E402 (deliberate late import — order matters)
 
 
 def get_website_url(portal=portals["anime-sama"]):

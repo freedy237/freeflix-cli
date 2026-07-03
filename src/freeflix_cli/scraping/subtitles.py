@@ -111,8 +111,8 @@ class SubtitleExtractor:
 
             filtered = []
             for sub in all_subs:
-                l = (sub.get("lang") or sub.get("lang_code") or "").lower()
-                if target in l or l in target or (len(f) == 2 and l.startswith(f)):
+                lg = (sub.get("lang") or sub.get("lang_code") or "").lower()
+                if target in lg or lg in target or (len(f) == 2 and lg.startswith(f)):
                     filtered.append(sub)
             all_subs = filtered
 

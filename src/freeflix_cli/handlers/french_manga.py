@@ -112,7 +112,7 @@ def handle_french_manga():
     terminal_image.show_poster(
         data.get("cover"),
         title=title_disp,
-        info_lines=[f"{t('Languages')}: {', '.join(l.upper() for l in langs)}"],
+        info_lines=[f"{t('Languages')}: {', '.join(lg.upper() for lg in langs)}"],
     )
 
     while True:  # ── Language ──

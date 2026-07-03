@@ -9,6 +9,8 @@ from .cli_utils import (
     get_user_input,
     pause,
     toast,
+    crumb_reset,
+    crumb_push,
     console,
 )
 from .i18n import t
@@ -601,6 +603,7 @@ def main():
 
         menu_items.append(f"{icon('exit')} {t('Exit')}")
 
+        crumb_reset(f"{icon('home')} {t('Home')}")
         choice_idx = select_from_list(
             menu_items,
             t("What would you like to do?"),
@@ -616,10 +619,12 @@ def main():
             continue
 
         if choice_idx == history_idx:
+            crumb_reset(f"{icon('home')} {t('Home')}", t("My History"))
             history_ui.handle_history()
             continue
 
         if choice_idx == downloads_idx:
+            crumb_reset(f"{icon('home')} {t('Home')}", t("My Downloads"))
             _browse_local_downloads()
             continue
 
@@ -654,6 +659,7 @@ def main():
             # cancelled with Esc, finished, or backed out), come back HERE —
             # not to the home menu. Only the list's "← Back" returns home.
             while True:
+                crumb_reset(f"{icon('home')} {t('Home')}", t("Sources"))
                 p_items = [p["name"] for p in ordered] + [t("← Back")]
                 p_idx = select_from_list(
                     p_items,
@@ -663,12 +669,15 @@ def main():
                 )
                 if p_idx >= len(ordered):
                     break  # ← Back → home menu
+                # Deeper menus inside the handler inherit this trail.
+                crumb_push(ordered[p_idx]["name"])
                 ordered[p_idx]["handler"]()
             continue
 
         if choice_idx == settings_idx:
             # Settings menu
             while True:
+                crumb_reset(f"{icon('home')} {t('Home')}", t("Settings"))
                 clear_screen()
                 print_header(f"{icon('settings')} {t('Settings')}")
                 token = tracker.get_anilist_token()

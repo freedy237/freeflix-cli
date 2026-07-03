@@ -10,6 +10,7 @@ from ..cli_utils import (
     console,
     pause,
     spinner,
+    crumb,
 )
 from ..tracker import tracker
 from ..icons import icon
@@ -29,13 +30,13 @@ def resolve_url(url, base):
 def handle_french_stream():
     """Handle French-Stream provider flow."""
     query = get_user_input(
-        "Search query (or 'exit' to back)",
+        t("Search query (or 'exit' to back)"),
         header=f"{icon('flag_fr')} French-Stream",
     )
     if not query or query.lower() == "exit":
         return
 
-    with spinner(f"Searching for {query}…"):
+    with spinner(f"{t('Searching for')} {query}…"):
         results = french_stream.search(query)
 
     if not results:
@@ -103,10 +104,10 @@ def handle_french_stream():
         if saved_progress:
             choice = select_from_list(
                 [
-                    f"Resume {saved_progress['season_title']} - {saved_progress['episode_title']}",
-                    "Browse Episodes",
+                    f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
+                    t("Browse Episodes"),
                 ],
-                f"Found saved progress for {content.title}:",
+                f"{t('Found saved progress for')} {content.title} :",
             )
             if choice == 0:
                 resume_french_stream(saved_progress)
@@ -133,11 +134,12 @@ def handle_french_stream():
 
             ep_idx = 0
             while True:  # ── Episode ──
-                ep_idx = select_from_list(
-                    [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
-                    f"{icon('tv')} {t('Select Episode:')}",
-                    default_index=min(ep_idx, len(episodes) - 1),
-                )
+                with crumb(content.title), crumb(lang):
+                    ep_idx = select_from_list(
+                        [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
+                        f"{icon('tv')} {t('Select Episode:')}",
+                        default_index=min(ep_idx, len(episodes) - 1),
+                    )
                 if ep_idx == len(episodes):  # Download ALL
                     preferred = _pick_player_for_batch(episodes, {"Referer": french_stream.website_origin})
                     if preferred is None:
@@ -255,7 +257,7 @@ def resume_french_stream(data):
             f"Watch again ({data['episode_title']})",
             "Cancel",
         ]
-        choice = select_from_list(options, "What would you like to do?")
+        choice = select_from_list(options, t("What would you like to do?"))
         if choice == 2:
             return
         elif choice == 0:
@@ -284,7 +286,7 @@ def resume_french_stream(data):
                 if ep_idx + 1 < len(episodes):
                     if (
                         select_from_list(
-                            ["Yes", "No"], f"Play next: {episodes[ep_idx+1].title}?"
+                            [t("Yes"), t("No")], f"{t('Play next:')} {episodes[ep_idx+1].title} ?"
                         )
                         == 0
                     ):

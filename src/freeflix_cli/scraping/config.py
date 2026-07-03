@@ -62,6 +62,6 @@ def _refresh_remote_portals():
     portals.update(merged)
 
 
-import threading as _threading
+import threading as _threading  # noqa: E402 (deliberate late import — order matters)
 
 _threading.Thread(target=_refresh_remote_portals, daemon=True).start()

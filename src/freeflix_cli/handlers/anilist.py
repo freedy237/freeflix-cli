@@ -14,6 +14,8 @@ from ..cli_utils import (
 )
 from .anime_sama import anime_sama
 from . import goldenanime
+from ..i18n import t
+from ..icons import icon
 
 
 def handle_anilist_continue():
@@ -53,7 +55,7 @@ def handle_anilist_continue():
         previews.append(make_preview(cover=cover, title=title,
                                      lines=[status], panel_title="AniList"))
 
-    choice_idx = select_with_preview(labels, "Select Anime to Continue:", previews)
+    choice_idx = select_with_preview(labels, t("Select Anime to Continue:"), previews)
     if choice_idx >= len(entries):  # Esc / Back
         return
 
@@ -77,8 +79,8 @@ def handle_anilist_continue():
         print_info(f"Target: [cyan]{media_title}[/cyan] - Episode {next_episode_num}")
 
     # --- Provider Selection ---
-    providers = ["Anime-Sama (VF/VOSTFR)", "GoldenAnime (VO)", "← Back"]
-    p_choice = select_from_list(providers, "Select Provider:")
+    providers = ["Anime-Sama (VF/VOSTFR)", "GoldenAnime (VO)", t("← Back")]
+    p_choice = select_from_list(providers, t("Select a Provider:"))
 
     if p_choice == 2:  # Back
         return
@@ -129,10 +131,10 @@ def handle_anilist_continue():
     if not results:
         print_warning("No results found on Anime-Sama.")
         choice = select_from_list(
-            ["Try Manual Search", "Cancel"], "What would you like to do?"
+            [t("Try Manual Search"), t("Cancel")], t("What would you like to do?")
         )
         if choice == 0:
-            manual_query = get_user_input("Enter search query")
+            manual_query = get_user_input(t("Enter search query"))
             results = anime_sama.search(manual_query)
             if not results:
                 print_error("Still no results found.")
@@ -142,7 +144,7 @@ def handle_anilist_continue():
 
     # Let user confirm the match to be safe
     r_idx = select_from_list(
-        [r.title for r in results] + ["Cancel"], "Select the matching result:"
+        [r.title for r in results] + [t("Cancel")], t("Select the matching result:")
     )
     if r_idx == len(results):
         return
@@ -162,24 +164,24 @@ def handle_anilist_continue():
     # Try to auto-select the season if the title had a season number
     target_season_num = None
     # Check media_title or romaji_title for "Season X"
-    for t in [media_title, romaji_title]:
-        if not t:
+    for cand in [media_title, romaji_title]:
+        if not cand:
             continue
-        match = re.search(r"Season\s+(\d+)", t, re.IGNORECASE)
+        match = re.search(r"Season\s+(\d+)", cand, re.IGNORECASE)
         if match:
             target_season_num = int(match.group(1))
             break
-        match = re.search(r"\s+S(\d+)", t, re.IGNORECASE)
+        match = re.search(r"\s+S(\d+)", cand, re.IGNORECASE)
         if match:
             target_season_num = int(match.group(1))
             break
 
     # Also check if it's "Part X" which sometimes maps to seasons on providers
     if target_season_num is None:
-        for t in [media_title, romaji_title]:
-            if not t:
+        for cand in [media_title, romaji_title]:
+            if not cand:
                 continue
-            match = re.search(r"Part\s+(\d+)", t, re.IGNORECASE)
+            match = re.search(r"Part\s+(\d+)", cand, re.IGNORECASE)
             if match:
                 # Part 1 is usually Season 1, Part 2 could be Season 2 or just Part 2
                 target_season_num = int(match.group(1))
@@ -206,7 +208,7 @@ def handle_anilist_continue():
 
     season_idx = select_from_list(
         [s.title for s in series.seasons],
-        "📺 Select Season:",
+        f"{icon('tv')} {t('Select Season:')}",
         default_index=default_season_idx,
     )
 
@@ -227,7 +229,7 @@ def handle_anilist_continue():
         print_warning("No episodes found.")
         return
 
-    lang_idx = select_from_list(langs, "🌍 Select Language:")
+    lang_idx = select_from_list(langs, f"{icon('globe')} {t('Select Language:')}")
     selected_lang = langs[lang_idx]
     episodes = season.episodes[selected_lang]
 
@@ -249,7 +251,7 @@ def handle_anilist_continue():
             f"Could not automatically find Episode {next_episode_num}. Please select:"
         )
         start_ep_idx = select_from_list(
-            [e.title for e in episodes], "📺 Select Episode:"
+            [e.title for e in episodes], f"{icon('tv')} {t('Select Episode:')}"
         )
     else:
         print_success(
@@ -285,7 +287,7 @@ def handle_anilist_continue():
             break  # Back / failed → leave
 
         if ep_idx + 1 < len(episodes) and select_from_list(
-            ["Yes", "No"], f"Play next: {episodes[ep_idx+1].title}?"
+            [t("Yes"), t("No")], f"{t('Play next:')} {episodes[ep_idx+1].title} ?"
         ) == 0:
             ep_idx += 1
             continue

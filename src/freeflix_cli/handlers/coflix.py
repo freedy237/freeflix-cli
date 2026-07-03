@@ -10,6 +10,7 @@ from ..cli_utils import (
     get_user_input,
     console,
     pause,
+    crumb,
 )
 from ..tracker import tracker
 from ..icons import icon
@@ -25,13 +26,13 @@ def handle_coflix():
 
     while True:
         query = get_user_input(
-            "Search query (or 'exit' to back)",
+            t("Search query (or 'exit' to back)"),
             header=f"{icon('movie')} Coflix",
         )
         if not query or query.lower() == "exit":
             break
 
-        with spinner(f"Searching for {query}…"):
+        with spinner(f"{t('Searching for')} {query}…"):
             try:
                 results = coflix.search(query)
             except Exception as e:
@@ -91,8 +92,8 @@ def handle_coflix():
             saved_progress = tracker.get_series_progress("Coflix", content.title)
             if saved_progress:
                 choice = select_from_list(
-                    ["Watch again/Resume", "Cancel"],
-                    f"Found saved progress for {content.title}:",
+                    [t("Watch again/Resume"), t("Cancel")],
+                    f"{t('Found saved progress for')} {content.title} :",
                 )
                 if choice == 0:
                     resume_coflix(saved_progress)
@@ -135,20 +136,21 @@ def handle_coflix():
             if saved_progress:
                 choice = select_from_list(
                     [
-                        f"Resume {saved_progress['season_title']} - {saved_progress['episode_title']}",
-                        "Browse Seasons",
+                        f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
+                        t("Browse Seasons"),
                     ],
-                    f"Found saved progress for {content.title}:",
+                    f"{t('Found saved progress for')} {content.title} :",
                 )
                 if choice == 0:
                     resume_coflix(saved_progress)
                     continue
 
             while True:  # ── Season ──
-                season_idx = select_from_list(
-                    [s.title for s in content.seasons] + [t("← Back")],
-                    f"{icon('tv')} {t('Select Season:')}",
-                )
+                with crumb(content.title):
+                    season_idx = select_from_list(
+                        [s.title for s in content.seasons] + [t("← Back")],
+                        f"{icon('tv')} {t('Select Season:')}",
+                    )
                 if season_idx >= len(content.seasons):
                     break  # back to the search prompt
 
@@ -166,10 +168,11 @@ def handle_coflix():
                     continue
 
                 while True:  # ── Episode ──
-                    ep_idx = select_from_list(
-                        [e.title for e in season.episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
-                        f"{icon('tv')} {t('Select Episode:')}",
-                    )
+                    with crumb(content.title), crumb(season.title):
+                        ep_idx = select_from_list(
+                            [e.title for e in season.episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
+                            f"{icon('tv')} {t('Select Episode:')}",
+                        )
                     if ep_idx == len(season.episodes):  # Download ALL
                         headers = {"Referer": "https://lecteurvideo.com/"}
                         with spinner(t("Preparing episodes for download…")):

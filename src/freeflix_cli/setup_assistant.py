@@ -1315,7 +1315,7 @@ def run_setup(force: bool = False) -> bool:
     print_info("  4. Offer to set up FlareSolverr (auto-solve Cloudflare, optional)")
     if os_name == "linux" and (gpus["nvidia"] or gpus["amd_discrete"]):
         gpu = "Nvidia" if gpus["nvidia"] else "AMD"
-        print_info(f"  3. Install a PRIME wrapper so standalone mpv uses the {gpu} dGPU")
+        print_info(f"  5. Install a PRIME wrapper so standalone mpv uses the {gpu} dGPU")
     print_info("")
 
     try:
@@ -1329,24 +1329,24 @@ def run_setup(force: bool = False) -> bool:
         tracker._save_data()
         return False
 
-    print_info("\n[1/3] Installing mpv configuration…")
+    print_info("\n• Installing mpv configuration…")
     install_config_files()
-    print_info("\n[2/3] Downloading Anime4K shaders…")
+    print_info("\n• Downloading Anime4K shaders…")
     install_anime4k_shaders()
-    print_info("\n[+] Anime posters (chafa)…")
+    print_info("\n• Anime posters (chafa)…")
     install_chafa()
     # Nerd Font is a required dependency for crisp icons — install it on every
     # OS and make 'nerd' the default icon style once it's present.
-    print_info("\n[+] Installing Nerd Font (crisp icons)…")
+    print_info("\n• Installing Nerd Font (crisp icons)…")
     if install_nerd_font():
         tracker.set_icon_style("nerd")
-    print_info("\n[+] Cloudflare auto-solver (FlareSolverr, optional)…")
+    print_info("\n• Cloudflare auto-solver (FlareSolverr, optional)…")
     install_flaresolverr()
     if os_name == "linux":
-        print_info("\n[3/3] Installing PRIME wrapper…")
+        print_info("\n• Installing PRIME wrapper…")
         install_prime_wrappers(gpus)
     elif os_name == "windows":
-        print_info("\n[3/3] Installing media players (mpv + VLC)…")
+        print_info("\n• Installing media players (mpv + VLC)…")
         install_windows_players()
         print_platform_guidance_windows(gpus)
     elif os_name == "macos":
@@ -1474,7 +1474,7 @@ def run_pending_migrations(current_version: str) -> None:
     ]
     if pending:
         print_info(f"Finalizing upgrade {last} → {current_version}…")
-        for ver, desc, action in pending:
+        for _ver, desc, action in pending:
             print_info(f"  • {desc}")
             try:
                 action()

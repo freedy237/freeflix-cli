@@ -63,18 +63,17 @@ def _is_valid(r):
 
 def handle_goldenms():
     """Main entry point for the GoldenMS provider (Movies & Series)."""
-    choices = ["Movie", "Series", "← Back"]
+    choices = [t("Movie"), t("Series"), t("← Back")]
     c_idx = select_from_list(
-        choices, "Select Type:", header=f"{icon('star')} GoldenMS (Movies & Series)"
+        choices, t("Select Type:"), header=f"{icon('star')} GoldenMS (Movies & Series)"
     )
     if c_idx == 2:
         return
 
     is_movie = c_idx == 0
-    type_str = "Movie" if is_movie else "Series"
 
     title = get_user_input(
-        f"Enter {type_str} title", header=f"{icon('star')} GoldenMS (Movies & Series)"
+        t("Enter Movie title") if is_movie else t("Enter Series title"), header=f"{icon('star')} GoldenMS (Movies & Series)"
     )
     if not title:
         return
@@ -174,34 +173,34 @@ def handle_goldenms():
             if s_idx == len(sorted_seasons) + 1:
                 return  # Back → source menu
             if s_idx == len(sorted_seasons):
-                season_str = get_user_input("Enter season number", default="1")
+                season_str = get_user_input(t("Enter season number"), default="1")
                 season = int(season_str) if season_str.isdigit() else 1
-                ep_str = get_user_input("Enter episode number", default="1")
+                ep_str = get_user_input(t("Enter episode number"), default="1")
                 episode = int(ep_str) if ep_str.isdigit() else 1
             else:
                 season = sorted_seasons[s_idx]
 
                 episodes_list = sorted(season_map[season], key=lambda x: x[0])
                 ep_options = [f"E{ep[0]:02d} - {ep[1]}" for ep in episodes_list] + [
-                    "Manual Input",
-                    "← Cancel",
+                    t("Manual Input"),
+                    t("← Cancel"),
                 ]
                 ep_idx = select_from_list(
-                    ep_options, f"Select Episode (Season {season}):"
+                    ep_options, f"{t('Select Episode')} ({t('Season')} {season}) :"
                 )
 
                 if ep_idx == len(episodes_list) + 1:
                     return
                 elif ep_idx == len(episodes_list):
-                    ep_str = get_user_input("Enter episode number", default="1")
+                    ep_str = get_user_input(t("Enter episode number"), default="1")
                     episode = int(ep_str) if ep_str.isdigit() else 1
                 else:
                     episode = episodes_list[ep_idx][0]
         else:
-            season_str = get_user_input("Enter season number", default="1")
+            season_str = get_user_input(t("Enter season number"), default="1")
             season = int(season_str) if season_str.isdigit() else 1
 
-            ep_str = get_user_input("Enter episode number", default="1")
+            ep_str = get_user_input(t("Enter episode number"), default="1")
             episode = int(ep_str) if ep_str.isdigit() else 1
 
     _flow_goldenms_stream(
@@ -219,7 +218,7 @@ def handle_goldenms():
 def _flow_goldenms_stream(
     title, tmdb_id, imdb_id, year, season, episode, is_movie, logo_url
 ):
-    with spinner("Searching for streams… (this may take a moment)"):
+    with spinner(t("Searching for streams… (this may take a moment)")):
         results = goldenms_extractor.extract(
             title=title,
             tmdb_id=tmdb_id,
@@ -232,7 +231,7 @@ def _flow_goldenms_stream(
     valid_results = [r for r in results if _is_valid(r)]
 
     if not valid_results:
-        print_warning("No supported streams found.")
+        print_warning(t("No supported streams found."))
         pause()
         return
 
@@ -242,8 +241,8 @@ def _flow_goldenms_stream(
 
     choice_idx = select_from_list(
         [f"{r['source']} - {r['quality']} ({r['type']})" for r in valid_results]
-        + ["← Back"],
-        "📺 Select Stream:",
+        + [t("← Back")],
+        f"{icon('tv')} {t('Select Stream:')}",
     )
 
     if choice_idx == len(valid_results):
@@ -257,12 +256,12 @@ def _flow_goldenms_stream(
     user_lang = tracker.get_anime_language() or tracker.get_language() or "en"
     lang_name = get_language_label(user_lang)
 
-    want_subs = select_from_list(["Yes", "No"], f"Search for {lang_name} subtitles?")
+    want_subs = select_from_list([t("Yes"), t("No")], f"{t('Search subtitles in')} {lang_name} ?")
     if want_subs == 0:
         current_imdb_id = imdb_id
         if not current_imdb_id:
             current_imdb_id = get_user_input(
-                "Enter IMDB ID (e.g. tt0388629, leave blank to skip subtitles)"
+                t("Enter IMDB ID (e.g. tt0388629, leave blank to skip subtitles)")
             )
         if current_imdb_id:
             sub_season = season if not is_movie else None
@@ -279,8 +278,8 @@ def _flow_goldenms_stream(
             if subs:
                 sub_opts = [
                     f"{s['source']} - {s.get('lang', lang_name)}" for s in subs
-                ] + ["Skip Subtitles"]
-                sub_choice = select_from_list(sub_opts, "Select Subtitle:")
+                ] + [t("Skip Subtitles")]
+                sub_choice = select_from_list(sub_opts, t("Select Subtitle:"))
                 if sub_choice < len(subs):
                     subtitle_url = subs[sub_choice]["url"]
                     print_info(f"Selected subtitle: {subtitle_url}")
@@ -308,7 +307,7 @@ def _flow_goldenms_stream(
                 print_info(f"Resolved to: [cyan]{final_url}[/cyan]")
             else:
                 print_warning("Failed to extract raw stream from player.")
-                if select_from_list(["Try to play anyway", "Cancel"], "Action:") == 1:
+                if select_from_list([t("Try to play anyway"), t("Cancel")], t("Action:")) == 1:
                     return
         except Exception as e:
             print_warning(f"Error resolving player: {e}")
@@ -370,7 +369,7 @@ def _flow_goldenms_stream(
         if not is_movie:
             if (
                 select_from_list(
-                    ["Yes", "No"], f"Play Next Episode (Episode {episode + 1})?"
+                    [t("Yes"), t("No")], f"{t('Play Next Episode')} (Episode {episode + 1}) ?"
                 )
                 == 0
             ):
@@ -424,7 +423,7 @@ def resume_goldenms(data):
         ]
 
     print_info(f"Found progress: [cyan]{display_title}[/cyan]")
-    choice_idx = select_from_list(options, "What would you like to do?")
+    choice_idx = select_from_list(options, t("What would you like to do?"))
 
     if choice_idx == len(options) - 1:
         return

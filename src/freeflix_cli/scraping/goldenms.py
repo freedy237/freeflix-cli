@@ -8,7 +8,7 @@ scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
 
-from .. import cloudflare
+from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
 
 
 def _get(url, **kw):

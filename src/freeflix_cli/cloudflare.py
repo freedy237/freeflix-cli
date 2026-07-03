@@ -195,7 +195,7 @@ def cf_get(session, url, **kw):
                 h = _headers()
                 resp = _doh.get(url, headers=h or None, **kw) if h else _doh.get(url, **kw)
             except Exception:
-                raise last_exc
+                raise last_exc from None
 
     try:
         blocked = is_blocked(resp)

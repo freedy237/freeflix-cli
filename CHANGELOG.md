@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.8.0
+
+### 🧭 New navigation UI
+- **Breadcrumb trail** above every menu — you always see where you are and what
+  Esc goes back to: `🏠 Home › Sources › Anime-Sama › Naruto › Saison 2 › VOSTFR`.
+  Long trails truncate from the left so the deepest levels stay visible.
+- **`?` help overlay** — press `?` in any menu for every keyboard shortcut
+  (menus, multi-select, download cancel, mpv/Anime4K keys). Any key closes it.
+- **Consistent status bar** at the bottom of every menu:
+  `↑/↓ · Entrée : choisir · Échap : retour · ? : aide`.
+
+### 🇫🇷 Full French coverage
+- Translated **~40 prompts that were still English** in the French UI, across
+  GoldenMS, AniList, Nyaa, Anime-Sama, Coflix, French-Stream and Papystreaming
+  (type/season/episode inputs, subtitles, resume prompts, stream picker,
+  torrent picker, AniList linking…).
+
+### 🐛 Correctness fixes (full-project audit)
+- **Latent wrong-episode bug**: three AniList-update callbacks captured loop
+  variables late (B023) — bound at definition now.
+- `t()` shadowing in the AniList handler (loop variable named `t`) fixed.
+- Mutable default argument in `get_hls_link` removed; `raise … from None` in the
+  Cloudflare fallback; unused loop variables renamed.
+- All bare excepts were already gone (1.7.9); ruff is now clean on E/W/F/B
+  across the whole project (deliberate late imports documented with noqa).
+- First-run setup steps renumbered coherently.
 ## 1.7.9
 
 ### 📺 VLC fixes

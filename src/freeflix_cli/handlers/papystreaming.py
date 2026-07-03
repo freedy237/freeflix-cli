@@ -12,6 +12,7 @@ from ..cli_utils import (
     print_warning,
     pause,
     spinner,
+    crumb,
 )
 from ..icons import icon
 from ..i18n import t
@@ -63,7 +64,8 @@ def _pick_season_episode(title: str, year: str):
 
     eps = sorted(season_map[season], key=lambda x: x[0])
     e_opts = [f"E{ep[0]:02d} - {ep[1]}" for ep in eps] + [t("← Back")]
-    e_idx = select_from_list(e_opts, f"{icon('tv')} {t('Select Episode:')}")
+    with crumb(f"{t('Season')} {season}"):
+        e_idx = select_from_list(e_opts, f"{icon('tv')} {t('Select Episode:')}")
     if e_idx >= len(eps):
         return (None, None)
     return (season, eps[e_idx][0])
@@ -72,7 +74,7 @@ def _pick_season_episode(title: str, year: str):
 def handle_papystreaming():
     """Search Papystreaming, then resolve + play via the shared resolvers."""
     query = get_user_input(
-        "Search query (or 'exit' to back)",
+        t("Search query (or 'exit' to back)"),
         header=f"{icon('movie')} Papystreaming",
     )
     if not query or query.lower() == "exit":
@@ -108,18 +110,19 @@ def handle_papystreaming():
 
     is_movie = sel["media_type"] == "movie"
     season = episode = None
-    if not is_movie:
-        season, episode = _pick_season_episode(sel["title"], sel["year"])
-        if season is None:  # backed out of the season/episode picker
-            return
+    with crumb(sel["title"]):
+        if not is_movie:
+            season, episode = _pick_season_episode(sel["title"], sel["year"])
+            if season is None:  # backed out of the season/episode picker
+                return
 
-    _flow_goldenms_stream(
-        title=sel["title"],
-        tmdb_id=sel["tmdb_id"],
-        imdb_id="",
-        year=sel["year"] or None,
-        season=season,
-        episode=episode,
-        is_movie=is_movie,
-        logo_url=sel["poster"],
-    )
+        _flow_goldenms_stream(
+            title=sel["title"],
+            tmdb_id=sel["tmdb_id"],
+            imdb_id="",
+            year=sel["year"] or None,
+            season=season,
+            episode=episode,
+            is_movie=is_movie,
+            logo_url=sel["poster"],
+        )
