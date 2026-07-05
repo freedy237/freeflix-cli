@@ -14,6 +14,30 @@
   <em>Watch movies, series and anime from your terminal — multi-language, multi-source, no browser, no ads.</em>
 </p>
 
+<p align="center">
+  <b>🎬 Movies · 📺 Series · 🍿 Anime (VF / VOSTFR / VO)</b><br>
+  <sub>mpv-powered · Anime4K upscaling · downloads · resume · AniList sync</sub>
+</p>
+
+<p align="center">
+  <code>uv tool install freeflix-cli</code> &nbsp;·&nbsp; then run <code>freeflix</code>
+</p>
+
+---
+
+## ⚡ Why FreeFlix
+
+- **One command, everything works** — installs its own mpv/ffmpeg/yt-dlp and a
+  Nerd Font; no browser, no ads, no accounts required.
+- **Everything, always up to date** — movies & series (TMDB-based) and anime
+  (Anime-Sama), in **French (VF/VOSTFR)** or **VO**.
+- **Actually nice to use** — poster previews in the terminal (chafa), breadcrumb
+  navigation, `/` to filter, `Esc` to go back anywhere, `?` for help.
+- **Download & keep** — pick a quality, batch a whole season into its own folder,
+  resume interrupted downloads, see ✓ watched / ▸ resume / ⬇ downloaded badges.
+- **Crisp picture** — Anime4K GPU upscaling pre-tuned, one keypress to toggle.
+- **Optional AniList sync** — your progress updates automatically as you watch.
+
 ---
 
 **FreeFlix** is a hardened, feature-extended fork of [autoflix-cli](https://github.com/PaulExplorer/autoflix-cli) by PaulExplorer. All upstream functionality is preserved ; on top of that, FreeFlix ships :
