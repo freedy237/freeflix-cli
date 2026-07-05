@@ -122,6 +122,30 @@ def pause():
     console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
 
 
+def disable_terminal_reports():
+    """
+    Turn OFF terminal focus-reporting / mouse tracking / bracketed paste.
+
+    Some terminals (and mpv) enable focus reporting (``\\x1b[?1004h``): the
+    terminal then sends ``\\x1b[I`` / ``\\x1b[O`` whenever the window gains/loses
+    focus (e.g. Alt-Tab). If one of those bytes lands split across reads, a menu
+    can mistake the leading ``\\x1b`` for a stray Esc — which looked like
+    "FreeFlix closing by itself". Killing the reports at the source removes it.
+    Called at startup and after every player exit (mpv may re-enable them).
+    """
+    try:
+        import sys
+        if sys.stdout.isatty():
+            sys.stdout.write(
+                "\x1b[?1004l"                                   # focus off
+                "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"  # mouse off
+                "\x1b[?2004l"                                   # bracketed paste off
+            )
+            sys.stdout.flush()
+    except Exception:
+        pass
+
+
 # ─── Breadcrumb trail (1.8) ────────────────────────────────────────────
 # A tiny global stack rendered above every menu :
 #   🏠 Home › Anime-Sama › Naruto › Season 2
@@ -269,15 +293,24 @@ def _read_menu_key():
         tty.setcbreak(fd)
         ch = os.read(fd, 1)
         if ch == b"\x1b":
-            r, _, _ = _sel.select([fd], [], [], 0.05)
-            if not r:
+            # Drain the WHOLE escape sequence (arrows, but also focus events
+            # \x1b[I / \x1b[O and mouse reports) before deciding. Only a truly
+            # isolated \x1b — nothing follows within 50 ms — is a real Esc.
+            seq = ch
+            while True:
+                r, _, _ = _sel.select([fd], [], [], 0.05)
+                if not r:
+                    break
+                seq += os.read(fd, 8)
+                if len(seq) >= 3:  # enough for a CSI/SS3 arrow
+                    break
+            if seq == b"\x1b":
                 return readchar.key.ESC          # lone Esc → go back
-            seq = ch + os.read(fd, 2)
             return {
                 b"\x1b[A": readchar.key.UP,   b"\x1bOA": readchar.key.UP,
                 b"\x1b[B": readchar.key.DOWN,  b"\x1bOB": readchar.key.DOWN,
                 b"\x1b[C": readchar.key.RIGHT, b"\x1b[D": readchar.key.LEFT,
-            }.get(seq, "")
+            }.get(seq, "")          # focus/mouse/unknown CSI → ignore
         if ch in (b"\r", b"\n"):
             return readchar.key.ENTER
         if ch == b"\x03":

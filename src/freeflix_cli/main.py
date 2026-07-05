@@ -467,6 +467,11 @@ def main():
         print("  freeflix --help    this message")
         return 0
 
+    # Kill terminal focus/mouse/paste reports so their escape sequences can't
+    # be misread as a stray Esc (looked like FreeFlix closing by itself).
+    from .cli_utils import disable_terminal_reports
+    disable_terminal_reports()
+
     # ── Resumable dependency gate ──────────────────────────────
     #    Until the "all good" flag is cached, every launch re-checks what's
     #    installed and finishes ONLY the missing pieces (instead of jumping

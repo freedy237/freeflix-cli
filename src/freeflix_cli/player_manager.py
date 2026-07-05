@@ -639,6 +639,10 @@ def _run_with_data_meter(cmd, env=None, quiet=False):
     proxy.reset_bytes_counter()
     out = subprocess.DEVNULL if quiet else None
     rc = subprocess.run(cmd, env=env, stdout=out, stderr=out).returncode
+    # mpv/vlc may leave terminal focus/mouse reporting enabled — reset it so the
+    # next menu doesn't misread a focus event as a stray Esc.
+    from .cli_utils import disable_terminal_reports
+    disable_terminal_reports()
 
     total = proxy.get_bytes_served() / (1024 * 1024)
     if total > 0:

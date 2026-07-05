@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.1.post1
+
+Fixes shipped as a post-release of 1.8.1 (PyPI versions are immutable):
+
+- **Anime-Sama missing seasons/parts** — the season parser stopped early and
+  dropped later seasons (e.g. **Dr Stone** hid Saison 3 Partie 2 and Saison 4
+  + parts 2/3). It now matches ALL `panneauAnime(...)` declarations on the page.
+- **"FreeFlix closed by itself" / phantom Esc** — terminals (and mpv) that enable
+  focus reporting send `\x1b[I` / `\x1b[O` on Alt-Tab, which a split read could
+  mistake for a stray Esc. The key reader now drains the whole escape sequence
+  and ignores focus/mouse/paste events; FreeFlix also disables those reports at
+  startup and after every player exit.
 ## 1.8.1
 
 ### 🔎 Filter any list with `/`

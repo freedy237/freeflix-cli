@@ -4,6 +4,7 @@ from .objects import SearchResult, SamaSeason, SamaSeries, SeasonAccess, Episode
 from .utils import parse_episodes_from_js
 from ..proxy import DNS_OPTIONS
 from random import randint
+import re
 
 website_origin = ""
 
@@ -178,24 +179,22 @@ def get_series(url: str) -> SamaSeries:
 
     seasons: list[SeasonAccess] = []
 
-    # Using css select as in the original code
-    selection = soup.css.select("div.flex.flex-wrap.overflow-y-hidden")
-
-    if selection:
-        seasons_script = selection[0].script
-        if seasons_script:
-            # Manual parsing of the JS script to extract seasons
-            for season in str(seasons_script).split('panneauAnime("')[2:]:
-                parts = season.split('"')
-                if len(parts) > 2:
-                    season_title = parts[0]
-                    # The original logic assumes a specific JS structure
-                    url_part = season.split('", "')[1].split('"')[0]
-                    season_url = url + "/" + url_part
-                    seasons.append(SeasonAccess(season_title, season_url))
-
-                if season.endswith("/*"):
-                    break
+    # Seasons are declared as panneauAnime("<title>", "<path>") calls in a JS
+    # block. The old split+break parser stopped early and missed later seasons
+    # (e.g. Dr Stone's "Saison 4 Partie 2/3"). Match ALL calls across the whole
+    # page instead, skipping the template call panneauAnime("nom", "url").
+    base = url.rstrip("/")
+    seen_urls = set()
+    for name, path in re.findall(r'panneauAnime\("([^"]*)",\s*"([^"]*)"\)', response.text):
+        name = name.strip()
+        path = path.strip()
+        if not name or not path or name.lower() == "nom" or path.lower() == "url":
+            continue  # skip the template / commented example
+        season_url = base + "/" + path.lstrip("/")
+        if season_url in seen_urls:
+            continue
+        seen_urls.add(season_url)
+        seasons.append(SeasonAccess(name, season_url))
 
     return SamaSeries(title, url, img, genres, seasons)
 
