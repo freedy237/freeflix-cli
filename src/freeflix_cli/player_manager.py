@@ -825,6 +825,37 @@ def clean_episode_title(series_title: str, season_title: str, episode_title: str
     return ep if ep else episode_title
 
 
+def _episode_window_title(series_title, season_title, episode_title) -> str:
+    """The exact title used for the player window AND the resume/watched key —
+    the single source of truth so badges match what playback stores."""
+    cs = clean_season_title(series_title, season_title or "")
+    ce = clean_episode_title(series_title, season_title or "", episode_title or "")
+    return f"{series_title} - {cs} - {ce}"
+
+
+def episode_badges(series_title, season_title, episode_title) -> str:
+    """
+    Trailing badges for an episode row in the lists:
+      ⬇ downloaded · ▸NN% resume · ✓ watched
+    Returns "" when there's nothing to show. Cheap (a hash + a couple lookups).
+    """
+    import hashlib
+    wt = _episode_window_title(series_title, season_title, episode_title)
+    key = hashlib.md5(wt.encode("utf-8")).hexdigest()
+    tags = []
+    if is_already_downloaded(wt) or is_already_downloaded(
+        clean_episode_title(series_title, season_title or "", episode_title or ""),
+        f"{series_title} - {clean_season_title(series_title, season_title or '')}",
+    ):
+        tags.append("⬇")
+    pos = tracker.get_episode_position(key)
+    if pos and pos > 30:
+        tags.append(f"▸{int(pos // 60)}m")
+    elif tracker.is_episode_watched(key):
+        tags.append("✓")
+    return ("  " + " ".join(tags)) if tags else ""
+
+
 def _mpv_position_args(title: str):
     """
     Return extra CLI args for mpv to enable position tracking via the

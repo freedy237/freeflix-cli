@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.8.1
+
+### 🔎 Filter any list with `/`
+- Press **`/`** in any menu to type-to-filter a long list (episodes, seasons,
+  sources…). Enter picks the highlighted match, Esc clears the filter. The
+  status bar shows the hint.
+
+### 🏷️ Episode badges
+- Episode rows now show at-a-glance badges: **✓ watched**, **▸NN m resume**
+  (you stopped mid-episode), **⬇ downloaded**. Wired into Anime-Sama, Coflix and
+  French-Stream episode lists. Watched state is recorded when you finish/play an
+  episode.
 ## 1.8.0
 
 ### 🧭 New navigation UI

@@ -223,6 +223,11 @@ def play_episode_flow(
         )
 
         if success:
+            # Mark this episode watched (✓ badge in the lists).
+            import hashlib
+            tracker.mark_episode_watched(
+                hashlib.md5(window_title.encode("utf-8")).hexdigest()
+            )
             # Save Local Progress
 
             tracker.save_progress(

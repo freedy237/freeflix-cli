@@ -179,13 +179,15 @@ def _crumb_line(max_w: int) -> Text:
     return Text(f"  {txt}", style=color("dim"))
 
 
-def _status_bar() -> Text:
+def _status_bar(filtering: bool = False) -> Text:
     """Bottom hint line shown under every menu (consistent across screens)."""
     from .i18n import t as _t
-    return Text(
-        f"  ↑/↓ · {_t('Enter: select')} · {_t('Esc: back')} · {_t('?: help')}",
-        style=color("dim"),
-    )
+    if filtering:
+        hint = f"  {_t('type to filter')} · {_t('Enter: select')} · {_t('Esc: clear')}"
+    else:
+        hint = (f"  ↑/↓ · {_t('Enter: select')} · {_t('Esc: back')} · "
+                f"{_t('/: filter')} · {_t('?: help')}")
+    return Text(hint, style=color("dim"))
 
 
 def _help_overlay() -> Panel:
@@ -315,6 +317,14 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     selected_index = max(0, min(default_index, len(options) - 1))
     start_index = 0
     show_help = {"on": False}
+    flt = {"on": False, "q": ""}   # '/' type-to-filter
+
+    def _view():
+        """Original indices currently shown (all, or the '/' filter matches)."""
+        if flt["on"] and flt["q"]:
+            q = flt["q"].lower()
+            return [i for i, o in enumerate(options) if q in str(o).lower()]
+        return list(range(len(options)))
 
     def _fit(text: str) -> str:
         """Truncate an option to the terminal width (in DISPLAY columns, so
@@ -337,55 +347,51 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         if show_help["on"]:
             return _help_overlay()
 
+        view = _view()  # original indices currently shown (filter-aware)
+        grouped = bool(group_headers) and not flt["on"]
+
         # Calculate dynamic window size based on terminal height
         term_height = console.size.height
-        # Reserve lines for prompt (2), header/spacing (2), arrows (2),
-        # breadcrumb (1) and status bar (2) -> ~9 lines reserve. The in-Live
-        # header panel eats 3 more rows when present ; each section header
-        # line eats ~2 more.
-        reserved_lines = 9 + (3 if header else 0)
-        if group_headers:
+        reserved_lines = 9 + (3 if header else 0) + (1 if flt["on"] else 0)
+        if grouped:
             reserved_lines += 2 * len(group_headers)
         available_height = max(3, term_height - reserved_lines)
-        window_size = min(len(options), available_height)
+        window_size = min(max(1, len(view)), available_height)
 
-        # Adjust start_index to keep selected_index in view
+        # Adjust start_index to keep selected_index (a VIEW position) visible
         if selected_index < start_index:
             start_index = selected_index
         elif selected_index >= start_index + window_size:
             start_index = selected_index - window_size + 1
-
-        # Ensure start_index is valid
-        start_index = max(0, min(start_index, len(options) - window_size))
-        end_index = min(len(options), start_index + window_size)
+        start_index = max(0, min(start_index, max(0, len(view) - window_size)))
+        end_index = min(len(view), start_index + window_size)
 
         lines = []
-        # Header panel lives INSIDE the Live region so it reflows with the menu
-        # on resize (no static full-width panel left to wrap/stack above).
         if header:
             lines.append(_header_panel(header))
-        # Breadcrumb trail : where you are, what Esc goes back to.
         if _crumbs:
             lines.append(_crumb_line(console.size.width))
         lines.append(Text(f"\n❯ {iconify(prompt)}", style=f"bold {color('accent')}"))
+        # Active filter line.
+        if flt["on"]:
+            lines.append(Text(f"  / {flt['q']}▏", style=f"bold {color('info')}"))
 
-        # Up arrow indicator
+        if not view:
+            lines.append(Text("     (no match)", style=color("dim")))
+
         if start_index > 0:
             lines.append(Text("  ↑ ...", style=color("dim")))
 
         bar_width = max(20, console.size.width)
-        for idx in range(start_index, end_index):
-            # Section header above this item (grouped menus).
-            if group_headers and idx in group_headers:
-                if idx != start_index:
-                    lines.append(Text(""))  # spacer between sections
+        for pos in range(start_index, end_index):
+            idx = view[pos]
+            if grouped and idx in group_headers:
+                if pos != start_index:
+                    lines.append(Text(""))
                 lines.append(Text(f"  {group_headers[idx]}",
                                   style=f"bold {color('info')}"))
             option = _fit(iconify(options[idx]))
-            if idx == selected_index:
-                # Full-width selection bar : reverse video follows the theme
-                # accent. Pad with cell_len (handles wide emoji) so the bar
-                # spans the row without wrapping.
+            if pos == selected_index:
                 label = f"  ▌  {option}"
                 pad = max(1, bar_width - cell_len(label) - 1)
                 lines.append(
@@ -394,13 +400,12 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             else:
                 lines.append(Text(f"     {option}", style="white"))
 
-        # Down arrow indicator
-        if end_index < len(options):
+        if end_index < len(view):
             lines.append(Text("  ↓ ...", style=color("dim")))
 
         # Status bar : consistent bottom hints on every menu.
         lines.append(Text(""))
-        lines.append(_status_bar())
+        lines.append(_status_bar(filtering=flt["on"]))
 
         return Group(*lines)
 
@@ -415,9 +420,12 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         if use_screen
         else dict(refresh_per_second=10, transient=True)
     )
+    result = None  # ORIGINAL index chosen
     with Live(generate_renderable(), **live_kwargs) as live:
-        while True:
+        while result is None:
             key = _read_menu_key()
+            view = _view()
+            n = max(1, len(view))
 
             # Help overlay open → any key closes it (arrows don't navigate).
             if show_help["on"]:
@@ -427,32 +435,57 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 live.update(generate_renderable())
                 continue
 
+            # '/' type-to-filter mode.
+            if flt["on"]:
+                if key == readchar.key.ESC:
+                    flt["on"] = False
+                    flt["q"] = ""
+                    selected_index = 0
+                elif key == readchar.key.ENTER:
+                    if view:
+                        result = view[selected_index]
+                elif key == readchar.key.UP:
+                    selected_index = (selected_index - 1) % n
+                elif key == readchar.key.DOWN:
+                    selected_index = (selected_index + 1) % n
+                elif key == readchar.key.BACKSPACE:
+                    flt["q"] = flt["q"][:-1]
+                    selected_index = 0
+                elif key == readchar.key.CTRL_C:
+                    raise KeyboardInterrupt("Menu cancelled by user")
+                elif isinstance(key, str) and len(key) == 1 and key.isprintable():
+                    flt["q"] += key
+                    selected_index = 0
+                live.update(generate_renderable())
+                continue
+
+            # Normal mode.
             if key == "?":
                 show_help["on"] = True
-                live.update(generate_renderable())
+            elif key == "/":
+                flt["on"] = True
+                flt["q"] = ""
+                selected_index = 0
             elif key == readchar.key.UP:
-                selected_index = (selected_index - 1) % len(options)
-                live.update(generate_renderable())
+                selected_index = (selected_index - 1) % n
             elif key == readchar.key.DOWN:
-                selected_index = (selected_index + 1) % len(options)
-                live.update(generate_renderable())
+                selected_index = (selected_index + 1) % n
             elif key == readchar.key.ENTER:
-                break
+                if view:
+                    result = view[selected_index]
             elif key == readchar.key.ESC:
-                # Esc = go back / cancel, anywhere in FreeFlix. Every menu in the
-                # app appends its Back / Cancel / Exit entry LAST, and callers
-                # treat the last index (idx >= len(real_items)) as "go back" — so
-                # selecting the last option reliably steps up one level.
-                selected_index = len(options) - 1
-                break
+                # Esc = go back : select the LAST option (the Back / Cancel /
+                # Exit entry every menu appends), which callers treat as "go up".
+                result = len(options) - 1
             elif key == readchar.key.CTRL_C:
                 raise KeyboardInterrupt("Menu cancelled by user")
+            live.update(generate_renderable())
 
     console.print(
         f"\n[bold {color('accent')}]❯ {iconify(prompt)}[/bold {color('accent')}] "
-        f"[{color('success')}]{iconify(options[selected_index])}[/{color('success')}]"
+        f"[{color('success')}]{iconify(options[result])}[/{color('success')}]"
     )
-    return selected_index
+    return result
 
 
 def select_multiple(options, prompt, preselected=None, disabled=None):

@@ -17,6 +17,7 @@ from ..icons import icon
 from ..i18n import t
 from .. import terminal_image
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
+from ..player_manager import episode_badges
 from ..cli_utils import spinner
 
 
@@ -169,8 +170,12 @@ def handle_coflix():
 
                 while True:  # ── Episode ──
                     with crumb(content.title), crumb(season.title):
+                        ep_labels = [
+                            e.title + episode_badges(content.title, season.title, e.title)
+                            for e in season.episodes
+                        ]
                         ep_idx = select_from_list(
-                            [e.title for e in season.episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
+                            ep_labels + [f"{icon('download')} {t('Download')}", t("← Back")],
                             f"{icon('tv')} {t('Select Episode:')}",
                         )
                     if ep_idx == len(season.episodes):  # Download ALL

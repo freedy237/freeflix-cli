@@ -17,6 +17,7 @@ from ..anilist import anilist_client
 from ..i18n import t
 from ..icons import icon
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
+from ..player_manager import episode_badges
 import re
 
 
@@ -247,8 +248,12 @@ def handle_anime_sama():
             ep_idx = 0
             while True:  # ── Episode ──
                 with crumb(series.title), crumb(season.title), crumb(selected_lang):
+                    ep_labels = [
+                        e.title + episode_badges(series.title, season.title, e.title)
+                        for e in episodes
+                    ]
                     ep_idx = select_from_list(
-                        [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", back],
+                        ep_labels + [f"{icon('download')} {t('Download')}", back],
                         f"{icon('tv')} {t('Select Episode:')}",
                         default_index=min(ep_idx, len(episodes) - 1),
                     )

@@ -16,6 +16,7 @@ from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
+from ..player_manager import episode_badges
 
 
 def resolve_url(url, base):
@@ -135,8 +136,12 @@ def handle_french_stream():
             ep_idx = 0
             while True:  # ── Episode ──
                 with crumb(content.title), crumb(lang):
+                    ep_labels = [
+                        e.title + episode_badges(content.title, content.title, e.title)
+                        for e in episodes
+                    ]
                     ep_idx = select_from_list(
-                        [e.title for e in episodes] + [f"{icon('download')} {t('Download')}", t("← Back")],
+                        ep_labels + [f"{icon('download')} {t('Download')}", t("← Back")],
                         f"{icon('tv')} {t('Select Episode:')}",
                         default_index=min(ep_idx, len(episodes) - 1),
                     )

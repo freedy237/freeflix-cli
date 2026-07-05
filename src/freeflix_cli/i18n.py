@@ -116,6 +116,9 @@ _FR = {
     # ── 1.8 : status bar + '?' help overlay + breadcrumbs ──
     "Enter: select": "Entrée : choisir",
     "?: help": "? : aide",
+    "/: filter": "/ : filtrer",
+    "type to filter": "tape pour filtrer",
+    "Esc: clear": "Échap : effacer",
     "Help": "Aide",
     "Keyboard shortcuts": "Raccourcis clavier",
     "navigate": "naviguer",

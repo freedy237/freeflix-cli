@@ -434,6 +434,18 @@ class ProgressTracker:
             self.data["episode_positions"].pop(key, None)
             self._save_data()
 
+    # --- Watched episodes (for the ✓ badge in episode lists) ---
+    def mark_episode_watched(self, key: str):
+        if not key:
+            return
+        seen = self.data.setdefault("watched_episodes", [])
+        if key not in seen:
+            seen.append(key)
+            self._save_data()
+
+    def is_episode_watched(self, key: str) -> bool:
+        return key in self.data.get("watched_episodes", [])
+
     # --- Portal URL Cache (avoids re-resolving on every launch) ---
 
     def get_portal_cache(self, name: str, ttl_hours: int = 24) -> Optional[str]:
