@@ -59,7 +59,7 @@ def _update_anilist_progress(series, season, selected_episode):
                         f"Linked to {results[m_idx]['title']['english'] or results[m_idx]['title']['romaji']}!"
                     )
             else:
-                print_warning("No matches found on AniList.")
+                print_warning(t("No matches found on AniList."))
 
     if media_id:
         # Update progress with overflow detection
@@ -119,7 +119,7 @@ def _update_anilist_progress(series, season, selected_episode):
         if anilist_client.update_progress(media_id, episode_num):
             print_success("AniList updated!")
         else:
-            print_error("Failed to update AniList.")
+            print_error(t("Failed to update AniList."))
 
 
 def handle_anime_sama():
@@ -138,12 +138,12 @@ def handle_anime_sama():
             results = anime_sama.search(query)
     except Exception as e:
         print_error(f"Search failed (network/source issue): {type(e).__name__}")
-        print_info("The source may be down or rate-limiting — try again in a moment.")
+        print_info(t("The source may be down or rate-limiting — try again in a moment."))
         pause()
         return
 
     if not results:
-        print_warning("No results found.")
+        print_warning(t("No results found."))
         pause()
         return
 
@@ -166,16 +166,16 @@ def handle_anime_sama():
     selection = results[choice_idx]
 
     try:
-        with spinner(f"Loading {selection.title}…"):
+        with spinner(f"{t('Loading')} {selection.title}…"):
             series = anime_sama.get_series(selection.url)
     except Exception as e:
         print_error(f"Failed to load (network/source issue): {type(e).__name__}")
-        print_info("The source may be down or rate-limiting — try again in a moment.")
+        print_info(t("The source may be down or rate-limiting — try again in a moment."))
         pause()
         return
 
     if not series.seasons:
-        print_warning("No seasons found.")
+        print_warning(t("No seasons found."))
         pause()
         return
 
@@ -185,7 +185,7 @@ def handle_anime_sama():
         getattr(series, "img", ""),
         title=series.title,
         info_lines=[
-            f"{len(series.seasons)} season(s)",
+            f"{len(series.seasons)} {t('season(s)')}",
             ", ".join(getattr(series, "genres", []) or []),
         ],
     )
@@ -217,18 +217,18 @@ def handle_anime_sama():
             return  # leave the series → back to source menu
 
         selected_season_access = series.seasons[season_idx]
-        print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
+        print_info(f"{t('Loading')} [cyan]{selected_season_access.title}[/cyan]…")
         try:
             season = anime_sama.get_season(selected_season_access.url)
         except Exception as e:
             print_error(f"Failed to load season (network/source issue): {type(e).__name__}")
-            print_info("The source may be down or rate-limiting — try again in a moment.")
+            print_info(t("The source may be down or rate-limiting — try again in a moment."))
             pause()
             continue  # back to season picker
 
         langs = list(season.episodes.keys())  # {lang: [Episode]}
         if not langs:
-            print_warning("No episodes found.")
+            print_warning(t("No episodes found."))
             pause()
             continue
 
@@ -369,7 +369,7 @@ def resume_anime_sama(data):
         if start_ep_idx + 1 < len(episodes):
             start_ep_idx += 1
         else:
-            print_warning("No next episode found.")
+            print_warning(t("No next episode found."))
             pause()
             return
 

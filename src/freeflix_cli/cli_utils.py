@@ -326,7 +326,8 @@ def _read_menu_key():
 
 
 def select_from_list(options: list[str], prompt: str, default_index: int = 0,
-                     header: str = None, group_headers: dict = None) -> int:
+                     header: str = None, group_headers: dict = None,
+                     top=None) -> int:
     """
     Display an interactive menu where users can navigate with arrow keys.
 
@@ -386,6 +387,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         # Calculate dynamic window size based on terminal height
         term_height = console.size.height
         reserved_lines = 9 + (3 if header else 0) + (1 if flt["on"] else 0)
+        if top is not None and not flt["on"]:
+            reserved_lines += 9  # dashboard panel above the menu
         if grouped:
             reserved_lines += 2 * len(group_headers)
         available_height = max(3, term_height - reserved_lines)
@@ -400,6 +403,9 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         end_index = min(len(view), start_index + window_size)
 
         lines = []
+        # Optional dashboard/renderable above everything (e.g. the home screen).
+        if top is not None and not flt["on"]:
+            lines.append(top)
         if header:
             lines.append(_header_panel(header))
         if _crumbs:

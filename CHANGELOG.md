@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.8.2
+
+### 🏠 Enriched home screen
+- A **dashboard** now greets you at the top of the home menu: a **greeting**, a
+  quick **stats line** (this week · streak · in-progress count) and a
+  **Continue-watching carousel** listing your last shows with resume/watched/
+  downloaded badges — all from local data, instant, no network.
+
+### 🗂️ Sources
+- **French-Anime** (ex French-Manga) moved to **2nd position** in the anime
+  sources; **⭐ recommended** badge on **Anime-Sama** and **French-Stream**.
+- All **source descriptions are now translated** (menu + startup splash) plus the
+  remaining English messages in the Anime-Sama flow.
+
+### ⏳ Startup
+- The launch **progress bar fills visibly again** — the easing was too slow for
+  the short splash, so the bar barely moved; it now climbs to 100% smoothly.
+
 ## 1.8.1.post1
 
 Fixes shipped as a post-release of 1.8.1 (PyPI versions are immutable):

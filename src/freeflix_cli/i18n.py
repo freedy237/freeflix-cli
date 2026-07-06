@@ -134,6 +134,34 @@ _FR = {
     "Anime4K off": "Anime4K désactivé",
     "close the player": "fermer le lecteur",
     "Home": "Accueil",
+    # Home dashboard (1.8.2)
+    "Good night": "Bonne nuit",
+    "Good morning": "Bonjour",
+    "Good afternoon": "Bon après-midi",
+    "Good evening": "Bonsoir",
+    "Streak": "Série",
+    "In progress": "En cours",
+    "Continue watching": "Reprendre",
+    "Nothing watched yet — pick a source below to start!":
+        "Rien de vu pour l'instant — choisis une source ci-dessous pour commencer !",
+    # Source descriptions (menu)
+    "Anime and animated movies": "Animes & films d'animation",
+    "Anime VF/VOSTFR": "Anime VF/VOSTFR",
+    "VO and Subtitles": "VO & sous-titres",
+    "Torrents — high-quality anime releases": "Torrents — releases anime HD",
+    "Series and movies": "Séries & films",
+    # Startup splash
+    "Starting up…": "Démarrage…",
+    "Loading providers…": "Chargement des sources…",
+    "Preparing the library…": "Préparation de la bibliothèque…",
+    "Ready": "Prêt",
+    # In-flow messages (Anime-Sama & shared)
+    "season(s)": "saison(s)",
+    "No matches found on AniList.": "Aucune correspondance sur AniList.",
+    "Failed to update AniList.": "Échec de la mise à jour AniList.",
+    "The source may be down or rate-limiting — try again in a moment.":
+        "La source est peut-être hors ligne ou vous limite — réessayez dans un instant.",
+    "No players found.": "Aucun lecteur trouvé.",
     # ── 1.8 : previously-untranslated prompts across handlers ──
     "Select Type:": "Choisis le type :",
     "Movie": "Film",

@@ -212,6 +212,55 @@ def _show_stats():
     pause()
 
 
+def _home_dashboard():
+    """
+    The enriched home 'wow' panel: a greeting, a quick stats line and a
+    Continue-watching carousel — all from LOCAL data (instant, no network).
+    Returned as a renderable placed above the home menu.
+    """
+    from rich.panel import Panel
+    from rich.text import Text
+    from .themes import color
+    from datetime import datetime
+
+    stats = tracker.get_stats()
+    history = tracker.get_history()
+    in_progress = len(tracker.data.get("episode_positions", {}))
+
+    hour = datetime.now().hour
+    greet = (t("Good night") if hour < 6 else t("Good morning") if hour < 12
+             else t("Good afternoon") if hour < 18 else t("Good evening"))
+
+    body = Text()
+    body.append(f"  {greet}    ", style=f"bold {color('accent')}")
+    body.append(f"{icon('stats')} {t('This week')}: ", style=color("dim"))
+    body.append(f"{stats['this_week']}", style=f"bold {color('info')}")
+    body.append(f"    {icon('fire')} {t('Streak')}: ", style=color("dim"))
+    body.append(f"{stats['streak']}", style=f"bold {color('warning')}")
+    body.append(f"    {icon('play')} {t('In progress')}: ", style=color("dim"))
+    body.append(f"{in_progress}", style=f"bold {color('success')}")
+
+    if history:
+        from .player_manager import episode_badges
+        body.append(f"\n\n  {icon('play')} {t('Continue watching')}",
+                    style=f"bold {color('header')}")
+        for e in history[:4]:
+            s = e.get("series_title", "?")
+            se = e.get("season_title", "") or ""
+            ep = e.get("episode_title", "") or ""
+            badge = episode_badges(s, se, ep)
+            row = f"     • {s}" + (f" · {se}" if se else "") + (f" · {ep}" if ep else "")
+            body.append("\n" + row[:74], style="white")
+            if badge:
+                body.append(badge, style=color("info"))
+    else:
+        body.append(f"\n\n  {t('Nothing watched yet — pick a source below to start!')}",
+                    style=color("dim"))
+
+    return Panel(body, border_style=color("accent"), expand=True,
+                 title="[bold]FreeFlix[/bold]", title_align="left")
+
+
 def _show_about(version: str):
     """Render the About panel with version, links, credits — themed."""
     from rich.panel import Panel
@@ -382,27 +431,28 @@ def check_language_setup(force=False):
 def _register_providers():
     """Register every provider in source-menu order (anime first, then
     movies/series, then torrents). Called once at startup."""
+    _reco = f"  {icon('star')} {t('recommended')}"
     # ── Anime / Manga sources ──────────────────────────────────
     registry.register(
-        f"{icon('anime')} Anime-Sama (Anime and animated movies)",
+        f"{icon('anime')} Anime-Sama ({t('Anime and animated movies')}){_reco}",
         anime_sama.handle_anime_sama,
         supported_languages=["en", "fr"],
         category="anime",
     )
     registry.register(
-        f"{icon('sparkle')} GoldenAnime (VO and Subtitles)",
-        goldenanime.handle_goldenanime,
-        supported_languages=["en", "fr"],
-        category="anime",
-    )
-    registry.register(
-        f"{icon('manga')} French-Manga (Anime VF/VOSTFR)",
+        f"{icon('manga')} French-Anime ({t('Anime VF/VOSTFR')})",
         french_manga.handle_french_manga,
         supported_languages=["fr"],
         category="anime",
     )
     registry.register(
-        f"{icon('wave')} Nyaa (Torrents — high-quality anime releases)",
+        f"{icon('sparkle')} GoldenAnime ({t('VO and Subtitles')})",
+        goldenanime.handle_goldenanime,
+        supported_languages=["en", "fr"],
+        category="anime",
+    )
+    registry.register(
+        f"{icon('wave')} Nyaa ({t('Torrents — high-quality anime releases')})",
         nyaa_handler.handle_nyaa,
         supported_languages=["en", "fr"],
         category="anime",
@@ -411,19 +461,19 @@ def _register_providers():
 
     # ── Films & Series sources ─────────────────────────────────
     registry.register(
-        f"{icon('star')} GoldenMS (Movies & Series)",
+        f"{icon('star')} GoldenMS ({t('Movies & Series')})",
         goldenms.handle_goldenms,
         supported_languages=["en"],
         category="movies",
     )
     registry.register(
-        f"{icon('flag_fr')} French-Stream (Series and movies)",
+        f"{icon('flag_fr')} French-Stream ({t('Series and movies')}){_reco}",
         french_stream.handle_french_stream,
         supported_languages=["fr"],
         category="movies",
     )
     registry.register(
-        f"{icon('movie')} Papystreaming (Movies & Series)",
+        f"{icon('movie')} Papystreaming ({t('Movies & Series')})",
         papystreaming.handle_papystreaming,
         supported_languages=["en"],
         category="movies",
@@ -431,7 +481,7 @@ def _register_providers():
     # Coflix : self-heals (coflix.dance/.cymru…) ; on a Cloudflare captcha it
     # raises a clean "protégée par Cloudflare" message instead of crashing.
     registry.register(
-        f"{icon('movie')} Coflix (Series and movies)",
+        f"{icon('movie')} Coflix ({t('Series and movies')})",
         coflix.handle_coflix,
         supported_languages=["fr"],
         category="movies",
@@ -511,14 +561,14 @@ def main():
     with progress.LoadingScreen(version=_v) as _ls:
         # A short, smooth 0 -> 100% sequence so the splash feels intentional
         # instead of flashing past.
-        _ls.status("Starting up…", frac=0.2)
+        _ls.status(t("Starting up…"), frac=0.2)
         time.sleep(0.2)
-        _ls.status("Loading providers…", frac=0.55)
+        _ls.status(t("Loading providers…"), frac=0.55)
         _register_providers()
         time.sleep(0.22)
-        _ls.status("Preparing the library…", frac=0.85)
+        _ls.status(t("Preparing the library…"), frac=0.85)
         time.sleep(0.2)
-        _ls.status("Ready", frac=1.0)
+        _ls.status(t("Ready"), frac=1.0)
         time.sleep(0.28)
 
     # Check for updates
@@ -613,6 +663,7 @@ def main():
             menu_items,
             t("What would you like to do?"),
             header=f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}",
+            top=_home_dashboard(),
         )
 
         if last_watch and choice_idx == resume_idx:

@@ -139,7 +139,11 @@ class LoadingScreen:
                 if self._disp_frac is None:
                     self._disp_frac = 0.0
                 if self._disp_frac < tgt:
-                    self._disp_frac = min(tgt, self._disp_frac + 0.004)
+                    # Proportional catch-up + a floor, so the bar climbs to the
+                    # target within a few frames (visible even during the short
+                    # startup splash) instead of crawling.
+                    step = max((tgt - self._disp_frac) * 0.5, 0.06)
+                    self._disp_frac = min(tgt, self._disp_frac + step)
                 elif self._disp_frac > tgt:
                     self._disp_frac = tgt
             try:
