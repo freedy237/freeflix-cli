@@ -64,98 +64,131 @@ def _handle_partial_download(it):
         pause()
 
 
+def _downloads_summary(files, interrupted, DOWNLOAD_DIR):
+    """Top panel for the downloads manager: disk space + totals."""
+    import shutil
+    from rich.panel import Panel
+    from rich.text import Text
+    from .themes import color
+
+    total_mb = sum(s for _, _, s in files)
+    free_gb = None
+    try:
+        du = shutil.disk_usage(DOWNLOAD_DIR if os.path.isdir(DOWNLOAD_DIR)
+                               else os.path.expanduser("~"))
+        free_gb = du.free / (1024 ** 3)
+    except Exception:
+        pass
+
+    body = Text()
+    body.append(f"  {icon('folder')} {t('Downloads')}: ", style=color("dim"))
+    body.append(f"{len(files)}", style=f"bold {color('info')}")
+    body.append(f"    {t('Total size')}: ", style=color("dim"))
+    body.append(f"{total_mb/1024:.1f} GB" if total_mb >= 1024 else f"{total_mb:.0f} MB",
+                style=f"bold {color('success')}")
+    if interrupted:
+        body.append(f"    {icon('download')} {t('interrupted')}: ", style=color("dim"))
+        body.append(f"{len(interrupted)}", style=f"bold {color('warning')}")
+    if free_gb is not None:
+        body.append(f"\n  {t('Disk')}: ", style=color("dim"))
+        body.append(f"{free_gb:.0f} GB {t('free')}", style=f"bold {color('accent')}")
+    return Panel(body, border_style=color("border"),
+                 title=f"[{color('header')}]{t('Downloads manager')}[/]", title_align="left")
+
+
 def _browse_local_downloads():
-    """List videos in ~/Downloads/FreeFlix and let the user play one locally,
-    plus any interrupted downloads (resume / delete)."""
+    """Downloads manager: completed files (play/delete), interrupted downloads
+    (resume/delete), and a disk-space summary."""
     import shutil
     import subprocess
 
     from .player_manager import DOWNLOAD_DIR, list_interrupted_downloads
 
-    clear_screen()
-    print_header(f"{icon('folder')} {t('My Downloads')}")
-
     video_exts = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts"}
-    files = []
-    if os.path.isdir(DOWNLOAD_DIR):
-        for root, dirs, names in os.walk(DOWNLOAD_DIR):
-            dirs[:] = [d for d in dirs if d != ".temp"]  # never list partials
-            for n in names:
-                if os.path.splitext(n)[1].lower() in video_exts:
-                    full = os.path.join(root, n)
-                    rel = os.path.relpath(full, DOWNLOAD_DIR)
-                    try:
-                        size_mb = os.path.getsize(full) / (1024 * 1024)
-                    except OSError:
-                        size_mb = 0
-                    files.append((rel, full, size_mb))
-    files.sort(key=lambda x: x[0].lower())
 
-    interrupted = list_interrupted_downloads()
+    while True:
+        clear_screen()
+        files = []
+        if os.path.isdir(DOWNLOAD_DIR):
+            for root, dirs, names in os.walk(DOWNLOAD_DIR):
+                dirs[:] = [d for d in dirs if d != ".temp"]
+                for n in names:
+                    if os.path.splitext(n)[1].lower() in video_exts:
+                        full = os.path.join(root, n)
+                        rel = os.path.relpath(full, DOWNLOAD_DIR)
+                        try:
+                            size_mb = os.path.getsize(full) / (1024 * 1024)
+                        except OSError:
+                            size_mb = 0
+                        files.append((rel, full, size_mb))
+        files.sort(key=lambda x: x[0].lower())
+        interrupted = list_interrupted_downloads()
 
-    if not files and not interrupted:
-        print_info(f"No downloads yet ({DOWNLOAD_DIR}).")
-        print_info('Use the "download" option from a video to start.')
-        pause()
-        return
+        if not files and not interrupted:
+            print_header(f"{icon('folder')} {t('My Downloads')}")
+            print_info(f"No downloads yet ({DOWNLOAD_DIR}).")
+            print_info('Use the "download" option from a video to start.')
+            pause()
+            return
 
-    # Combined menu : finished files, then an "Interrupted" section.
-    entries = []          # (kind, payload) parallel to labels
-    labels = []
-    group_headers = {}
-    for rel, full, size in files:
-        entries.append(("file", full))
-        labels.append(f"{rel}  ({size:.1f} MB)")
-    if interrupted:
-        group_headers[len(labels)] = t("Interrupted downloads")
-        for it in interrupted:
-            entries.append(("partial", it))
-            pct = (f"{it['percent']}%" if it["percent"] is not None
-                   else f"{it['size_mb']:.0f} MB")
-            labels.append(f"{icon('download')} {it['title']} — "
-                          f"{t('interrupted')} ({pct})")
-    labels.append(t("← Back"))
+        entries, labels, group_headers = [], [], {}
+        for rel, full, size in files:
+            entries.append(("file", full))
+            labels.append(f"{rel}  ({size:.1f} MB)")
+        if interrupted:
+            group_headers[len(labels)] = t("Interrupted downloads")
+            for it in interrupted:
+                entries.append(("partial", it))
+                pct = (f"{it['percent']}%" if it["percent"] is not None
+                       else f"{it['size_mb']:.0f} MB")
+                labels.append(f"{icon('download')} {it['title']} — "
+                              f"{t('interrupted')} ({pct})")
+        labels.append(t("← Back"))
 
-    choice = select_from_list(labels, t("Select a file to play:"),
-                              group_headers=group_headers)
-    if choice >= len(entries):
-        return
-
-    kind, payload = entries[choice]
-    if kind == "partial":
-        _handle_partial_download(payload)
-        return
-
-    selected_path = payload
-
-    preferred = tracker.get_player() or "mpv"
-    candidates = [preferred, "mpv", "vlc"]
-    seen = set()
-    player_bin = None
-    chosen_name = None
-    for cand in candidates:
-        if cand in seen or cand in ("download", "browser", "manual"):
+        choice = select_from_list(labels, t("Select a file to play:"),
+                                  group_headers=group_headers,
+                                  top=_downloads_summary(files, interrupted, DOWNLOAD_DIR))
+        if choice >= len(entries):
+            return
+        kind, payload = entries[choice]
+        if kind == "partial":
+            _handle_partial_download(payload)
             continue
-        seen.add(cand)
-        bin_path = shutil.which(cand)
-        if bin_path:
-            player_bin = bin_path
-            chosen_name = cand
-            break
 
-    if not player_bin:
-        print_error(
-            "No local player found (tried mpv, vlc). "
-            "Install one with: sudo dnf install mpv"
+        # Completed file : Play / Delete.
+        act = select_from_list(
+            [t("Play"), t("Delete"), t("← Back")],
+            f"{os.path.basename(payload)}",
         )
-        pause()
-        return
+        if act == 1:
+            try:
+                os.remove(payload)
+                toast(t("Deleted."))
+            except OSError as e:
+                print_error(f"{e}")
+                pause()
+            continue
+        if act != 0:
+            continue
 
-    print_info(f"Launching {chosen_name} for [cyan]{os.path.basename(selected_path)}[/cyan]")
-    try:
-        subprocess.run([player_bin, selected_path], check=False)
-    except KeyboardInterrupt:
-        pass
+        preferred = tracker.get_player() or "mpv"
+        player_bin = None
+        for cand in [preferred, "mpv", "vlc"]:
+            if cand in ("download", "browser", "manual"):
+                continue
+            b = shutil.which(cand)
+            if b:
+                player_bin = b
+                break
+        if not player_bin:
+            print_error("No local player found (tried mpv, vlc). "
+                        "Install one with: sudo dnf install mpv")
+            pause()
+            continue
+        try:
+            subprocess.run([player_bin, payload], check=False)
+        except KeyboardInterrupt:
+            pass
 
 
 def _show_stats():
@@ -239,6 +272,11 @@ def _home_dashboard():
     body.append(f"{stats['streak']}", style=f"bold {color('warning')}")
     body.append(f"    {icon('play')} {t('In progress')}: ", style=color("dim"))
     body.append(f"{in_progress}", style=f"bold {color('success')}")
+    from . import recent
+    _new = recent.get_items()
+    if _new:
+        body.append(f"    {icon('sparkle')} {t('New releases')}: ", style=color("dim"))
+        body.append(f"{len(_new)}", style=f"bold {color('accent')}")
 
     if history:
         from .player_manager import episode_badges
@@ -259,6 +297,144 @@ def _home_dashboard():
 
     return Panel(body, border_style=color("accent"), expand=True,
                  title="[bold]FreeFlix[/bold]", title_align="left")
+
+
+def _theme_preview_panel(theme: dict, title: str):
+    """A small sample panel rendered in a given theme dict (for live preview)."""
+    from rich.panel import Panel
+    from rich.text import Text
+    body = Text()
+    body.append("  ❯ Menu item (selected)\n", style=f"bold {theme['accent']} reverse")
+    body.append("    Another item\n", style="white")
+    body.append(f"  {t('recommended')} ✓  ", style=f"bold {theme['success']}")
+    body.append("warning  ", style=theme["warning"])
+    body.append("error  ", style=theme["error"])
+    body.append("info\n", style=theme["info"])
+    return Panel(body, border_style=theme["accent"],
+                 title=f"[{theme['header']}]{title}[/]", title_align="left")
+
+
+def _theme_settings():
+    """Appearance → Theme : pick a theme or a custom accent, with a live preview
+    panel shown before you commit."""
+    from . import themes as th
+    while True:
+        cur = tracker.get_theme()
+        acc = tracker.get_custom_accent()
+        choice = select_from_list(
+            [t("Choose a theme"),
+             f"{t('Custom accent colour')} ({acc or t('none')})",
+             t("Reset accent"),
+             t("← Back")],
+            f"{icon('theme')} {t('Theme')}",
+        )
+        if choice == 0:
+            tlist = th.list_themes()
+            # Show each theme name painted in its own accent for a quick glance.
+            labels = []
+            for key, label in tlist:
+                a = th.THEMES[key]["accent"]
+                labels.append(f"[{a}]●[/] {label}")
+            labels.append(t("← Back"))
+            idx = select_from_list(labels, t("Select theme:"),
+                                   default_index=next((i for i, (k, _) in enumerate(tlist) if k == cur), 0))
+            if idx >= len(tlist):
+                continue
+            key = tlist[idx][0]
+            clear_screen()
+            console.print(_theme_preview_panel(th.preview_theme(key, acc or None), tlist[idx][1]))
+            if select_from_list([t("Apply"), t("← Back")], t("Apply this theme?")) == 0:
+                tracker.set_theme(key)
+                toast(f"{t('Theme set to:')} {tlist[idx][1]}")
+        elif choice == 1:
+            val = get_user_input(t("Accent colour (hex like #bd93f9 or a name), blank to cancel"))
+            if val:
+                clear_screen()
+                console.print(_theme_preview_panel(th.preview_theme(cur, val.strip()), val.strip()))
+                if select_from_list([t("Apply"), t("← Back")], t("Apply this accent?")) == 0:
+                    tracker.set_custom_accent(val.strip())
+                    toast(t("Accent updated."))
+        elif choice == 2:
+            tracker.set_custom_accent("")
+            toast(t("Accent reset."))
+        else:
+            return
+
+
+def _browse_new_releases(items):
+    """Show the background-fetched new releases with posters (chafa preview
+    pane); selecting one jumps straight into its latest season."""
+    from .cli_utils import select_with_preview, make_preview, crumb, spinner
+    from .scraping import anime_sama
+    from .handlers.playback import play_episode_flow
+    from .player_manager import episode_badges
+
+    previews = [
+        make_preview(
+            cover=it.get("poster", ""),
+            title=it["title"],
+            lines=[f"{icon('sparkle')} {it['latest_season']}"],
+            panel_title=t("New releases"),
+        )
+        for it in items
+    ]
+    labels = [f"{it['title']} — {it['latest_season']}" for it in items]
+    idx = select_with_preview(labels, f"{icon('sparkle')} {t('New releases')}", previews)
+    if idx >= len(items):
+        return
+    it = items[idx]
+
+    try:
+        with spinner(f"{t('Loading')} {it['latest_season']}…"):
+            season = anime_sama.get_season(it["season_url"])
+    except Exception:
+        print_warning(t("The source may be down or rate-limiting — try again in a moment."))
+        pause()
+        return
+
+    langs = list(season.episodes.keys())
+    if not langs:
+        print_warning(t("No episodes found."))
+        pause()
+        return
+
+    with crumb(it["title"]), crumb(it["latest_season"]):
+        while True:  # ── Language ──
+            if len(langs) == 1:
+                lang = langs[0]
+            else:
+                li = select_from_list(langs + [t("← Back")],
+                                      f"{icon('globe')} {t('Select Language:')}")
+                if li >= len(langs):
+                    return
+                lang = langs[li]
+            episodes = season.episodes[lang]
+            ep_idx = 0
+            while True:  # ── Episode ──
+                ep_labels = [
+                    e.title + episode_badges(it["title"], it["latest_season"], e.title)
+                    for e in episodes
+                ]
+                with crumb(lang):
+                    ep_idx = select_from_list(
+                        ep_labels + [t("← Back")],
+                        f"{icon('tv')} {t('Select Episode:')}",
+                        default_index=min(ep_idx, len(episodes) - 1),
+                    )
+                if ep_idx >= len(episodes):
+                    break
+                play_episode_flow(
+                    provider_name="Anime-Sama",
+                    series_title=it["title"],
+                    season_title=it["latest_season"],
+                    episode=episodes[ep_idx],
+                    series_url=it["url"],
+                    season_url=it["season_url"],
+                    logo_url=it.get("poster"),
+                    headers={"Referer": anime_sama.website_origin},
+                )
+            if len(langs) == 1:
+                return
 
 
 def _show_about(version: str):
@@ -522,6 +698,11 @@ def main():
     from .cli_utils import disable_terminal_reports
     disable_terminal_reports()
 
+    # Background "new releases" feed (personalised to your history) — never
+    # blocks the home; results appear once ready.
+    from . import recent
+    recent.start_background_fetch()
+
     # ── Resumable dependency gate ──────────────────────────────
     #    Until the "all good" flag is cached, every launch re-checks what's
     #    installed and finishes ONLY the missing pieces (instead of jumping
@@ -640,6 +821,16 @@ def main():
         menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
         providers_idx = len(menu_items) - 1
 
+        # 3b. New releases (only if the background feed found some)
+        from . import recent
+        new_releases = recent.get_items()
+        new_idx = -1
+        if new_releases:
+            menu_items.append(
+                f"{icon('sparkle')} {t('New releases')} ({len(new_releases)})"
+            )
+            new_idx = len(menu_items) - 1
+
         # 4. My History
         menu_items.append(f"{icon('history')} {t('My History')}")
         history_idx = len(menu_items) - 1
@@ -672,6 +863,11 @@ def main():
 
         if choice_idx == anilist_resume_idx:
             anilist.handle_anilist_continue()
+            continue
+
+        if new_idx >= 0 and choice_idx == new_idx:
+            crumb_reset(f"{icon('home')} {t('Home')}", t("New releases"))
+            _browse_new_releases(new_releases)
             continue
 
         if choice_idx == history_idx:
@@ -761,104 +957,78 @@ def main():
                     i = select_from_list(list(items) + [t("← Back")], prompt)
                     return None if i >= len(items) else i
 
-                opts = [
-                    f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})",
-                    f"{t('Update Language')} ({lang_display})",
-                    f"{t('Update Anime Language')} ({anime_lang_display})",
-                    f"{icon('theme')} {t('Theme')} ({theme_label})",
-                    f"{t('Choose default Player')} ({player_display})",
-                    f"{t('Download Quality')} ({quality})",
-                    f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})",
-                    f"{t('Parallel Downloads')} ({par_n})",
-                    f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})",
-                    f"Nvidia GPU offload ({nv_mode})",
-                    f"{icon('poster')} {t('Show Posters')} ({tracker.get_poster_mode()})",
-                    f"{icon('theme')} {t('Icon Style')} ({tracker.get_icon_style()})",
-                    f"{t('Cloudflare token')}",
-                    f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})",
-                    f"{icon('subtitle')} {t('Download subtitles')} ({'ON' if tracker.get_subtitle_search() else 'OFF'})",
-                    f"{icon('info')} {t('About')}",
-                    t("Back"),
-                ]
-
-                s_choice = select_from_list(opts, t("Select Setting:"))
-
-                if s_choice == 0:
-                    new_token = get_user_input(t("Enter new AniList Token"))
-                    if new_token:
-                        tracker.set_anilist_token(new_token)
+                # ── Actions (each setting's handler) ──
+                def _a_token():
+                    nt = get_user_input(t("Enter new AniList Token"))
+                    if nt:
+                        tracker.set_anilist_token(nt)
                         toast(t("Token saved."))
-                elif s_choice == 1:
-                    langs = get_all_languages()
-                    l_choice = _pick([lang[1] for lang in langs], t("Select Language:"))
-                    if l_choice is not None:
-                        tracker.set_language(langs[l_choice][0])
-                        toast(f"{t('Language updated to:')} {langs[l_choice][1]}")
-                elif s_choice == 2:
-                    langs = get_all_languages()
-                    a_choice = _pick([lang[1] for lang in langs], t("Anime language:"))
-                    if a_choice is not None:
-                        tracker.set_anime_language(langs[a_choice][0])
-                        print_success(
-                            f"{t('Anime language updated to:')} {langs[a_choice][1]}"
-                        )
-                        pause()
-                elif s_choice == 3:
-                    tlist = themes_mod.list_themes()
-                    t_choice = _pick([lbl for _, lbl in tlist], t("Select theme:"))
-                    if t_choice is not None:
-                        tracker.set_theme(tlist[t_choice][0])
-                        print_success(f"{t('Theme set to:')} {tlist[t_choice][1]}")
-                        pause()
-                elif s_choice == 4:
-                    players = get_all_players()
-                    p_choice = _pick([t(p[1]) for p in players], t("Select default player:"))
-                    if p_choice is not None:
-                        tracker.set_player(players[p_choice][0])
-                        toast(f"{t('Player updated to:')} {t(players[p_choice][1])}")
-                elif s_choice == 5:
+
+                def _a_lang():
+                    ls = get_all_languages()
+                    c = _pick([x[1] for x in ls], t("Select Language:"))
+                    if c is not None:
+                        tracker.set_language(ls[c][0])
+                        toast(f"{t('Language updated to:')} {ls[c][1]}")
+
+                def _a_anime_lang():
+                    ls = get_all_languages()
+                    c = _pick([x[1] for x in ls], t("Anime language:"))
+                    if c is not None:
+                        tracker.set_anime_language(ls[c][0])
+                        toast(f"{t('Anime language updated to:')} {ls[c][1]}")
+
+                def _a_theme():
+                    _theme_settings()
+
+                def _a_player():
+                    ps = get_all_players()
+                    c = _pick([t(p[1]) for p in ps], t("Select default player:"))
+                    if c is not None:
+                        tracker.set_player(ps[c][0])
+                        toast(f"{t('Player updated to:')} {t(ps[c][1])}")
+
+                def _a_quality():
                     q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
                     q_vals = ["auto", "1080", "720", "480"]
-                    q_choice = _pick(q_opts, t("Select download quality:"))
-                    if q_choice is not None:
-                        tracker.set_download_quality(q_vals[q_choice])
-                        toast(f"{t('Download quality set to:')} {q_opts[q_choice]}")
-                elif s_choice == 6:
+                    c = _pick(q_opts, t("Select download quality:"))
+                    if c is not None:
+                        tracker.set_download_quality(q_vals[c])
+                        toast(f"{t('Download quality set to:')} {q_opts[c]}")
+
+                def _a_ossub():
                     print_info("Register at https://www.opensubtitles.com/en/consumers")
                     print_info("to get a free API key, then paste it here.")
-                    new_key = get_user_input(t("Enter OpenSubtitles API key"))
-                    if new_key:
-                        tracker.set_opensubtitles_key(new_key.strip())
-                        print_success(t("OpenSubtitles key saved."))
-                        pause()
-                elif s_choice == 7:
+                    nk = get_user_input(t("Enter OpenSubtitles API key"))
+                    if nk:
+                        tracker.set_opensubtitles_key(nk.strip())
+                        toast(t("OpenSubtitles key saved."))
+
+                def _a_parallel():
                     n_opts = ["1 (sequential)", "2", "3", "4"]
-                    n_choice = _pick(n_opts, t("Max parallel downloads:"))
-                    if n_choice is not None:
-                        tracker.set_parallel_downloads(n_choice + 1)
-                        print_success(f"{t('Parallel downloads set to')} {n_choice + 1}")
-                        pause()
-                elif s_choice == 8:
+                    c = _pick(n_opts, t("Max parallel downloads:"))
+                    if c is not None:
+                        tracker.set_parallel_downloads(c + 1)
+                        toast(f"{t('Parallel downloads set to')} {c + 1}")
+
+                def _a_notif(notif_on=notif_on):
                     if notif_on:
                         if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
-                            if notif_mod.uninstall_systemd_timer():
-                                print_success(t("Notifications disabled."))
-                            else:
-                                print_error(t("Failed to disable notifications."))
-                            pause()
+                            ok = notif_mod.uninstall_systemd_timer()
+                            toast(t("Notifications disabled.") if ok else t("Failed to disable notifications."),
+                                  "success" if ok else "error")
                     else:
                         print_info("This installs a systemd --user timer that runs once a day")
                         print_info("and uses notify-send to alert you about new episodes.")
                         if select_from_list([t("Yes"), t("No")], t("Enable daily notifications?")) == 0:
                             if notif_mod.install_systemd_timer():
-                                print_success(t("Notifications enabled (runs daily)."))
+                                toast(t("Notifications enabled (runs daily)."))
                             else:
-                                print_error(
-                                    "Failed to enable. Make sure systemd --user works "
-                                    "and 'libnotify' is installed (sudo dnf install libnotify)."
-                                )
-                            pause()
-                elif s_choice == 9:
+                                print_error("Failed to enable. Make sure systemd --user works "
+                                            "and 'libnotify' is installed (sudo dnf install libnotify).")
+                                pause()
+
+                def _a_nvidia():
                     print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
                     print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
                     nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
@@ -866,65 +1036,84 @@ def main():
                     c = _pick(nv_opts, t("Nvidia GPU offload:"))
                     if c is not None:
                         tracker.set_nvidia_offload(nv_vals[c])
-                        print_success(f"{t('Nvidia offload:')} {nv_vals[c]}")
-                        pause()
-                elif s_choice == 10:
+                        toast(f"{t('Nvidia offload:')} {nv_vals[c]}")
+
+                def _a_posters():
                     from . import terminal_image
-                    has_chafa = terminal_image.chafa_available()
-                    p_opts = [
-                        "auto (chafa picks best format)",
-                        "sixel (photo quality — needs terminal Sixel)",
-                        "off (no posters)",
-                    ]
+                    p_opts = ["auto (chafa picks best format)",
+                              "sixel (photo quality — needs terminal Sixel)", "off (no posters)"]
                     p_vals = ["auto", "sixel", "off"]
-                    if not has_chafa:
-                        print_warning(
-                            "chafa is not installed — posters won't show until you "
-                            "install it (e.g. sudo dnf install chafa)."
-                        )
+                    if not terminal_image.chafa_available():
+                        print_warning("chafa is not installed — posters won't show until you "
+                                      "install it (e.g. sudo dnf install chafa).")
                     c = _pick(p_opts, t("Show Posters:"))
                     if c is not None:
                         tracker.set_poster_mode(p_vals[c])
                         terminal_image.reset_cache()
-                        print_success(f"{t('Show Posters')}: {p_vals[c]}")
-                        pause()
-                elif s_choice == 11:
-                    i_opts = [
-                        "emoji (works everywhere)",
-                        "nerd (crisp icons, needs a Nerd Font)",
-                    ]
+                        toast(f"{t('Show Posters')}: {p_vals[c]}")
+
+                def _a_icons():
+                    i_opts = ["emoji (works everywhere)", "nerd (crisp icons, needs a Nerd Font)"]
                     i_vals = ["emoji", "nerd"]
                     c = _pick(i_opts, t("Icon Style:"))
                     if c is None:
-                        continue
+                        return
                     picked = i_vals[c]
-                    if picked == "nerd":
-                        if not setup_assistant.detect_nerd_font():
-                            print_info("CaskaydiaCove Nerd Font not found on this system.")
-                            ans = input("Install it now? [Y/n] ").strip().lower()
-                            if ans not in ("n", "no"):
-                                setup_assistant.install_nerd_font()
-                        else:
-                            print_success("CaskaydiaCove Nerd Font detected.")
+                    if picked == "nerd" and not setup_assistant.detect_nerd_font():
+                        print_info("CaskaydiaCove Nerd Font not found on this system.")
+                        if input("Install it now? [Y/n] ").strip().lower() not in ("n", "no"):
+                            setup_assistant.install_nerd_font()
                     tracker.set_icon_style(picked)
                     print_success(f"{t('Icon Style')}: {picked}")
                     print_info(t("Restart FreeFlix to apply icons everywhere."))
                     pause()
-                elif s_choice == 12:
-                    _set_cloudflare_token()
-                elif s_choice == 13:
+
+                def _a_analyze():
                     new = not tracker.get_analyze_players()
                     tracker.set_analyze_players(new)
                     toast(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
-                elif s_choice == 14:
+
+                def _a_subs():
                     new = not tracker.get_subtitle_search()
                     tracker.set_subtitle_search(new)
                     toast(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
-                elif s_choice == 15:
-                    _show_about(_VERSION)
-                    pause()
-                else:
+
+                # ── (category, label, action) — grouped in the menu ──
+                PLY, DL, APP, ACC, AB = (t("Playback"), t("Downloads"),
+                                         t("Appearance"), t("Accounts"), t("About"))
+                entries = [
+                    (PLY, f"{t('Choose default Player')} ({player_display})", _a_player),
+                    (PLY, f"Nvidia GPU offload ({nv_mode})", _a_nvidia),
+                    (PLY, f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})", _a_analyze),
+                    (DL, f"{t('Download Quality')} ({quality})", _a_quality),
+                    (DL, f"{t('Parallel Downloads')} ({par_n})", _a_parallel),
+                    (DL, f"{icon('subtitle')} {t('Download subtitles')} ({'ON' if tracker.get_subtitle_search() else 'OFF'})", _a_subs),
+                    (APP, f"{icon('theme')} {t('Theme')} ({theme_label})", _a_theme),
+                    (APP, f"{icon('poster')} {t('Show Posters')} ({tracker.get_poster_mode()})", _a_posters),
+                    (APP, f"{icon('theme')} {t('Icon Style')} ({tracker.get_icon_style()})", _a_icons),
+                    (APP, f"{t('Update Language')} ({lang_display})", _a_lang),
+                    (APP, f"{t('Update Anime Language')} ({anime_lang_display})", _a_anime_lang),
+                    (ACC, f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})", _a_token),
+                    (ACC, f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})", _a_ossub),
+                    (ACC, f"{t('Cloudflare token')}", _set_cloudflare_token),
+                    (ACC, f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})", _a_notif),
+                    (AB, f"{icon('info')} {t('About')}", lambda: (_show_about(_VERSION), pause())),
+                ]
+
+                labels, actions, group_headers, last_cat = [], [], {}, None
+                for cat, label, fn in entries:
+                    if cat != last_cat:
+                        group_headers[len(labels)] = cat
+                        last_cat = cat
+                    labels.append(label)
+                    actions.append(fn)
+                labels.append(t("Back"))
+
+                s_choice = select_from_list(labels, t("Select Setting:"),
+                                            group_headers=group_headers)
+                if s_choice >= len(actions):
                     break
+                actions[s_choice]()
             continue
 
         # Exit

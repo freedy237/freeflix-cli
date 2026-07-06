@@ -434,6 +434,28 @@ class ProgressTracker:
             self.data["episode_positions"].pop(key, None)
             self._save_data()
 
+    # --- Search history (most-recent-first, deduped, capped) ---
+    def add_search_query(self, query: str, cap: int = 12):
+        q = (query or "").strip()
+        if not q or q.lower() == "exit":
+            return
+        hist = self.data.get("search_history", [])
+        hist = [h for h in hist if h.lower() != q.lower()]
+        hist.insert(0, q)
+        self.data["search_history"] = hist[:cap]
+        self._save_data()
+
+    def get_search_history(self) -> list:
+        return self.data.get("search_history", [])
+
+    # --- Custom accent colour (overlays the active theme) ---
+    def get_custom_accent(self) -> str:
+        return self.data.get("custom_accent", "")
+
+    def set_custom_accent(self, hex_or_name: str):
+        self.data["custom_accent"] = (hex_or_name or "").strip()
+        self._save_data()
+
     # --- Watched episodes (for the ✓ badge in episode lists) ---
     def mark_episode_watched(self, key: str):
         if not key:

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.8.3
+
+### 🔎 Search history
+- The search box now shows your **recent searches**; press **↑/↓ to recall** a
+  previous query. History is deduped and capped.
+
+### 🆕 New releases (background, personalised)
+- A daemon thread checks — **without ever blocking the home** — whether the
+  Anime-Sama shows in your history have a newer season/part. When they do, a
+  **New releases** entry appears (and a home teaser), opening a **poster preview
+  list** (chafa) that jumps straight into the new season.
+
+### ⚙️ Settings, reorganised
+- Settings are now grouped into **Playback / Downloads / Appearance / Accounts**
+  (data-driven, no more brittle index dispatch). Type **`/`** to search settings.
+
+### 🎨 Themes
+- Four new themes (**Gruvbox, Tokyo Night, Rosé Pine, Monochrome**), a
+  **custom accent colour**, and a **live preview** panel before you apply.
+
+### ⬇️ Downloads manager
+- "My Downloads" is now a manager: **disk-space + total-size summary**, play or
+  **delete** finished files, and resume/delete interrupted ones — all in a loop.
 ## 1.8.2
 
 ### 🏠 Enriched home screen

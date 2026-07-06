@@ -19,7 +19,8 @@ def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def get_user_input(prompt: str, default: str = None, header: str = None) -> str:
+def get_user_input(prompt: str, default: str = None, header: str = None,
+                   history: list = None) -> str:
     """
     Get user input with a styled prompt.
 
@@ -28,17 +29,16 @@ def get_user_input(prompt: str, default: str = None, header: str = None) -> str:
         default: The default value to display
         header: Optional banner. When set on a real terminal, the prompt is
             shown FULL-SCREEN with the header panel rendered inside a Live
-            (alternate-screen) region and the text typed in raw mode — so a
-            terminal resize reflows everything instantly with no wrapped/
-            stacked header left behind. Falls back to the plain prompt
-            otherwise.
+            (alternate-screen) region and the text typed in raw mode.
+        history: Optional recent-entries list (most-recent-first). When set, a
+            helper is shown and ↑/↓ recalls previous entries into the field.
 
     Returns:
         The user's input as a string
     """
     if header and console.is_terminal:
         try:
-            return _input_fullscreen(prompt, default, header)
+            return _input_fullscreen(prompt, default, header, history)
         except Exception:
             pass  # any raw-mode issue -> plain prompt below
 
@@ -47,7 +47,8 @@ def get_user_input(prompt: str, default: str = None, header: str = None) -> str:
     return input().strip() or default
 
 
-def _input_fullscreen(prompt: str, default: str, header: str) -> str:
+def _input_fullscreen(prompt: str, default: str, header: str,
+                      history: list = None) -> str:
     """Full-screen, resize-safe single-line text prompt (Unix raw mode).
 
     Renders the header panel + prompt + live-typed text inside a screen=True
@@ -63,8 +64,11 @@ def _input_fullscreen(prompt: str, default: str, header: str) -> str:
     if not sys.stdin.isatty():
         raise RuntimeError("not a tty")
 
+    from .i18n import t as _t
     text = ""
     result = {"val": None}
+    history = history or []
+    hist_idx = {"i": -1}   # -1 = live text, 0.. = into history
 
     def render():
         body = [
@@ -74,6 +78,13 @@ def _input_fullscreen(prompt: str, default: str, header: str) -> str:
         ]
         if default and not text:
             body.append(Text(f"\n   ({iconify('default')}: {default})",
+                             style=color("dim")))
+        if history:
+            recent = "   ".join(f"↺ {h}" for h in history[:4])
+            body.append(Text(f"\n\n   {_t('Recent searches')}",
+                             style=f"bold {color('info')}"))
+            body.append(Text(f"\n   {recent[:76]}", style=color("dim")))
+            body.append(Text(f"\n   {_t('↑/↓ recall · type to search')}",
                              style=color("dim")))
         return Group(*body)
 
@@ -93,6 +104,17 @@ def _input_fullscreen(prompt: str, default: str, header: str) -> str:
                     if data[:1] == b"\x1b":
                         if len(data) == 1:
                             result["val"] = ""  # lone Esc -> cancel
+                        elif history and data[1:3] in (b"[A", b"OA"):  # Up
+                            if hist_idx["i"] < len(history) - 1:
+                                hist_idx["i"] += 1
+                                text = history[hist_idx["i"]]
+                        elif history and data[1:3] in (b"[B", b"OB"):  # Down
+                            if hist_idx["i"] > 0:
+                                hist_idx["i"] -= 1
+                                text = history[hist_idx["i"]]
+                            else:
+                                hist_idx["i"] = -1
+                                text = ""
                         # else: arrow/focus escape sequence -> ignore
                     else:
                         b0 = data[:1]
@@ -110,6 +132,7 @@ def _input_fullscreen(prompt: str, default: str, header: str) -> str:
                             for c in ch:
                                 if c.isprintable():
                                     text += c
+                                    hist_idx["i"] = -1  # back to live editing
                 live.update(render())
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)

@@ -129,7 +129,10 @@ def handle_anime_sama():
     query = get_user_input(
         t("Search query (or 'exit' to back)"),
         header=f"{icon('anime')} Anime-Sama",
+        history=tracker.get_search_history(),
     )
+    if query and query.lower() != "exit":
+        tracker.add_search_query(query)
     if not query or query.lower() == "exit":
         return
 

@@ -61,6 +61,34 @@ THEMES = {
         "warning": "#ebcb8b",  # aurora yellow
         "dim": "#4c566a",      # polar night
     },
+    # Gruvbox Dark — https://github.com/morhetz/gruvbox
+    "gruvbox": {
+        "label": "Gruvbox",
+        "accent": "#fabd2f", "header": "bold #ebdbb2", "border": "#d79921",
+        "success": "#b8bb26", "error": "#fb4934", "info": "#83a598",
+        "warning": "#fe8019", "dim": "#928374",
+    },
+    # Tokyo Night — https://github.com/enkia/tokyo-night-vscode-theme
+    "tokyonight": {
+        "label": "Tokyo Night",
+        "accent": "#7aa2f7", "header": "bold #c0caf5", "border": "#bb9af7",
+        "success": "#9ece6a", "error": "#f7768e", "info": "#7dcfff",
+        "warning": "#e0af68", "dim": "#565f89",
+    },
+    # Rosé Pine — https://rosepinetheme.com
+    "rosepine": {
+        "label": "Rosé Pine",
+        "accent": "#c4a7e7", "header": "bold #e0def4", "border": "#ebbcba",
+        "success": "#31748f", "error": "#eb6f92", "info": "#9ccfd8",
+        "warning": "#f6c177", "dim": "#6e6a86",
+    },
+    # High-contrast monochrome (accessibility / e-ink).
+    "mono": {
+        "label": "Monochrome",
+        "accent": "bright_white", "header": "bold white", "border": "white",
+        "success": "bright_white", "error": "bright_white", "info": "white",
+        "warning": "bright_white", "dim": "grey58",
+    },
 }
 
 DEFAULT_THEME = "default"
@@ -72,13 +100,33 @@ def list_themes():
 
 
 def active_theme() -> dict:
-    """Return the dict of the user's current theme (falls back to default)."""
+    """
+    The user's current theme (falls back to default), with an optional custom
+    accent colour overlaid on top (Settings → Appearance → Theme → accent).
+    """
+    name = DEFAULT_THEME
+    accent = None
     try:
         from .tracker import tracker
         name = tracker.get_theme()
+        accent = tracker.get_custom_accent()
     except Exception:
-        name = DEFAULT_THEME
-    return THEMES.get(name, THEMES[DEFAULT_THEME])
+        pass
+    theme = dict(THEMES.get(name, THEMES[DEFAULT_THEME]))
+    if accent:
+        theme["accent"] = accent
+        theme["border"] = accent
+    return theme
+
+
+def preview_theme(name: str, accent: str = None) -> dict:
+    """Return a theme dict for previewing (name + optional accent), without
+    touching the saved settings."""
+    theme = dict(THEMES.get(name, THEMES[DEFAULT_THEME]))
+    if accent:
+        theme["accent"] = accent
+        theme["border"] = accent
+    return theme
 
 
 def color(role: str) -> str:
