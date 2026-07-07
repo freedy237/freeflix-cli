@@ -308,25 +308,34 @@ def _read_menu_key():
     if os.name == "nt":
         try:
             import msvcrt
+            import time as _t
         except Exception:
             return readchar.readkey()
         try:
             ch = msvcrt.getwch()
         except Exception:
             return readchar.readkey()
-        # Windows special-key prefix (arrows/function keys in non-VT mode).
+        # Classic-console special keys (arrows/F-keys): the prefix is ALWAYS
+        # followed by a scan code — read it unconditionally (gating on kbhit()
+        # was the bug that made the arrow keys do nothing).
         if ch in ("\x00", "\xe0"):
-            code = msvcrt.getwch() if msvcrt.kbhit() else ""
+            code = msvcrt.getwch()
             return {"H": readchar.key.UP, "P": readchar.key.DOWN,
                     "M": readchar.key.RIGHT, "K": readchar.key.LEFT}.get(code, "")
+        # VT-mode escape sequence (Windows Terminal): arrows are \x1b[A…, focus
+        # events \x1b[I / \x1b[O. Wait briefly for the rest so a real arrow isn't
+        # mistaken for a lone Esc; only a truly isolated \x1b is Esc.
         if ch == "\x1b":
             seq = ch
-            while msvcrt.kbhit():           # drain the rest of the sequence
-                seq += msvcrt.getwch()
-                if len(seq) >= 3:
-                    break
+            for _ in range(6):
+                if msvcrt.kbhit():
+                    seq += msvcrt.getwch()
+                    if len(seq) >= 3:
+                        break
+                else:
+                    _t.sleep(0.004)
             if seq == "\x1b":
-                return readchar.key.ESC     # truly isolated Esc → go back
+                return readchar.key.ESC
             return {"\x1b[A": readchar.key.UP, "\x1bOA": readchar.key.UP,
                     "\x1b[B": readchar.key.DOWN, "\x1bOB": readchar.key.DOWN,
                     "\x1b[C": readchar.key.RIGHT, "\x1b[D": readchar.key.LEFT,

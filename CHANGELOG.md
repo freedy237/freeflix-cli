@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.5
+
+### 🪟 Windows: arrow keys work again (regression fix)
+- 1.8.4's new Windows key reader broke the **arrow keys**: the classic-console
+  special-key prefix (`\x00`/`\xe0`) was read behind a wrong `kbhit()` guard, and
+  the VT escape sequence (`\x1b[A…`) wasn't always fully drained. Arrows now read
+  reliably in both classic console and Windows Terminal (VT) mode, while focus
+  events (`\x1b[I`/`\x1b[O`) are still ignored and a lone Esc still goes back.
 ## 1.8.4
 
 ### 🪟 Windows fixes (important)
