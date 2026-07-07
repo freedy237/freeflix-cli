@@ -357,7 +357,21 @@ _TOOLS = [
 
 
 def _have(bins) -> bool:
-    return any(shutil.which(b) for b in bins) or _have_managed(bins)
+    if any(shutil.which(b) for b in bins) or _have_managed(bins):
+        return True
+    # Windows: mpv.net / VLC are often installed OUTSIDE PATH (winget links dir,
+    # Program Files…). Resolve them via their known locations so a real install
+    # isn't reported missing (which kept re-triggering the player install).
+    if sys.platform in ("win32", "cygwin") and any(
+        b in ("mpvnet", "mpv", "vlc") for b in bins
+    ):
+        try:
+            from .player_manager import get_mpv_path, get_vlc_path
+            if get_mpv_path() or get_vlc_path():
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def missing_essential_tools() -> list:
@@ -1486,6 +1500,11 @@ def run_pending_migrations(current_version: str) -> None:
 
 def should_prompt_setup() -> bool:
     """True if we should ask the user to run setup."""
+    # Already ran setup once → never re-prompt the FULL wizard (a silently
+    # failed shader download would otherwise re-trigger "install the players…"
+    # on every launch). Missing tools are handled by ensure_runtime_deps.
+    if tracker.data.get("setup_done"):
+        return False
     if is_setup_complete():
         return False
     if tracker.data.get("setup_declined"):

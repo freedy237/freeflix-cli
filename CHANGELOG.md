@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.4
+
+### 🪟 Windows fixes (important)
+- **"FreeFlix manipulates itself / Esc presses by itself" — fixed for real on
+  Windows.** The previous fix was POSIX-only; on Windows the menus fell back to
+  readchar, which mis-read Windows-Terminal **focus events** (`\x1b[I` / `\x1b[O`
+  on Alt-Tab) as a stray Esc, stepping back through menus until it closed the
+  app. There's now a dedicated **msvcrt reader** that drains the whole escape
+  sequence and ignores focus/mouse events — applied to the menus AND the search
+  results pane. Only a truly isolated Esc goes back.
+- **Stops asking to install the players on every launch.** Once you've completed
+  first-run setup, the full wizard no longer re-triggers (a silently-failed
+  shader download used to make it re-prompt forever). Player detection also now
+  finds mpv.net / VLC installed **outside PATH** (winget links dir, Program
+  Files…), so an installed player is no longer reported missing.
 ## 1.8.3
 
 ### 🔎 Search history

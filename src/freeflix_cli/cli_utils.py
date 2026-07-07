@@ -300,6 +300,45 @@ def _read_menu_key():
     to readchar (where Esc already returns immediately).
     """
     import sys
+
+    # ── Windows : read via msvcrt and DRAIN escape sequences ourselves, so a
+    # focus event (\x1b[I / \x1b[O sent by Windows Terminal on Alt-Tab) or a
+    # mouse report can't be misread as a stray Esc (which made FreeFlix "press
+    # Esc by itself" and close). readchar's Windows path mishandled these.
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except Exception:
+            return readchar.readkey()
+        try:
+            ch = msvcrt.getwch()
+        except Exception:
+            return readchar.readkey()
+        # Windows special-key prefix (arrows/function keys in non-VT mode).
+        if ch in ("\x00", "\xe0"):
+            code = msvcrt.getwch() if msvcrt.kbhit() else ""
+            return {"H": readchar.key.UP, "P": readchar.key.DOWN,
+                    "M": readchar.key.RIGHT, "K": readchar.key.LEFT}.get(code, "")
+        if ch == "\x1b":
+            seq = ch
+            while msvcrt.kbhit():           # drain the rest of the sequence
+                seq += msvcrt.getwch()
+                if len(seq) >= 3:
+                    break
+            if seq == "\x1b":
+                return readchar.key.ESC     # truly isolated Esc → go back
+            return {"\x1b[A": readchar.key.UP, "\x1bOA": readchar.key.UP,
+                    "\x1b[B": readchar.key.DOWN, "\x1bOB": readchar.key.DOWN,
+                    "\x1b[C": readchar.key.RIGHT, "\x1b[D": readchar.key.LEFT,
+                    }.get(seq, "")          # focus/mouse/unknown → ignore
+        if ch in ("\r", "\n"):
+            return readchar.key.ENTER
+        if ch == "\x03":
+            return readchar.key.CTRL_C
+        if ch in ("\x08", "\x7f"):
+            return readchar.key.BACKSPACE
+        return ch
+
     try:
         import termios
         import tty
@@ -307,7 +346,7 @@ def _read_menu_key():
         is_tty = sys.stdin.isatty()
     except Exception:
         is_tty = False
-    if not is_tty or os.name == "nt":
+    if not is_tty:
         return readchar.readkey()
 
     fd = sys.stdin.fileno()
@@ -998,9 +1037,11 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                   readchar.key.BACKSPACE: "BACKSPACE"}
             with Live(render(), console=console, refresh_per_second=12, screen=True) as live:
                 while chosen["idx"] is None:
-                    raw = readchar.readkey()
+                    raw = _read_menu_key()   # robust on Windows (drains focus events)
                     if raw == readchar.key.CTRL_C:
                         raise KeyboardInterrupt("cancelled")
+                    if raw == "":
+                        continue             # ignored focus/mouse event
                     res = _handle(mp.get(raw, raw))
                     if res:
                         act, idx = res
