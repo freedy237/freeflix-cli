@@ -244,6 +244,7 @@ _FR = {
     "Languages": "Langues",
     "Show Posters": "Afficher les pochettes",
     "recommended": "recommandé",
+    "offline": "hors ligne",
     "Icon Style": "Style d'icônes",
     "Cloudflare token": "Token Cloudflare",
     "Data used": "Données consommées",
@@ -361,6 +362,116 @@ _FR = {
         "Elle filtrera les sources disponibles et définira la langue des sous-titres par défaut.",
     "Language set to:": "Langue définie sur :",
     "Choice:": "Choix :",
+    # ── 1.9.0 : messages restants (print_*, spinners, assistant) ──
+    "Aborted.": "Annulé.",
+    "All required tools are installed.": "Tous les outils requis sont installés.",
+    "Analyzing streams (resolutions, bitrate)…": "Analyse des flux (résolutions, débit)…",
+    "AniList updated!": "AniList mis à jour !",
+    "Apple Silicon has a single unified GPU — no offload needed.":
+        "Apple Silicon a un seul GPU unifié — aucun offload nécessaire.",
+    "Browser tab closed or playback stopped.": "Onglet du navigateur fermé ou lecture arrêtée.",
+    "CaskaydiaCove Nerd Font not found on this system.":
+        "Police CaskaydiaCove Nerd introuvable sur ce système.",
+    "Close ALL Windows Terminal windows and reopen one.":
+        "Fermez TOUTES les fenêtres Windows Terminal puis rouvrez-en une.",
+    "Could not find Windows fonts directory": "Impossible de trouver le dossier des polices Windows",
+    "Could not load": "Chargement impossible",
+    "Could not resolve stream URL.": "Impossible de résoudre l'URL du flux.",
+    "Could not update AniList.": "Impossible de mettre à jour AniList.",
+    "Downloading CaskaydiaCove Nerd Font…": "Téléchargement de la police CaskaydiaCove Nerd…",
+    "Downloading subtitle file for compatibility...":
+        "Téléchargement du fichier de sous-titres pour compatibilité…",
+    "Expected a Movie but got something else.": "Un film était attendu, mais autre chose a été reçu.",
+    "Failed to enable. Make sure systemd --user works and 'libnotify' is installed (sudo dnf install libnotify).":
+        "Activation échouée. Vérifie que systemd --user fonctionne et que 'libnotify' est installé (sudo dnf install libnotify).",
+    "Failed to extract raw stream from player.": "Échec de l'extraction du flux brut depuis le lecteur.",
+    "Fetching metadata…": "Récupération des métadonnées…",
+    "Fetching your watching list from AniList...": "Récupération de ta liste « en cours » depuis AniList…",
+    "FlareSolverr URL [http://127.0.0.1:8191]": "URL FlareSolverr [http://127.0.0.1:8191]",
+    "FlareSolverr already running on :8191": "FlareSolverr tourne déjà sur :8191",
+    "FlareSolverr auto-solves Cloudflare challenges (optional, ~1 GB image).":
+        "FlareSolverr résout automatiquement les défis Cloudflare (optionnel, image ~1 Go).",
+    "FlareSolverr is up on http://127.0.0.1:8191": "FlareSolverr est actif sur http://127.0.0.1:8191",
+    "FlareSolverr started — it may need a moment to be ready.":
+        "FlareSolverr démarré — il peut lui falloir un instant pour être prêt.",
+    "French-Stream may be unreachable or blocking the request.":
+        "French-Stream est peut-être injoignable ou bloque la requête.",
+    "Homebrew not found — install it first: https://brew.sh":
+        "Homebrew introuvable — installe-le d'abord : https://brew.sh",
+    "Icons not showing as crisp glyphs on Windows?":
+        "Les icônes ne s'affichent pas en glyphes nets sur Windows ?",
+    "Installing CaskaydiaCove Nerd Font via Homebrew…":
+        "Installation de la police CaskaydiaCove Nerd via Homebrew…",
+    "Invalid AniList token.": "Jeton AniList invalide.",
+    "Launching [bold cyan]Browser[/bold cyan] Player...":
+        "Lancement du lecteur [bold cyan]Navigateur[/bold cyan]…",
+    "Local progress saved.": "Progression locale enregistrée.",
+    "No Docker/Podman found. Podman is the easiest (rootless).":
+        "Aucun Docker/Podman trouvé. Podman est le plus simple (sans root).",
+    "No OpenSubtitles match found.": "Aucune correspondance OpenSubtitles trouvée.",
+    "No anime currently watching found on AniList.":
+        "Aucun anime « en cours » trouvé sur AniList.",
+    "No container runtime available — FlareSolverr skipped.":
+        "Aucun moteur de conteneurs disponible — FlareSolverr ignoré.",
+    "No downloads yet": "Aucun téléchargement pour l'instant",
+    "No episodes found in season.": "Aucun épisode trouvé dans la saison.",
+    "No local player found (tried mpv, vlc). Install one with: sudo dnf install mpv":
+        "Aucun lecteur local trouvé (mpv, vlc testés). Installe-en un avec : sudo dnf install mpv",
+    "No results found on Anime-Sama.": "Aucun résultat trouvé sur Anime-Sama.",
+    "No results.": "Aucun résultat.",
+    "Playback completed successfully!": "Lecture terminée avec succès !",
+    "Playback failed or was cancelled.": "La lecture a échoué ou a été annulée.",
+    "Please configure your AniList token in Settings > AniList first.":
+        "Configure d'abord ton jeton AniList dans Réglages > AniList.",
+    "Preparing episodes for download…": "Préparation des épisodes pour le téléchargement…",
+    "Proxy server not initialized.": "Serveur proxy non initialisé.",
+    "Register at https://www.opensubtitles.com/en/consumers":
+        "Inscris-toi sur https://www.opensubtitles.com/en/consumers",
+    "Run the installer:  ./scripts/install-mac.sh":
+        "Lance l'installateur :  ./scripts/install-mac.sh",
+    "Run the installer:  ./scripts/install.sh":
+        "Lance l'installateur :  ./scripts/install.sh",
+    "Run this (re-runnable — installs only what's missing):":
+        "Lance ceci (ré-exécutable — installe seulement ce qui manque) :",
+    "Searching for streams…": "Recherche des flux…",
+    "Show Posters:": "Afficher les pochettes :",
+    "Some required tools are still missing:": "Certains outils requis manquent encore :",
+    "Still no results found.": "Toujours aucun résultat.",
+    "Subtitles downloaded locally.": "Sous-titres téléchargés localement.",
+    "TMDB ID not found in Cinemeta, some sources might degrade.":
+        "ID TMDB introuvable dans Cinemeta, certaines sources peuvent se dégrader.",
+    "This installs a systemd --user timer that runs once a day":
+        "Ceci installe un minuteur systemd --user qui s'exécute une fois par jour",
+    "This will :": "Ceci va :",
+    'Use the "download" option from a video to start.':
+        'Utilise l\'option « download » d\'une vidéo pour commencer.',
+    "VLC not found. Please install it or add it to your PATH.":
+        "VLC introuvable. Installe-le ou ajoute-le à ton PATH.",
+    "Windows handles GPU selection natively — no PRIME wrappers":
+        "Windows gère la sélection du GPU nativement — pas de wrappers PRIME",
+    "activity (Energy Saver). No manual action required.":
+        "activité (Économiseur d'énergie). Aucune action manuelle requise.",
+    "and uses notify-send to alert you about new episodes.":
+        "et utilise notify-send pour t'avertir des nouveaux épisodes.",
+    "aria2c not found, falling back to yt-dlp.":
+        "aria2c introuvable, repli sur yt-dlp.",
+    "chafa already installed — anime posters enabled":
+        "chafa déjà installé — pochettes d'anime activées",
+    "chafa draws anime cover art inside the terminal (optional).":
+        "chafa affiche les pochettes d'anime dans le terminal (optionnel).",
+    "chafa is not installed — posters won't show until you install it (e.g. sudo dnf install chafa).":
+        "chafa n'est pas installé — les pochettes ne s'afficheront pas tant qu'il n'est pas installé (ex. sudo dnf install chafa).",
+    "macOS Apple Silicon detected": "macOS Apple Silicon détecté",
+    "macOS Intel detected": "macOS Intel détecté",
+    "macOS auto-selects between iGPU and dGPU based on app":
+        "macOS choisit automatiquement entre iGPU et dGPU selon l'app",
+    "needed. To force mpv to use the dGPU, do this ONCE :":
+        "nécessaire. Pour forcer mpv à utiliser le dGPU, fais ceci UNE fois :",
+    "skipping": "ignoré",
+    "then open a NEW Windows Terminal and run:  freeflix":
+        "puis ouvre un NOUVEAU Windows Terminal et lance :  freeflix",
+    "to get a free API key, then paste it here.":
+        "pour obtenir une clé API gratuite, puis colle-la ici.",
 }
 
 

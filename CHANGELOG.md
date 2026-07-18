@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.9.0
+
+Optimisation & robustesse — issue d'un audit complet de l'application, testé
+sur Linux **et** Windows (nouvelle CI qui lint + teste sur les deux).
+
+### ⚡ Démarrage plus rapide
+- Le **proxy M3U8 (Flask) n'est plus importé ni démarré au lancement** : il est
+  initialisé **paresseusement à la première lecture** (`proxy.ensure_started()`).
+  Importer FreeFlix ne tire plus Flask/werkzeug (~100 ms + un port ouvert en
+  moins au démarrage). Les options DNS partagées vivent désormais dans un module
+  léger (`net_config`) pour que charger un scraper n'entraîne plus le proxy.
+- Les badges d'épisodes (« déjà téléchargé ») **listent chaque dossier une seule
+  fois** (cache 5 s) au lieu de faire ~6 appels `os.path.isfile` par ligne — une
+  liste de 1000+ épisodes ne martèle plus le disque.
+
+### 🔒 Sécurité
+- **Garde anti-SSRF** sur le proxy local : il refuse toute URL cible pointant
+  vers une IP loopback / privée / link-local / réservée (ex. `169.254.169.254`),
+  pour qu'un process local ne puisse pas s'en servir comme proxy ouvert vers des
+  services internes. Les CDN publics (les vrais flux) passent normalement.
+- `clear_screen()` utilise l'échappement ANSI de Rich au lieu de lancer
+  `clear`/`cls` (pas de sous-processus, non détournable via le PATH).
+
+### 🩺 Fiabilité
+- **Enregistrement atomique** de la progression (écriture temp + `os.replace`) :
+  une coupure ne peut plus corrompre `progress.json`.
+- **Badge « hors ligne »** dans le menu des sources : une vérification de santé
+  en arrière-plan (jamais bloquante, résultat mis en cache) signale une source
+  injoignable — une source protégée Cloudflare (403) reste comptée « en ligne ».
+- Les sessions curl_cffi transitoires (sonde de qualité, estimation de durée)
+  sont **fermées** proprement — plus de fuite de descripteurs.
+- **Nettoyage périodique de `.temp/`** au démarrage (en tâche de fond) : les
+  dossiers orphelins d'un téléchargement interrompu/planté sont purgés.
+
+### 🧱 Plateformes
+- **Détection d'architecture** (`x86_64` / `arm64`) : sur aarch64, le binaire
+  ffmpeg géré bascule sur la build ARM64 (BtbN). Sous Linux mpv/aria2 viennent
+  du gestionnaire de paquets (indépendant de l'arch), et sous Windows-on-ARM les
+  builds x64 tournent via l'émulation intégrée.
+
+### 🇫🇷 Traductions
+- **Fin de la traduction FR de l'interface** : tous les messages `print_*`, les
+  spinners et l'assistant de configuration passent par `t()` (75 chaînes
+  ajoutées) — plus d'anglais résiduel dans les écrans courants.
+
+### 🧪 Tests / CI
+- Nouvelle **CI GitHub Actions** (Ubuntu + Windows, Python 3.9 & 3.12) : ruff
+  puis pytest à chaque push/PR.
+- Tests unitaires **multi-plateformes du décodeur clavier** (aurait attrapé la
+  régression des flèches Windows de 1.8.4), plus des tests pour la garde SSRF, le
+  démarrage paresseux du proxy et les badges de santé des sources.
+
+### 🧹 Nettoyage
+- Suppression de code mort (`get_language_flag`, `cloudflare.available`).
+
 ## 1.8.5
 
 ### 🪟 Windows: arrow keys work again (regression fix)

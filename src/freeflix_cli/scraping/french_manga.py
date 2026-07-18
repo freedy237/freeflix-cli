@@ -13,7 +13,7 @@ shared player.get_hls_link extractors.
 import re
 from curl_cffi import requests as cffi_requests
 from .objects import SearchResult, Player
-from ..proxy import DNS_OPTIONS
+from ..net_config import DNS_OPTIONS
 from .config import portals
 
 website_origin = portals.get("french-manga", "https://w16.french-manga.net").rstrip("/")

@@ -180,13 +180,13 @@ def _flow_goldenanime_stream(
     title: str, anilist_id: int, episode: int, cover_url: str = None
 ):
     """Common logic for searching streams, subtitles, and playing."""
-    with spinner("Searching for streams…"):
+    with spinner(t("Searching for streams…")):
         results = goldenanime.extract_vo(
             title=title, anilist_id=anilist_id, episode=episode
         )
 
     if not results:
-        print_warning("No results found.")
+        print_warning(t("No results found."))
         pause()
         return
 
@@ -241,7 +241,7 @@ def _flow_goldenanime_stream(
             ex.submit(analyze_stream_quality, r["url"], _ga_headers(r)): i
             for i, r in enumerate(valid_results)
         }
-        with spinner("Analyzing streams (resolutions, bitrate)…"):
+        with spinner(t("Analyzing streams (resolutions, bitrate)…")):
             try:
                 for fut in as_completed(futs, timeout=14):
                     i = futs[fut]
@@ -410,7 +410,7 @@ def _flow_goldenanime_stream(
             episode_url="",  # URL expires; re-search on resume
             logo_url=cover_url,
         )
-        print_success("Local progress saved.")
+        print_success(t("Local progress saved."))
 
         # Sync AniList if authenticated
         if anilist_id:
@@ -420,10 +420,10 @@ def _flow_goldenanime_stream(
                 if anilist_client.update_progress(anilist_id, episode):
                     print_success(f"AniList updated to episode {episode}!")
                 else:
-                    print_warning("Could not update AniList.")
+                    print_warning(t("Could not update AniList."))
 
     else:
-        print_warning("Playback failed or was cancelled.")
+        print_warning(t("Playback failed or was cancelled."))
         pause()
         return False
 

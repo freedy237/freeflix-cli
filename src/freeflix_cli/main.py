@@ -33,10 +33,25 @@ from .handlers import (
     nyaa as nyaa_handler,
 )
 from . import history_ui
-from . import proxy
+# NB: proxy is imported lazily (on first playback) so Flask stays out of
+# FreeFlix startup — see player_manager.play_video / _stop_proxy_if_running.
 import sys
 import os
 import time
+
+
+def _stop_proxy_if_running():
+    """Shut the proxy down at exit — but only if it was ever started.
+
+    proxy is imported lazily on first playback, so if it's not already in
+    sys.modules nothing played this session and there's nothing to stop
+    (and no reason to import Flask just to exit)."""
+    mod = sys.modules.get(__package__ + ".proxy")
+    if mod is not None:
+        try:
+            mod.stop_proxy_server()
+        except Exception:
+            pass
 
 
 def _handle_partial_download(it):
@@ -126,8 +141,8 @@ def _browse_local_downloads():
 
         if not files and not interrupted:
             print_header(f"{icon('folder')} {t('My Downloads')}")
-            print_info(f"No downloads yet ({DOWNLOAD_DIR}).")
-            print_info('Use the "download" option from a video to start.')
+            print_info(f"{t('No downloads yet')} ({DOWNLOAD_DIR}).")
+            print_info(t('Use the "download" option from a video to start.'))
             pause()
             return
 
@@ -181,8 +196,8 @@ def _browse_local_downloads():
                 player_bin = b
                 break
         if not player_bin:
-            print_error("No local player found (tried mpv, vlc). "
-                        "Install one with: sudo dnf install mpv")
+            print_error(t("No local player found (tried mpv, vlc). "
+                          "Install one with: sudo dnf install mpv"))
             pause()
             continue
         try:
@@ -759,8 +774,26 @@ def main():
     # Check for language setup
     check_language_setup()
 
-    # Start Proxy Server
-    proxy.start_proxy_server()
+    # The M3U8 proxy is started lazily on first playback (proxy.ensure_started),
+    # so launching FreeFlix no longer imports Flask or binds a port up front.
+
+    # Housekeeping : sweep abandoned .temp/ download staging in the background
+    # so crashed / aborted downloads don't pile up. Never blocks startup.
+    try:
+        import threading as _th
+        from .player_manager import cleanup_temp as _cleanup_temp
+        _th.Thread(target=_cleanup_temp, daemon=True).start()
+    except Exception:
+        pass
+
+    # Warm the source health cache in the background so the sources menu can
+    # show an 'offline' badge without ever blocking. Best-effort.
+    try:
+        from . import health as _health
+        from .scraping.config import portals as _portals
+        _health.refresh(_portals)
+    except Exception:
+        pass
 
     # Resolve installed version once, for the home header and About panel.
     try:
@@ -910,9 +943,21 @@ def main():
             # Stay in the source list : when a provider's flow ends (search
             # cancelled with Esc, finished, or backed out), come back HERE —
             # not to the home menu. Only the list's "← Back" returns home.
+            # Refresh the health cache when entering the menu (no-op if fresh),
+            # so a source that just went down gets badged on the next visit.
+            try:
+                from . import health
+                from .scraping.config import portals as _hp
+                health.refresh(_hp)
+            except Exception:
+                health = None
+
             while True:
                 crumb_reset(f"{icon('home')} {t('Home')}", t("Sources"))
-                p_items = [p["name"] for p in ordered] + [t("← Back")]
+                p_items = [
+                    p["name"] + (health.badge_for(p["name"]) if health else "")
+                    for p in ordered
+                ] + [t("← Back")]
                 p_idx = select_from_list(
                     p_items,
                     t("Select a Provider:"),
@@ -997,8 +1042,8 @@ def main():
                         toast(f"{t('Download quality set to:')} {q_opts[c]}")
 
                 def _a_ossub():
-                    print_info("Register at https://www.opensubtitles.com/en/consumers")
-                    print_info("to get a free API key, then paste it here.")
+                    print_info(t("Register at https://www.opensubtitles.com/en/consumers"))
+                    print_info(t("to get a free API key, then paste it here."))
                     nk = get_user_input(t("Enter OpenSubtitles API key"))
                     if nk:
                         tracker.set_opensubtitles_key(nk.strip())
@@ -1018,14 +1063,14 @@ def main():
                             toast(t("Notifications disabled.") if ok else t("Failed to disable notifications."),
                                   "success" if ok else "error")
                     else:
-                        print_info("This installs a systemd --user timer that runs once a day")
-                        print_info("and uses notify-send to alert you about new episodes.")
+                        print_info(t("This installs a systemd --user timer that runs once a day"))
+                        print_info(t("and uses notify-send to alert you about new episodes."))
                         if select_from_list([t("Yes"), t("No")], t("Enable daily notifications?")) == 0:
                             if notif_mod.install_systemd_timer():
                                 toast(t("Notifications enabled (runs daily)."))
                             else:
-                                print_error("Failed to enable. Make sure systemd --user works "
-                                            "and 'libnotify' is installed (sudo dnf install libnotify).")
+                                print_error(t("Failed to enable. Make sure systemd --user works "
+                                              "and 'libnotify' is installed (sudo dnf install libnotify)."))
                                 pause()
 
                 def _a_nvidia():
@@ -1044,8 +1089,8 @@ def main():
                               "sixel (photo quality — needs terminal Sixel)", "off (no posters)"]
                     p_vals = ["auto", "sixel", "off"]
                     if not terminal_image.chafa_available():
-                        print_warning("chafa is not installed — posters won't show until you "
-                                      "install it (e.g. sudo dnf install chafa).")
+                        print_warning(t("chafa is not installed — posters won't show until you "
+                                        "install it (e.g. sudo dnf install chafa)."))
                     c = _pick(p_opts, t("Show Posters:"))
                     if c is not None:
                         tracker.set_poster_mode(p_vals[c])
@@ -1060,7 +1105,7 @@ def main():
                         return
                     picked = i_vals[c]
                     if picked == "nerd" and not setup_assistant.detect_nerd_font():
-                        print_info("CaskaydiaCove Nerd Font not found on this system.")
+                        print_info(t("CaskaydiaCove Nerd Font not found on this system."))
                         if input("Install it now? [Y/n] ").strip().lower() not in ("n", "no"):
                             setup_assistant.install_nerd_font()
                     tracker.set_icon_style(picked)
@@ -1118,7 +1163,7 @@ def main():
 
         # Exit
         print_success(t("Goodbye!"))
-        proxy.stop_proxy_server()
+        _stop_proxy_if_running()
         os._exit(0)
 
 
@@ -1127,5 +1172,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nGoodbye!")
-        proxy.stop_proxy_server()
+        _stop_proxy_if_running()
         os._exit(0)

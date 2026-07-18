@@ -99,7 +99,7 @@ def handle_nyaa():
     results = nyaa.search(query, max_results=20)
 
     if not results:
-        print_warning("No results.")
+        print_warning(t("No results."))
         pause()
         return
 

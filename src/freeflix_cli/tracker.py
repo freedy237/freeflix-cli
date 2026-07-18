@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -27,11 +29,26 @@ class ProgressTracker:
             return {}
 
     def _save_data(self):
-        """Save progress data to JSON file."""
+        """
+        Save progress data ATOMICALLY: write to a temp file in the same dir then
+        os.replace() it over the real file. A crash/power-loss mid-write can no
+        longer corrupt progress.json (which held ALL history + settings).
+        """
         self.data_dir.mkdir(parents=True, exist_ok=True)
         try:
-            with open(self.data_file, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=4, ensure_ascii=False)
+            fd, tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".progress-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, indent=4, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.data_file)   # atomic on POSIX & Windows
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except OSError as e:
             print(f"Warning: Could not save progress: {e}")
 

@@ -22,7 +22,7 @@ from .cli_utils import (
     _suppress_print,
 )
 from .scraping import player
-from . import proxy
+from .net_config import DNS_OPTIONS
 from typing import Dict
 from .tracker import tracker
 from .i18n import t
@@ -212,14 +212,17 @@ def _probe_stream(stream_url: str, headers: dict,
     path_lower = stream_url.split("?")[0].lower()
     if path_lower.endswith((".mp4", ".mkv", ".avi", ".webm", ".mov")):
         return result
+    sess = None
+    owned = False
     try:
         import m3u8 as _m3u8
         from curl_cffi import requests as _rq
 
         if session is None:
             sess = _rq.Session(impersonate="chrome")
+            owned = True  # we created it → we must close it
             try:
-                sess.curl_options.update(proxy.DNS_OPTIONS)
+                sess.curl_options.update(DNS_OPTIONS)
             except Exception:
                 pass
         else:
@@ -282,6 +285,12 @@ def _probe_stream(stream_url: str, headers: dict,
         return result
     except Exception:
         return result
+    finally:
+        if owned and sess is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
 
 
 def _prompt_hls_quality(variants: list):
@@ -451,13 +460,14 @@ def estimate_episode_seconds(info: dict) -> float | None:
     low = media_url.split("?")[0].lower()
     if low.endswith((".mp4", ".mkv", ".avi", ".webm", ".mov")):
         return None  # would need ffprobe; not worth it for a size estimate
+    sess = None
     try:
         from curl_cffi import requests as _rq
         import m3u8 as _m3u8
 
         sess = _rq.Session(impersonate="chrome")
         try:
-            sess.curl_options.update(proxy.DNS_OPTIONS)
+            sess.curl_options.update(DNS_OPTIONS)
         except Exception:
             pass
         headers = info.get("probe_headers") or {}
@@ -478,6 +488,12 @@ def estimate_episode_seconds(info: dict) -> float | None:
         return total or None
     except Exception:
         return None
+    finally:
+        if sess is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
 
 
 def format_quality_label(info: dict) -> str:
@@ -635,6 +651,7 @@ def _run_with_data_meter(cmd, env=None, quiet=False):
     libva / codec chatter the user doesn't want).
     """
     from .icons import icon
+    from . import proxy
 
     proxy.reset_bytes_counter()
     out = subprocess.DEVNULL if quiet else None
@@ -753,6 +770,51 @@ def list_interrupted_downloads() -> list:
     except OSError:
         pass
     return out
+
+
+def cleanup_temp(orphan_age_h: float = 24.0, stale_age_days: float = 14.0) -> int:
+    """
+    Housekeeping for the hidden .temp/ download-staging dir so crashed / aborted
+    downloads don't accumulate forever :
+      • orphaned dirs (no resume-meta — an interrupted move / crashed run) are
+        removed once older than `orphan_age_h` hours,
+      • resumable dirs (with meta) are kept, but purged once older than
+        `stale_age_days` days (an abandoned resume the user never came back to),
+      • stray files sitting directly in .temp/ are removed.
+    Returns the number of entries deleted. Safe to call from a daemon thread at
+    startup ; never raises.
+    """
+    if not os.path.isdir(TEMP_DIR):
+        return 0
+    now = time.time()
+    removed = 0
+    try:
+        entries = os.listdir(TEMP_DIR)
+    except OSError:
+        return 0
+    for name in entries:
+        path = os.path.join(TEMP_DIR, name)
+        try:
+            if os.path.isfile(path):
+                # stray file (not a staging dir) → remove
+                os.remove(path)
+                removed += 1
+                continue
+            if not os.path.isdir(path):
+                continue
+            has_meta = os.path.isfile(os.path.join(path, _RESUME_META))
+            age_s = now - os.path.getmtime(path)
+            if has_meta:
+                if age_s > stale_age_days * 86400:
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed += 1
+            else:
+                if age_s > orphan_age_h * 3600:
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def resume_download(meta: dict) -> bool:
@@ -1057,7 +1119,7 @@ def _download_stream(
                 stream_url,
             ]
         else:
-            print_info("aria2c not found, falling back to yt-dlp.")
+            print_info(t("aria2c not found, falling back to yt-dlp."))
             ytdlp = shutil.which("yt-dlp")
             if not ytdlp:
                 print_error(
@@ -1163,7 +1225,36 @@ def _download_stream(
             print_info(f"Could not save subtitle next to video: {e}")
 
     print_success(f"Download completed in {out_dir}")
+    _invalidate_download_index()  # new file → refresh badges immediately
     return True
+
+
+# ── Downloaded-files index cache ──────────────────────────────────────
+# Rendering a long episode list (e.g. One Piece, 1000+ rows) calls
+# is_already_downloaded twice per row → previously 6 os.path.isfile() stat
+# syscalls per episode. Instead we list each output dir ONCE and cache the set
+# of filenames for a few seconds, turning the per-row cost into a set lookup.
+_dl_index_cache: dict = {}   # out_dir -> (timestamp, set_of_filenames)
+_DL_INDEX_TTL = 5.0
+
+
+def _downloaded_names(out_dir: str) -> set:
+    now = time.time()
+    ent = _dl_index_cache.get(out_dir)
+    if ent and now - ent[0] < _DL_INDEX_TTL:
+        return ent[1]
+    try:
+        names = set(os.listdir(out_dir))
+    except OSError:
+        names = set()
+    _dl_index_cache[out_dir] = (now, names)
+    return names
+
+
+def _invalidate_download_index() -> None:
+    """Drop the cached listings (call right after a download completes so its
+    badge shows immediately instead of waiting out the TTL)."""
+    _dl_index_cache.clear()
 
 
 def is_already_downloaded(title: str, subfolder: str = None) -> bool:
@@ -1174,10 +1265,8 @@ def is_already_downloaded(title: str, subfolder: str = None) -> bool:
     out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
                if subfolder else DOWNLOAD_DIR)
     base = _sanitize_filename(title)
-    for ext in (".mp4", ".mkv", ".webm"):
-        if os.path.isfile(os.path.join(out_dir, base + ext)):
-            return True
-    return False
+    names = _downloaded_names(out_dir)
+    return any(base + ext in names for ext in (".mp4", ".mkv", ".webm"))
 
 
 def play_video(
@@ -1204,6 +1293,10 @@ def play_video(
     Returns:
         True if playback succeeded, False otherwise
     """
+
+    # Lazy import : keeps Flask out of FreeFlix startup (the proxy is only
+    # imported / started the first time something is actually played).
+    from . import proxy
 
     if hasattr(player, "new_url") and isinstance(player.new_url, dict):
         for old, new in player.new_url.items():
@@ -1250,7 +1343,7 @@ def play_video(
 
     if not stream_url:
         if not output_suppressed:
-            print_error("Could not resolve stream URL.")
+            print_error(t("Could not resolve stream URL."))
         return False
 
     if not output_suppressed:
@@ -1258,7 +1351,7 @@ def play_video(
 
     local_subtitle_path = subtitle_url
     if subtitle_url and subtitle_url.startswith("http"):
-        print_info("Downloading subtitle file for compatibility...")
+        print_info(t("Downloading subtitle file for compatibility..."))
         try:
             from curl_cffi import requests
 
@@ -1289,7 +1382,7 @@ def play_video(
             with os.fdopen(fd, "wb") as f:
                 f.write(content)
             local_subtitle_path = temp_sub
-            print_success("Subtitles downloaded locally.")
+            print_success(t("Subtitles downloaded locally."))
         except Exception as e:
             print_error(f"Failed to download subtitles: {e}")
 
@@ -1312,7 +1405,7 @@ def play_video(
                 local_subtitle_path = fetched
                 print_success(f"OpenSubtitles match downloaded: {fetched}")
             else:
-                print_info("No OpenSubtitles match found.")
+                print_info(t("No OpenSubtitles match found."))
         except Exception as e:
             print_info(f"OpenSubtitles lookup skipped: {e}")
 
@@ -1412,7 +1505,7 @@ def play_video(
             # Resolve VLC, offering to install it if missing.
             player_executable = _resolve_or_install("vlc")
             if not player_executable:
-                print_error("VLC not found. Please install it or add it to your PATH.")
+                print_error(t("VLC not found. Please install it or add it to your PATH."))
                 retry = handle_player_error("VLC")
                 if retry == 1:  # Back
                     return False
@@ -1466,7 +1559,7 @@ def play_video(
                 return False
 
         if player_name == "browser":
-            print_info("Launching [bold cyan]Browser[/bold cyan] Player...")
+            print_info(t("Launching [bold cyan]Browser[/bold cyan] Player..."))
 
             # Construct Proxy URL
             proxy_headers = headers.copy()
@@ -1488,8 +1581,10 @@ def play_video(
             encoded_url = urllib.parse.quote(stream_url)
             encoded_headers = urllib.parse.quote(headers_json)
 
+            # Start the local proxy lazily on first playback.
+            proxy.ensure_started()
             if not proxy.PROXY_URL:
-                print_error("Proxy server not initialized.")
+                print_error(t("Proxy server not initialized."))
                 return False
 
             endpoint = "stream"
@@ -1536,7 +1631,7 @@ def play_video(
 
                     # Check heartbeat timeout (e.g., > 6 seconds without heartbeat)
                     if time.time() - proxy.player_heartbeat_time > 6.0:
-                        print_success("Browser tab closed or playback stopped.")
+                        print_success(t("Browser tab closed or playback stopped."))
                         return True
             except KeyboardInterrupt:
                 print_info("\nPlayback interrupted by user.")
@@ -1577,8 +1672,10 @@ def play_video(
             encoded_url = urllib.parse.quote(stream_url)
             encoded_headers = urllib.parse.quote(headers_json)
 
+            # Start the local proxy lazily on first playback.
+            proxy.ensure_started()
             if not proxy.PROXY_URL:
-                print_error("Proxy server not initialized.")
+                print_error(t("Proxy server not initialized."))
                 return False
 
             endpoint = "stream"
@@ -1630,7 +1727,7 @@ def play_video(
                 _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
-                print_success("Playback completed successfully!")
+                print_success(t("Playback completed successfully!"))
                 return True
             except Exception as e:
                 print_error(f"Error running player via proxy: {e}")
@@ -1703,7 +1800,7 @@ def play_video(
                     subprocess.run(cmd, check=True, env=_nvidia_env())
                     _save_mpv_position(pos_file_d, pos_key_d)
 
-                print_success("Playback completed successfully!")
+                print_success(t("Playback completed successfully!"))
                 return True
 
             except subprocess.CalledProcessError as e:

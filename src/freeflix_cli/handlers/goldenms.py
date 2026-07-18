@@ -82,7 +82,7 @@ def handle_goldenms():
     metas = search_cinemeta(title, is_movie)
 
     if not metas:
-        print_warning("No results found.")
+        print_warning(t("No results found."))
         pause()
         return
 
@@ -122,12 +122,12 @@ def handle_goldenms():
     imdb_id = selected_meta.get("id", "")
 
     # Fetch full details to get TMDB ID
-    with spinner("Fetching metadata…"):
+    with spinner(t("Fetching metadata…")):
         full_meta = get_cinemeta_details(imdb_id, is_movie)
 
     tmdb_id = full_meta.get("moviedb_id")
     if not tmdb_id:
-        print_warning("TMDB ID not found in Cinemeta, some sources might degrade.")
+        print_warning(t("TMDB ID not found in Cinemeta, some sources might degrade."))
 
     release_year = full_meta.get(
         "year", selected_meta.get("releaseInfo", "").split("-")[0]
@@ -306,7 +306,7 @@ def _flow_goldenms_stream(
                 final_url = resolved_url
                 print_info(f"Resolved to: [cyan]{final_url}[/cyan]")
             else:
-                print_warning("Failed to extract raw stream from player.")
+                print_warning(t("Failed to extract raw stream from player."))
                 if select_from_list([t("Try to play anyway"), t("Cancel")], t("Action:")) == 1:
                     return
         except Exception as e:
@@ -364,7 +364,7 @@ def _flow_goldenms_stream(
             episode_url="",  # re-search on resume
             logo_url=logo_url,
         )
-        print_success("Local progress saved.")
+        print_success(t("Local progress saved."))
 
         if not is_movie:
             if (
@@ -384,7 +384,7 @@ def _flow_goldenms_stream(
                     logo_url=logo_url,
                 )
     else:
-        print_warning("Playback failed or was cancelled.")
+        print_warning(t("Playback failed or was cancelled."))
         pause()
 
 

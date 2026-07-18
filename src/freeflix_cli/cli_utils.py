@@ -15,8 +15,13 @@ console = Console()
 
 
 def clear_screen():
-    """Clear the terminal screen."""
-    os.system("cls" if os.name == "nt" else "clear")
+    """Clear the terminal screen.
+
+    Uses Rich's console.clear() (an ANSI escape) instead of shelling out to
+    `clear`/`cls` : no subprocess per clear, and it can't be hijacked by a
+    `clear`/`cls` binary earlier on PATH.
+    """
+    console.clear()
 
 
 def get_user_input(prompt: str, default: str = None, header: str = None,

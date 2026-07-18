@@ -44,8 +44,8 @@ def handle_french_stream():
         results = french_stream.search(query)
 
     if not results:
-        print_warning("No results found.")
-        print_info("French-Stream may be unreachable or blocking the request.")
+        print_warning(t("No results found."))
+        print_info(t("French-Stream may be unreachable or blocking the request."))
         pause()
         return
 
@@ -80,12 +80,12 @@ def handle_french_stream():
     if isinstance(content, FrenchStreamMovie):
         console.print(f"\n[bold]{icon('movie')} Movie:[/bold] [cyan]{content.title}[/cyan]")
         if not content.players:
-            print_warning("No players found.")
+            print_warning(t("No players found."))
             pause()
             return
         supported_players = [p for p in content.players if player.is_supported(p.url)]
         if not supported_players:
-            print_warning("No supported players found.")
+            print_warning(t("No supported players found."))
             pause()
             return
 
@@ -120,7 +120,7 @@ def handle_french_stream():
         # episodes is dict {lang: [Episode]}
         langs = list(content.episodes.keys())
         if not langs:
-            print_warning("No episodes found.")
+            print_warning(t("No episodes found."))
             pause()
             return
 
@@ -170,14 +170,14 @@ def handle_french_stream():
                 while True:  # ── Play (with next-episode chaining) ──
                     selected_episode = episodes[ep_idx]
                     if not selected_episode.players:
-                        print_warning("No players found for this episode.")
+                        print_warning(t("No players found for this episode."))
                         pause()
                         break
                     supported = [
                         p for p in selected_episode.players if player.is_supported(p.url)
                     ]
                     if not supported:
-                        print_warning("No supported players found.")
+                        print_warning(t("No supported players found."))
                         pause()
                         break
                     success = play_episode_flow(

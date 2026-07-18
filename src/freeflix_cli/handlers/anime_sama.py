@@ -117,7 +117,7 @@ def _update_anilist_progress(series, season, selected_episode):
                     episode_num = new_ep_num
 
         if anilist_client.update_progress(media_id, episode_num):
-            print_success("AniList updated!")
+            print_success(t("AniList updated!"))
         else:
             print_error(t("Failed to update AniList."))
 

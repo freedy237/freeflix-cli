@@ -136,11 +136,6 @@ def solve_and_store(url: str, timeout: int = 60) -> bool:
     return True
 
 
-def available() -> bool:
-    """True if a FlareSolverr endpoint is configured (and not known dead)."""
-    return bool((tracker.get_flaresolverr_url() or "").strip()) and not _FS_DEAD
-
-
 def cf_get(session, url, **kw):
     """
     Central Cloudflare-aware GET for any scraper session.

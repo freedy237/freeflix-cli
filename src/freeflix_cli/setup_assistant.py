@@ -18,6 +18,7 @@ import re
 import sys
 import time
 import shutil
+import platform
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -25,6 +26,7 @@ from typing import Dict
 
 from .cli_utils import print_info, print_success, print_warning
 from .tracker import tracker
+from .i18n import t
 
 
 REPO_RAW = "https://raw.githubusercontent.com/freedy237/freeflix-cli/main"
@@ -41,6 +43,20 @@ def detect_os() -> str:
     if sys.platform in ("win32", "cygwin"):
         return "windows"
     return "unknown"
+
+
+def detect_arch() -> str:
+    """Return a normalised CPU arch : 'x86_64' or 'arm64' (else the raw name).
+
+    Used to pick arch-appropriate managed binaries (an x86_64 ffmpeg won't run
+    on an aarch64 box). platform.machine() reports the CPU, not the Python build.
+    """
+    m = (platform.machine() or "").lower()
+    if m in ("x86_64", "amd64", "x64", "i386", "i686"):
+        return "x86_64"
+    if m in ("aarch64", "arm64", "armv8", "armv8l", "armv8b"):
+        return "arm64"
+    return m or "x86_64"
 
 
 # ─── GPU detection ────────────────────────────────────────────────────
@@ -185,7 +201,8 @@ def _have_managed(bins: tuple[str, ...]) -> bool:
 #   extras  : additional executables to also extract (e.g. ffprobe)
 #
 # Only ffmpeg + aria2c + mpv are self-managed.
-# These are x86_64 builds ; aarch64 not yet included.
+# Entries below are the x86_64 defaults ; _binary_sources_for() swaps in the
+# arm64 ffmpeg build on aarch64 (see detect_arch / _FFMPEG_ARM64_URL).
 _BINARY_SOURCES: dict[str, dict[str, dict]] = {
     "linux": {
         "ffmpeg": {
@@ -307,10 +324,34 @@ _LABEL_TO_SOURCE = {
     "aria2": "aria2c",
 }
 
+# ffmpeg (BtbN) ships arch-specific builds ; swap the URL on arm64 so aarch64
+# machines get a runnable binary instead of an x86_64 one.
+_FFMPEG_ARM64_URL = {
+    "linux": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-linuxarm64-gpl.tar.xz",  # noqa: E501
+    "windows": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-winarm64-gpl.zip",  # noqa: E501
+}
+
+
+def _binary_sources_for(os_name: str) -> dict:
+    """Managed-binary sources for *os_name*, adjusted for the CPU arch.
+
+    On arm64 we swap in the aarch64 ffmpeg build. mpv/aria2 have no official
+    arm64 archive : on Linux they come from the package manager (arch-agnostic),
+    and on Windows-on-ARM the x64 builds run under the OS's built-in emulation,
+    so the x86_64 entries are kept as-is.
+    """
+    import copy
+    sources = copy.deepcopy(_BINARY_SOURCES.get(os_name, {}))
+    if detect_arch() == "arm64":
+        arm_ffmpeg = _FFMPEG_ARM64_URL.get(os_name)
+        if arm_ffmpeg and "ffmpeg" in sources:
+            sources["ffmpeg"]["url"] = arm_ffmpeg
+    return sources
+
 
 def _auto_install_managed(os_name: str) -> None:
     """Install every missing tool that has a self-managed source for *os_name*."""
-    sources = _BINARY_SOURCES.get(os_name, {})
+    sources = _binary_sources_for(os_name)
 
     # Ensure the bin dir exists early so tools can be placed there
     _ensure_bin_dir()
@@ -462,29 +503,29 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
         tracker.data["system_deps_ok"] = True
         tracker.data["system_deps_ok_version"] = _version
         tracker._save_data()
-        print_success("All required tools are installed.")
+        print_success(t("All required tools are installed."))
         return True
 
     # Still missing essentials → guide, and DON'T cache, so the next launch
     # picks up where this one left off.
     missing_ess = missing_essential_tools()
-    print_warning("Some required tools are still missing: "
+    print_warning(t("Some required tools are still missing:") + " "
                   + ", ".join(missing_ess))
     if os_name == "windows":
-        print_info("Run this (re-runnable — installs only what's missing):")
+        print_info(t("Run this (re-runnable — installs only what's missing):"))
         print_info("  powershell -ExecutionPolicy Bypass -File scripts\\install.ps1")
-        print_info("then open a NEW Windows Terminal and run:  freeflix")
+        print_info(t("then open a NEW Windows Terminal and run:  freeflix"))
     elif os_name == "linux":
         # Try to auto-install via the package manager (mpv etc.), then re-check.
         if _linux_install_missing(missing_ess) and runtime_ready():
             tracker.data["system_deps_ok"] = True
             tracker.data["system_deps_ok_version"] = _version
             tracker._save_data()
-            print_success("All required tools are installed.")
+            print_success(t("All required tools are installed."))
             return True
         _show_linux_commands(missing_ess)
     elif os_name == "macos":
-        print_info("Run the installer:  ./scripts/install-mac.sh")
+        print_info(t("Run the installer:  ./scripts/install-mac.sh"))
     return False
 
 
@@ -634,7 +675,7 @@ def _show_linux_commands(missing_ess: list[str]):
             pm_found = True
             break
     if not pm_found:
-        print_info("Run the installer:  ./scripts/install.sh")
+        print_info(t("Run the installer:  ./scripts/install.sh"))
 
 
 # Per-OS install command for the media players FreeFlix can launch.
@@ -710,7 +751,7 @@ def install_chafa() -> bool:
     if chafa ends up available.
     """
     if shutil.which("chafa"):
-        print_success("chafa already installed — anime posters enabled")
+        print_success(t("chafa already installed — anime posters enabled"))
         return True
 
     os_name = detect_os()
@@ -734,7 +775,7 @@ def install_chafa() -> bool:
         )
         return False
 
-    print_info("chafa draws anime cover art inside the terminal (optional).")
+    print_info(t("chafa draws anime cover art inside the terminal (optional)."))
     try:
         ans = input(f"Install chafa now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -903,7 +944,7 @@ def install_nerd_font() -> bool:
         if detect_os() == "windows":
             if _set_windows_terminal_font(NERD_FONT_NAME):
                 print_success("  ✓ Windows Terminal font set to the Nerd Font")
-                print_warning("Close ALL Windows Terminal windows and reopen one.")
+                print_warning(t("Close ALL Windows Terminal windows and reopen one."))
             else:
                 print_info(
                     f"Set your terminal font to '{NERD_FONT_NAME}' manually."
@@ -917,7 +958,7 @@ def install_nerd_font() -> bool:
         os.makedirs(dest, exist_ok=True)
         tmp = "/tmp/freeflix-nerdfont"
         zip_path = f"{tmp}.zip"
-        print_info("Downloading CaskaydiaCove Nerd Font…")
+        print_info(t("Downloading CaskaydiaCove Nerd Font…"))
         try:
             urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
             import zipfile
@@ -936,10 +977,10 @@ def install_nerd_font() -> bool:
 
     elif os_name == "macos":
         if not shutil.which("brew"):
-            print_warning("Homebrew not found — install it first: https://brew.sh")
+            print_warning(t("Homebrew not found — install it first: https://brew.sh"))
             return False
         cmd = ["brew", "install", "--quiet", "--cask", "font-caskaydia-cove-nerd-font"]
-        print_info("Installing CaskaydiaCove Nerd Font via Homebrew…")
+        print_info(t("Installing CaskaydiaCove Nerd Font via Homebrew…"))
         try:
             subprocess.run(cmd, check=False, timeout=120)
         except Exception as e:
@@ -952,12 +993,12 @@ def install_nerd_font() -> bool:
             "Microsoft", "Windows", "Fonts",
         )
         if not user_fonts:
-            print_warning("Could not find Windows fonts directory")
+            print_warning(t("Could not find Windows fonts directory"))
             return False
         os.makedirs(user_fonts, exist_ok=True)
         zip_path = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "CascadiaCodeNF.zip")
         extract_dir = zip_path.replace(".zip", "")
-        print_info("Downloading CaskaydiaCove Nerd Font…")
+        print_info(t("Downloading CaskaydiaCove Nerd Font…"))
         try:
             urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
             import zipfile
@@ -1126,11 +1167,11 @@ def install_flaresolverr() -> bool:
       * Windows: Docker Desktop if present, else guidance.
     """
     if _flaresolverr_running():
-        print_success("FlareSolverr already running on :8191")
+        print_success(t("FlareSolverr already running on :8191"))
         return True
 
     os_name = detect_os()
-    print_info("FlareSolverr auto-solves Cloudflare challenges (optional, ~1 GB image).")
+    print_info(t("FlareSolverr auto-solves Cloudflare challenges (optional, ~1 GB image)."))
 
     runtime = _container_runtime()
 
@@ -1139,7 +1180,7 @@ def install_flaresolverr() -> bool:
         if os_name == "linux":
             cmd = _linux_pkg_cmd("podman")
             if cmd:
-                print_info("No Docker/Podman found. Podman is the easiest (rootless).")
+                print_info(t("No Docker/Podman found. Podman is the easiest (rootless)."))
                 try:
                     ans = input(f"Install Podman now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
                 except (EOFError, KeyboardInterrupt):
@@ -1163,7 +1204,7 @@ def install_flaresolverr() -> bool:
             return False
 
     if not runtime:
-        print_warning("No container runtime available — FlareSolverr skipped.")
+        print_warning(t("No container runtime available — FlareSolverr skipped."))
         return False
 
     try:
@@ -1194,10 +1235,10 @@ def install_flaresolverr() -> bool:
     import time as _time
     for _ in range(10):
         if _flaresolverr_running():
-            print_success("FlareSolverr is up on http://127.0.0.1:8191")
+            print_success(t("FlareSolverr is up on http://127.0.0.1:8191"))
             return True
         _time.sleep(2)
-    print_info("FlareSolverr started — it may need a moment to be ready.")
+    print_info(t("FlareSolverr started — it may need a moment to be ready."))
     return True
 
 
@@ -1258,7 +1299,7 @@ def print_platform_guidance_windows(gpus: Dict[str, bool]):
     # Icons : the #1 Windows gotcha is running in the legacy cmd.exe console,
     # which can't render the TUI glyphs. Always show this.
     print_info("─" * 60)
-    print_info("Icons not showing as crisp glyphs on Windows?")
+    print_info(t("Icons not showing as crisp glyphs on Windows?"))
     print_info("─" * 60)
     print_info("  1. Use 'Windows Terminal' (Store / winget), NOT the old")
     print_info("     cmd.exe window — legacy console can't draw the glyphs.")
@@ -1275,8 +1316,8 @@ def print_platform_guidance_windows(gpus: Dict[str, bool]):
     print_info("─" * 60)
     print_info(f"Windows GPU offload : {gpu} dGPU detected")
     print_info("─" * 60)
-    print_info("Windows handles GPU selection natively — no PRIME wrappers")
-    print_info("needed. To force mpv to use the dGPU, do this ONCE :")
+    print_info(t("Windows handles GPU selection natively — no PRIME wrappers"))
+    print_info(t("needed. To force mpv to use the dGPU, do this ONCE :"))
     print_info("")
     print_info("  Option A — Windows Graphics Settings (easiest)")
     print_info("    Settings → System → Display → Graphics")
@@ -1295,14 +1336,14 @@ def print_platform_guidance_macos(gpus: Dict[str, bool]):
     """macOS picks the GPU automatically per-app based on energy needs."""
     print_info("─" * 60)
     if gpus.get("apple_silicon"):
-        print_info("macOS Apple Silicon detected")
+        print_info(t("macOS Apple Silicon detected"))
         print_info("─" * 60)
-        print_info("Apple Silicon has a single unified GPU — no offload needed.")
+        print_info(t("Apple Silicon has a single unified GPU — no offload needed."))
     else:
-        print_info("macOS Intel detected")
+        print_info(t("macOS Intel detected"))
         print_info("─" * 60)
-        print_info("macOS auto-selects between iGPU and dGPU based on app")
-        print_info("activity (Energy Saver). No manual action required.")
+        print_info(t("macOS auto-selects between iGPU and dGPU based on app"))
+        print_info(t("activity (Energy Saver). No manual action required."))
 
 
 # ─── Top-level wizard ─────────────────────────────────────────────────
@@ -1322,7 +1363,7 @@ def run_setup(force: bool = False) -> bool:
     print_info("─" * 60)
     print_info(f"GPUs detected : {[k for k,v in gpus.items() if v] or ['none']}")
     print_info("")
-    print_info("This will :")
+    print_info(t("This will :"))
     print_info("  1. Install tuned mpv.conf + input.conf + position-resume hook")
     print_info("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)")
     print_info("  3. Install the Nerd Font + chafa (crisp icons & posters)")
@@ -1335,7 +1376,7 @@ def run_setup(force: bool = False) -> bool:
     try:
         ans = input("Proceed? [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        print_info("Aborted.")
+        print_info(t("Aborted."))
         return False
     if ans in ("n", "no"):
         # Remember the decline so we don't re-prompt every launch

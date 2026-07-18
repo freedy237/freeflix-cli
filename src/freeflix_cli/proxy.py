@@ -2,10 +2,12 @@ import threading
 import socket
 import json
 import time
+import ipaddress
 import urllib.parse
 import re
 from flask import Flask, request, Response, stream_with_context
 from curl_cffi import requests, CurlOpt
+from .net_config import DNS_OPTIONS
 import m3u8
 
 # Global Configuration
@@ -46,13 +48,53 @@ def get_bytes_served() -> int:
 
 app = Flask(__name__)
 
+# ── SSRF guard ────────────────────────────────────────────────────────
+# The proxy binds to 127.0.0.1 on a random port, but any local process (or a
+# webpage the user's browser opens to localhost) could otherwise abuse it as an
+# open proxy to reach internal/cloud-metadata services
+# (e.g. /video?url=http://169.254.169.254/…). Legit streams are always public
+# CDNs, so we refuse any target URL whose host is a loopback / private /
+# link-local / reserved IP (or a localhost literal). Only the routes that fetch
+# an EXTERNAL url are guarded; /player's url is our own loopback stream by design.
+_FETCH_ENDPOINTS = {"proxy_stream", "proxy_ts", "proxy_video"}
+_BLOCK_HOST_LITERALS = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+
+
+def _is_ssrf_blocked(target_url: str) -> bool:
+    try:
+        host = urllib.parse.urlparse(target_url).hostname or ""
+    except Exception:
+        return False
+    if not host:
+        return False
+    h = host.lower().rstrip(".")
+    if h in _BLOCK_HOST_LITERALS:
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False  # a public hostname — allow (don't resolve; avoids latency)
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+@app.before_request
+def _ssrf_guard():
+    if request.endpoint in _FETCH_ENDPOINTS:
+        target = request.args.get("url")
+        if target and _is_ssrf_blocked(target):
+            return Response("Blocked target host", status=403)
+
+
 # Requested Google DNS Options — system DNS by default (no DoH so it works
 # even when 1.1.1.1 is unreachable). The internal video proxy adds DoH only for
 # segment fetching (see _build_session).
-DNS_OPTIONS = {
-    CurlOpt.DOH_SSL_VERIFYPEER: 0,
-    CurlOpt.DOH_SSL_VERIFYHOST: 0,
-}
 
 
 def find_free_port():
@@ -633,7 +675,11 @@ def run_flask(port):
     log = logging.getLogger("werkzeug")
     log.setLevel(logging.ERROR)
 
+    # make_server binds the listening socket immediately, so once it returns the
+    # port is accepting connections — signal readiness BEFORE serve_forever so
+    # ensure_started() can safely hand the URL to a player without a race.
     _server_instance = make_server(PROXY_HOST, port, app, threaded=True)
+    _ready_event.set()
     _server_instance.serve_forever()
 
 
@@ -647,12 +693,30 @@ def start_proxy_server(port=0):
     PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
 
     # Launch in a Daemon thread (stops when the main program stops)
+    _ready_event.clear()
     t = threading.Thread(target=run_flask, args=(port,))
     t.daemon = True
     t.start()
 
-    print(f"[*] M3U8 Proxy started on http://{PROXY_HOST}:{PROXY_PORT}")
     return port
+
+
+_start_lock = threading.Lock()
+_ready_event = threading.Event()
+
+
+def ensure_started(port=0, wait=5.0):
+    """
+    Idempotent proxy start, called lazily on first playback (so launching
+    FreeFlix doesn't import Flask / bind a port until it's actually needed).
+    Safe to call from any thread; blocks until the socket is accepting.
+    Returns the proxy port.
+    """
+    with _start_lock:
+        if PROXY_URL is None or _server_instance is None:
+            start_proxy_server(port)
+    _ready_event.wait(timeout=wait)
+    return PROXY_PORT
 
 
 def stop_proxy_server():

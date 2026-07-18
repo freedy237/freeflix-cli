@@ -1,0 +1,47 @@
+name: CI
+
+# Lint + tests on every push and PR, on Linux AND Windows, so regressions
+# (e.g. the Windows arrow-key breakage) are caught before release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint + tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.9', '3.12']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Ruff (real-bug checks)
+        run: uvx ruff check --select E,W,F,B --ignore E501,E402 src/freeflix_cli/
+
+      - name: Import every module
+        run: >
+          uv run --with . python -c "import pkgutil,importlib,freeflix_cli;
+          [importlib.import_module(m.name) for m in
+          pkgutil.walk_packages(freeflix_cli.__path__,'freeflix_cli.')];
+          print('all modules import OK')"
+
+      - name: Pytest
+        run: uv run --with . --with pytest -m pytest -q

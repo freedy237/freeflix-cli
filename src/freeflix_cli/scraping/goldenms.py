@@ -2,7 +2,7 @@ from curl_cffi import requests as cffi_requests
 import urllib.parse
 import re
 from .config import portals
-from ..proxy import DNS_OPTIONS
+from ..net_config import DNS_OPTIONS
 
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 

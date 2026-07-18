@@ -48,6 +48,7 @@ _EMOJI = {
     "flag_us": "🇺🇸",
     "movie_clap": "🎬",
     "loading": "⏳",
+    "offline": "⚠",
 }
 
 # Semantic name -> Nerd Font codepoint (Font Awesome range, present in every
@@ -89,6 +90,7 @@ _NERD = {
     "flag_us": chr(0xF024),   # flag
     "movie_clap": chr(0xF008),  # film
     "loading": chr(0xF252),   # hourglass
+    "offline": chr(0xF071),   # exclamation-triangle
 }
 
 

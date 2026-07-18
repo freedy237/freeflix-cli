@@ -48,7 +48,7 @@ def handle_coflix():
                 continue
 
         if not results:
-            print_warning("No results found.")
+            print_warning(t("No results found."))
             pause()
             continue
 
@@ -101,14 +101,14 @@ def handle_coflix():
                     continue
 
             if not content.players:
-                print_warning("No players found.")
+                print_warning(t("No players found."))
                 pause()
                 continue
             supported_players = [
                 p for p in content.players if player.is_supported(p.url)
             ]
             if not supported_players:
-                print_warning("No supported players found.")
+                print_warning(t("No supported players found."))
                 pause()
                 continue
 
@@ -128,7 +128,7 @@ def handle_coflix():
             console.print(f"\n[bold]{icon('tv')} Series:[/bold] [cyan]{content.title}[/cyan]\n")
 
             if not content.seasons:
-                print_warning("No seasons found.")
+                print_warning(t("No seasons found."))
                 pause()
                 continue
 
@@ -164,7 +164,7 @@ def handle_coflix():
                     pause()
                     continue  # back to the season picker
                 if not season.episodes:
-                    print_warning("No episodes found.")
+                    print_warning(t("No episodes found."))
                     pause()
                     continue
 
@@ -266,7 +266,7 @@ def resume_coflix(data):
             return
 
         if not isinstance(content, CoflixMovie):
-            print_error("Expected a Movie but got something else.")
+            print_error(t("Expected a Movie but got something else."))
             pause()
             return
 
@@ -300,7 +300,7 @@ def resume_coflix(data):
         return
 
     if not season.episodes:
-        print_warning("No episodes found in season.")
+        print_warning(t("No episodes found in season."))
         pause()
         return
 

@@ -2,7 +2,7 @@ from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 from .objects import SearchResult, SamaSeason, SamaSeries, SeasonAccess, Episode
 from .utils import parse_episodes_from_js
-from ..proxy import DNS_OPTIONS
+from ..net_config import DNS_OPTIONS
 from random import randint
 import re
 

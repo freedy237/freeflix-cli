@@ -3,7 +3,7 @@ from __future__ import annotations
 from curl_cffi import requests
 from .deobfuscate import deobfuscate
 from bs4 import BeautifulSoup
-from ..proxy import DNS_OPTIONS
+from ..net_config import DNS_OPTIONS
 from ..defaults import DEFAULT_PLAYERS, DEFAULT_NEW_URL, DEFAULT_KAKAFLIX_PLAYERS
 import re
 import base64

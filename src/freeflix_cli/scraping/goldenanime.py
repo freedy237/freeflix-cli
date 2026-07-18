@@ -1,7 +1,7 @@
 from curl_cffi import requests as cffi_requests
 import json
 import re
-from ..proxy import DNS_OPTIONS
+from ..net_config import DNS_OPTIONS
 
 from .config import portals
 

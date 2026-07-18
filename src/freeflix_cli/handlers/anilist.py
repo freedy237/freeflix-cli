@@ -22,21 +22,21 @@ def handle_anilist_continue():
     """Handle the 'Continue from AniList' flow."""
     token = tracker.get_anilist_token()
     if not token:
-        print_error("Please configure your AniList token in Settings > AniList first.")
+        print_error(t("Please configure your AniList token in Settings > AniList first."))
         return
 
     anilist_client.set_token(token)
-    print_info("Fetching your watching list from AniList...")
+    print_info(t("Fetching your watching list from AniList..."))
 
     # Needs user ID first
     user = anilist_client.validate_token()
     if not user:
-        print_error("Invalid AniList token.")
+        print_error(t("Invalid AniList token."))
         return
 
     entries = anilist_client.get_user_watching(user["id"])
     if not entries:
-        print_warning("No anime currently watching found on AniList.")
+        print_warning(t("No anime currently watching found on AniList."))
         return
 
     # Selection list WITH posters (chafa), like the regular source flows.
@@ -129,7 +129,7 @@ def handle_anilist_continue():
 
     # Fallback 3: Manual Search
     if not results:
-        print_warning("No results found on Anime-Sama.")
+        print_warning(t("No results found on Anime-Sama."))
         choice = select_from_list(
             [t("Try Manual Search"), t("Cancel")], t("What would you like to do?")
         )
@@ -137,7 +137,7 @@ def handle_anilist_continue():
             manual_query = get_user_input(t("Enter search query"))
             results = anime_sama.search(manual_query)
             if not results:
-                print_error("Still no results found.")
+                print_error(t("Still no results found."))
                 return
         else:
             return
@@ -158,7 +158,7 @@ def handle_anilist_continue():
     series = anime_sama.get_series(selection.url)
 
     if not series.seasons:
-        print_warning("No seasons found.")
+        print_warning(t("No seasons found."))
         return
 
     # Try to auto-select the season if the title had a season number
@@ -226,7 +226,7 @@ def handle_anilist_continue():
 
     langs = list(season.episodes.keys())
     if not langs:
-        print_warning("No episodes found.")
+        print_warning(t("No episodes found."))
         return
 
     lang_idx = select_from_list(langs, f"{icon('globe')} {t('Select Language:')}")
@@ -270,7 +270,7 @@ def handle_anilist_continue():
         def _anilist_update(ep=selected_episode):
             m = re.search(r"(\d+)", ep.title)
             if m and anilist_client.update_progress(media_id, int(m.group(1))):
-                print_success("AniList updated!")
+                print_success(t("AniList updated!"))
 
         success = play_episode_flow(
             provider_name="Anime-Sama",
