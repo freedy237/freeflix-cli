@@ -72,12 +72,18 @@ class TestHaveManaged:
     def test_empty_dir_returns_false(self):
         assert _have_managed(("ffmpeg",)) is False
 
+    def _touch(self, name):
+        # _have_managed appends .exe on Windows, so the file on disk must too.
+        if sys.platform in ("win32", "cygwin"):
+            name += ".exe"
+        (Path(self._tmpdir) / name).touch()
+
     def test_finds_existing_binary(self):
-        (Path(self._tmpdir) / "ffmpeg").touch()
+        self._touch("ffmpeg")
         assert _have_managed(("ffmpeg",)) is True
 
     def test_finds_any_in_tuple(self):
-        (Path(self._tmpdir) / "aria2c").touch()
+        self._touch("aria2c")
         assert _have_managed(("ffmpeg", "aria2c")) is True
 
     def test_not_found_returns_false(self):
