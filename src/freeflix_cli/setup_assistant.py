@@ -253,7 +253,13 @@ def _find_in_tar(archive: Path, target: str) -> Path | None:
         with tarfile.open(archive, "r:*") as tar:
             for m in tar.getmembers():
                 if m.name.endswith(f"/{target}") or m.name == target:
-                    tar.extract(m, parent, filter="data")
+                    # The 'data' extraction filter (PEP 706) is the safe default
+                    # on 3.12+ and back-ported 3.9.17+, but missing on older 3.9
+                    # (e.g. the 3.9.13 Windows build) — fall back without it there.
+                    try:
+                        tar.extract(m, parent, filter="data")
+                    except TypeError:
+                        tar.extract(m, parent)
                     return parent / m.name
     except Exception:
         return None
