@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from .objects import SearchResult, SamaSeason, SamaSeries, SeasonAccess, Episode
 from .utils import parse_episodes_from_js
 from ..net_config import DNS_OPTIONS
+from . import resilient
 from random import randint
 import re
 
@@ -87,14 +88,21 @@ def search(query: str) -> list[SearchResult]:
 
     soup = BeautifulSoup(response.text, "html5lib")
 
-    result_container = soup.find("div", {"id": "list_catalog"})
+    # Selectors are hot-patchable via the remote selectors.jsonc (see
+    # scraping.resilient) — a layout change on Anime-Sama can be fixed for
+    # everyone without a release. The [0] default mirrors today's behavior.
+    container_css = resilient.get("anime-sama", "search_container", ["#list_catalog"])[0]
+    card_css = resilient.get("anime-sama", "search_card", ["div.card-content"])[0]
+    info_css = resilient.get("anime-sama", "search_info", ["p.info-value"])[0]
+
+    result_container = soup.select_one(container_css)
 
     # Check if the container exists to avoid errors if no results
     if result_container:
         for result in result_container.find_all("div", recursive=False):
             is_scan_only = False
-            for info in result.find_all("p", {"class": info_class}):
-                if info.text == "Scans":
+            for info in result.select(info_css):
+                if info.get_text(strip=True) == "Scans":
                     is_scan_only = True
                     break
             if is_scan_only:
@@ -106,12 +114,12 @@ def search(query: str) -> list[SearchResult]:
             url: str = link_tag.attrs.get("href", "")
             img_tag = link_tag.img
             img: str = img_tag.attrs.get("src", "") if img_tag else ""
-            info_block = result.find("div", {"class": "card-content"})
+            info_block = result.select_one(card_css)
             if not info_block:
                 continue
             h2 = info_block.h2
             title: str = h2.text if h2 else ""
-            genre_p = info_block.find("p", {"class": info_class})
+            genre_p = info_block.select_one(info_css)
             genres: list[str] = genre_p.text.split(", ") if genre_p else []
             if not title:
                 continue
@@ -157,38 +165,28 @@ def get_series(url: str) -> SamaSeries:
 
     soup = BeautifulSoup(response.text, "html5lib")
 
-    # Title : newer anime-sama layout dropped <h4 id="titreOeuvre"> in
-    # favour of a plain <h1>. Try the old id, then h1, then the URL slug.
-    title_el = soup.find("h4", {"id": "titreOeuvre"}) or soup.find("h1")
-    if title_el:
-        title = title_el.get_text(strip=True)
-    else:
+    # Title : newer anime-sama layout dropped <h4 id="titreOeuvre"> in favour
+    # of a plain <h1>. The selector list (old id, then h1) is hot-patchable;
+    # fall back to the URL slug if none match.
+    title = resilient.first_text(soup, "anime-sama", "series_title")
+    if not title:
         title = url.rstrip("/").split("/")[-1].replace("-", " ").title()
 
     # Cover : the <img id="coverOeuvre"> tag is missing on many catalogue
     # pages (One Piece, Frieren…), which left the poster empty "when it
-    # felt like it". The og:image meta tag is ALWAYS present though, so try
-    # it first and fall back to coverOeuvre / a lazy-load attribute.
-    img = ""
-    og = soup.find("meta", {"property": "og:image"})
-    if og and og.attrs.get("content"):
-        img = og.attrs["content"].strip()
-    if not img:
-        img_el = soup.find("img", {"id": "coverOeuvre"})
-        if img_el:
-            img = (
-                img_el.attrs.get("src")
-                or img_el.attrs.get("data-src")
-                or img_el.attrs.get("data-lazy-src")
-                or ""
-            ).strip()
+    # felt like it". The og:image meta tag is ALWAYS present though, so the
+    # selector list tries it first, then coverOeuvre / a lazy-load attribute.
+    img = resilient.first_attr(
+        soup, "anime-sama", "series_cover",
+        "content", "src", "data-src", "data-lazy-src",
+    ).strip()
     if img and img.startswith("//"):
         img = "https:" + img
     elif img and not img.startswith("http"):
         img = website_origin.rstrip("/") + "/" + img.lstrip("/")
 
     # Genres (optional — missing on some pages)
-    genres_el = soup.find("a", {"class": "text-sm text-gray-300"})
+    genres_el = resilient.first(soup, "anime-sama", "series_genres")
     genres = genres_el.get_text(strip=True).split(", ") if genres_el else []
 
     seasons: list[SeasonAccess] = []

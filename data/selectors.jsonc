@@ -1,0 +1,19 @@
+// FreeFlix hot-patchable extractor selectors.
+//
+// When a source changes its HTML and a scraper breaks, add / override its CSS
+// selectors HERE and push to main — every user picks it up on next launch, no
+// release needed. The values baked into scraping/resilient.py (DEFAULT_SELECTORS)
+// stay the fallback, so this file only needs the keys that must change.
+//
+// Schema : { "<source>": { "<key>": "<css>" | ["<css>", "<css-fallback>"] } }
+// Selectors are tried in order; the first match wins. A "meta[...]" match reads
+// its `content` attribute; image keys try content/src/data-src/data-lazy-src.
+//
+// Example (kept empty on purpose — defaults are correct at ship time) :
+// {
+//   "anime-sama": {
+//     "series_title": ["h4#titreOeuvre", "h1", ".newTitleClass"]
+//   }
+// }
+{
+}

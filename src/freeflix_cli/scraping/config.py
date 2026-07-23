@@ -65,3 +65,9 @@ def _refresh_remote_portals():
 import threading as _threading  # noqa: E402 (deliberate late import — order matters)
 
 _threading.Thread(target=_refresh_remote_portals, daemon=True).start()
+
+# Hot-patchable extractor selectors are fetched the same way (background,
+# best-effort) so a broken source can be repaired without a release.
+from . import resilient  # noqa: E402
+
+resilient.start_background_refresh()
