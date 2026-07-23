@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.9.2
+
+Suite de l'audit d'optimisation — 4 chantiers, testés Linux + Windows (CI verte
+sur py3.9/3.12).
+
+### ⚡ Cache HTTP persistant (A3)
+- Nouveau module `httpcache` : les lectures de catalogue (recherche, série,
+  saison sur Anime-Sama — clé stable malgré le `?filever=` aléatoire) et les
+  **métadonnées Cinemeta films/séries** sont mises en cache sur disque (TTL).
+  La 2ᵉ recherche passe de ~1,8 s à **~30 ms**. Réglage **« Vider le cache HTTP »**.
+
+### 🖼️ Posters fiables + Kitty/iTerm2 (B2)
+- **Windows** : les pochettes ne s'affichaient **pas pendant la recherche**
+  (seulement après sélection) — la sortie de chafa était décodée en cp1252 et
+  levait une `UnicodeDecodeError`. Forcé en **UTF-8** → corrigé.
+- **Linux & Windows** : posters **lents / parfois absents** — un échec de rendu
+  n'est plus mis en cache à vie (retry après cooldown), téléchargement ramené à
+  **1×8 s** (au lieu de jusqu'à 4×12 s), et 2→4 workers de rendu (chafa est un
+  sous-processus, le GIL est libre).
+- **Qualité photo** : détection Kitty / Ghostty / WezTerm / iTerm2 → chafa reçoit
+  un vrai protocole graphique (avec garde de version), sinon autodétection.
+
+### 🛡️ Résilience des extracteurs (#5)
+- Nouveau `scraping/resilient.py` : les sélecteurs CSS fragiles vivent dans une
+  table **hot-patchable** via un `data/selectors.jsonc` distant (récupéré en
+  arrière-plan comme les portails), donc **une source cassée se répare sans
+  release**. Extraction **multi-stratégies** (plusieurs sélecteurs essayés dans
+  l'ordre). Anime-Sama recherche + série migrées dessus, valeurs actuelles en
+  défaut (zéro régression tant qu'aucun patch n'est poussé).
+
+### ▶️ mpv IPC — reprise temps réel + épisode suivant auto (binge)
+- Nouveau `mpv_ipc.py` : dialogue avec mpv via `--input-ipc-server` (socket Unix
+  / named pipe Windows). La position est enregistrée **en direct** (survit à un
+  crash — le hook lua n'écrivait qu'à la sortie propre), et on connaît la raison
+  d'arrêt (**fin de fichier vs quitté**).
+- **Binge (Anime-Sama)** : quand un épisode se termine, le suivant se lance
+  **automatiquement** après un compte à rebours annulable ; si tu as quitté en
+  cours, il demande simplement. 100% additif : le résumé lua reste le repli.
+
 ## 1.9.0
 
 Optimisation & robustesse — issue d'un audit complet de l'application, testé
