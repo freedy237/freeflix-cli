@@ -15,10 +15,10 @@ So the rest of the app can call render_url() unconditionally.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-import time
 
 from .tracker import tracker
 
@@ -48,8 +48,64 @@ def chafa_available() -> bool:
 
 def reset_cache():
     """Forget the cached chafa lookup (call after installing chafa)."""
-    global _CHAFA_PATH
+    global _CHAFA_PATH, _CHAFA_VER
     _CHAFA_PATH = None
+    _CHAFA_VER = None
+
+
+_CHAFA_VER = None
+
+
+def _chafa_version() -> tuple:
+    """(major, minor) of the installed chafa, cached. (0, 0) if unknown."""
+    global _CHAFA_VER
+    if _CHAFA_VER is None:
+        _CHAFA_VER = (0, 0)
+        try:
+            out = subprocess.run([_CHAFA_PATH, "--version"],
+                                 capture_output=True, text=True, timeout=3,
+                                 encoding="utf-8", errors="replace").stdout or ""
+            m = re.search(r"(\d+)\.(\d+)", out)
+            if m:
+                _CHAFA_VER = (int(m.group(1)), int(m.group(2)))
+        except Exception:
+            pass
+    return _CHAFA_VER
+
+
+def detect_image_protocol() -> str:
+    """
+    The high-quality image protocol we can be SURE the terminal speaks, so we
+    can hand chafa a real graphics format (photo-quality) instead of Unicode
+    blocks. Returns 'kitty' | 'iterm' | 'auto' — 'auto' means "let chafa decide"
+    (it still autodetects sixel/kitty on its own; we only override when certain).
+    """
+    env = os.environ
+    term = (env.get("TERM") or "").lower()
+    prog = (env.get("TERM_PROGRAM") or "").lower()
+    ver = _chafa_version()
+    # kitty graphics protocol : Kitty, Ghostty, WezTerm (chafa >= 1.12)
+    if ver >= (1, 12) and (
+        env.get("KITTY_WINDOW_ID") or "kitty" in term
+        or prog == "ghostty" or "WEZTERM_PANE" in env
+    ):
+        return "kitty"
+    # iTerm2 inline images : iTerm.app (chafa >= 1.6)
+    if ver >= (1, 6) and (prog == "iterm.app" or env.get("ITERM_SESSION_ID")):
+        return "iterm"
+    return "auto"
+
+
+def _render_format(mode: str):
+    """chafa --format value for the full-screen poster, or None to let chafa
+    autodetect. `mode` is the user's poster setting (auto/sixel/…)."""
+    if mode == "sixel":
+        return "sixels"
+    if mode == "auto":
+        proto = detect_image_protocol()
+        if proto in ("kitty", "iterm"):
+            return proto
+    return None
 
 
 def _poster_size():
@@ -112,20 +168,20 @@ def _download(url: str, attempts: int = 3):
     # the ORIGINAL url so callers/keys are unchanged.
     fetch_urls = [u for u in (_fast_url(url), url) if u]
 
+    # One quick attempt per URL (wsrv CDN first, then the origin). A short 8 s
+    # timeout keeps a throttled host from stalling the poster for tens of
+    # seconds — a missing cover is far better than a frozen UI.
     for fetch_url in fetch_urls:
-        for i in range(2):
-            try:
-                r = _rq.get(fetch_url, impersonate="chrome", timeout=12)
-                if r.status_code == 200 and r.content:
-                    fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(r.content)
-                    _img_cache[url] = path
-                    return path
-            except Exception:
-                pass
-            if i == 0:
-                time.sleep(0.3)
+        try:
+            r = _rq.get(fetch_url, impersonate="chrome", timeout=8)
+            if r.status_code == 200 and r.content:
+                fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(r.content)
+                _img_cache[url] = path
+                return path
+        except Exception:
+            pass
     return None
 
 
@@ -186,10 +242,12 @@ def render_url(url: str, width: int = None, height: int = None) -> bool:
 
     try:
         cmd = [_CHAFA_PATH, "--size", f"{width}x{height}"]
-        # "sixel" forces photo-quality output (needs Konsole Sixel enabled);
-        # "auto" lets chafa pick the best format the terminal advertises.
-        if mode == "sixel":
-            cmd += ["--format", "sixels"]
+        # Prefer a real graphics protocol (kitty/iterm = photo quality) when we
+        # can confirm the terminal speaks it; "sixel" forces sixels; otherwise
+        # leave it to chafa's own autodetection (blocks as a last resort).
+        fmt = _render_format(mode)
+        if fmt:
+            cmd += ["--format", fmt]
         cmd.append(path)
         subprocess.run(cmd, check=False)
         return True
@@ -214,19 +272,31 @@ def render_to_text(url: str, cols: int = 30, rows: int = 16):
         return _text_cache[key]
 
     result = Text("")
+    ok = False
     if url and chafa_available():
         path = _download(url)
         if path:
             try:
+                # encoding="utf-8" is REQUIRED : chafa emits UTF-8 block glyphs
+                # (▀▄) + truecolor escapes. Without it, text=True decodes with
+                # the locale codec — cp1252 on Windows — and raises
+                # UnicodeDecodeError, so posters silently never rendered during
+                # search on Windows (only the direct full-screen render worked).
                 out = subprocess.run(
                     [_CHAFA_PATH, "--format", "symbols", "--size", f"{cols}x{rows}", path],
                     capture_output=True, text=True, timeout=8,
+                    encoding="utf-8", errors="replace",
                 ).stdout
                 if out:
                     result = Text.from_ansi(out)
+                    ok = True
             except Exception:
                 pass
-    _text_cache[key] = result
+    # Only cache a SUCCESSFUL render. Caching an empty result used to make a
+    # transient download/render failure permanent ("sometimes never shows") —
+    # now a later attempt can still succeed.
+    if ok:
+        _text_cache[key] = result
     return result
 
 

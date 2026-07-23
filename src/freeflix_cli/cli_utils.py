@@ -746,20 +746,34 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     #    once starve the UI thread and make navigation feel frozen.
     # So we download wide (6) and render narrow (2). Downloads are deduped per
     # URL ; renders per (url, cols, rows).
+    # chafa runs as a SEPARATE process (subprocess releases the GIL while it
+    # works), so more render workers just means posters appear sooner — the old
+    # 2-worker cap was over-cautious. Downloads stay wide-open.
     dl_pool = ThreadPoolExecutor(max_workers=6)
-    rndr_pool = ThreadPoolExecutor(max_workers=2)
-    submitted = set()
-    dl_submitted = set()
+    rndr_pool = ThreadPoolExecutor(max_workers=4)
+    # key -> last submit time. Time-based (not a plain set) so a render/download
+    # that FAILED (transient host throttle) is retried after a short cooldown
+    # instead of being blocked forever ("sometimes the poster never shows").
+    submitted = {}
+    dl_submitted = {}
+    _RETRY_AFTER = 6.0
 
     def _submit(cover, cols, rows):
+        import time as _time
+        now = _time.time()
         key = (cover, cols, rows)
-        if not cover or key in submitted:
+        if not cover:
             return
-        submitted.add(key)
+        # Already rendered successfully? never re-submit.
+        if terminal_image.get_cached_text(cover, cols, rows) is not None:
+            return
+        if now - submitted.get(key, 0) < _RETRY_AFTER:
+            return
+        submitted[key] = now
         # Warm the download cache wide-open so the render workers almost always
         # find the image already on disk (render then skips the slow download).
-        if cover not in dl_submitted:
-            dl_submitted.add(cover)
+        if now - dl_submitted.get(cover, 0) >= _RETRY_AFTER:
+            dl_submitted[cover] = now
             dl_pool.submit(terminal_image.prefetch, cover)
         rndr_pool.submit(terminal_image.render_to_text, cover, cols, rows)
 
