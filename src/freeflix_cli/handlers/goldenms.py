@@ -1,3 +1,4 @@
+import json
 import urllib.parse
 from curl_cffi import requests
 from ..scraping.goldenms import goldenms_extractor
@@ -22,15 +23,28 @@ from ..i18n import t
 import re
 
 
+def _cinemeta_json(url: str, ttl: int):
+    """GET a Cinemeta JSON endpoint, served from the persistent cache when
+    fresh (metadata for films/series barely changes — repeat lookups instant)."""
+    from .. import httpcache
+
+    hit = httpcache.get(url, ttl)
+    if hit is not None:
+        return json.loads(hit)
+    r = requests.get(url, timeout=10, impersonate="chrome")
+    text = r.text or ""
+    data = json.loads(text)
+    httpcache.store(url, text)
+    return data
+
+
 def search_cinemeta(title: str, is_movie: bool):
     """Search TMDB/IMDB using Cinemeta API."""
     media_type = "movie" if is_movie else "series"
     url = f"https://v3-cinemeta.strem.io/catalog/{media_type}/top/search={urllib.parse.quote(title)}.json"
 
     try:
-        r = requests.get(url, timeout=10, impersonate="chrome").json()
-        metas = r.get("metas", [])
-        return metas
+        return _cinemeta_json(url, ttl=1800).get("metas", [])
     except Exception as e:
         print_warning(f"Error fetching Cinemeta search data: {e}")
         return []
@@ -41,8 +55,7 @@ def get_cinemeta_details(imdb_id: str, is_movie: bool):
     media_type = "movie" if is_movie else "series"
     url = f"https://v3-cinemeta.strem.io/meta/{media_type}/{imdb_id}.json"
     try:
-        r = requests.get(url, timeout=10, impersonate="chrome").json()
-        return r.get("meta", {})
+        return _cinemeta_json(url, ttl=86400).get("meta", {})
     except Exception as e:
         print_warning(f"Error fetching Cinemeta details: {e}")
         return {}

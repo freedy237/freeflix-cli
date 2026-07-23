@@ -1123,6 +1123,16 @@ def main():
                     tracker.set_subtitle_search(new)
                     toast(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
 
+                def _a_clear_cache():
+                    from . import httpcache
+                    n = httpcache.clear()
+                    toast(f"{t('HTTP cache cleared')} ({n})")
+
+                def _cache_label():
+                    from . import httpcache
+                    count, mb = httpcache.stats()
+                    return f"{count} · {mb:.1f} MB" if count else t("empty")
+
                 # ── (category, label, action) — grouped in the menu ──
                 PLY, DL, APP, ACC, AB = (t("Playback"), t("Downloads"),
                                          t("Appearance"), t("Accounts"), t("About"))
@@ -1138,6 +1148,7 @@ def main():
                     (APP, f"{icon('theme')} {t('Icon Style')} ({tracker.get_icon_style()})", _a_icons),
                     (APP, f"{t('Update Language')} ({lang_display})", _a_lang),
                     (APP, f"{t('Update Anime Language')} ({anime_lang_display})", _a_anime_lang),
+                    (APP, f"{icon('repeat')} {t('Clear HTTP cache')} ({_cache_label()})", _a_clear_cache),
                     (ACC, f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})", _a_token),
                     (ACC, f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})", _a_ossub),
                     (ACC, f"{t('Cloudflare token')}", _set_cloudflare_token),

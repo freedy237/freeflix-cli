@@ -13,11 +13,25 @@ scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
 
 
-def _get(url, **kw):
+def _get(url, cache_ttl=0, cache_key=None, **kw):
     """
     GET that rides a cf_clearance cookie if set, and — on a Cloudflare block
     — asks FlareSolverr to auto-solve the challenge, then retries once.
+
+    When *cache_ttl* > 0 the (successful) body is served from / stored in the
+    persistent HTTP cache — used for catalogue reads (search, series, seasons)
+    that don't change minute-to-minute, so repeat browsing is instant.
+    *cache_key* overrides the cache identity when the real URL carries a
+    random cache-buster (e.g. episodes.js?filever=…) that must be ignored.
     """
+    from .. import httpcache
+
+    ckey = cache_key or url
+    if cache_ttl:
+        hit = httpcache.get(ckey, cache_ttl)
+        if hit is not None:
+            return httpcache.CachedResponse(hit)
+
     base_headers = kw.pop("headers", {})
     kw.setdefault("timeout", 20)  # never hang on a dead host
 
@@ -29,6 +43,8 @@ def _get(url, **kw):
     resp = _fetch()
     if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
         resp = _fetch()
+    if cache_ttl and getattr(resp, "status_code", None) == 200:
+        httpcache.store(ckey, resp.text)
     return resp
 
 # info_class = "mt-0.5 text-gray-300 font-medium text-xs truncate"
@@ -64,7 +80,7 @@ def get_website_url(portal=portals["anime-sama"]):
 def search(query: str) -> list[SearchResult]:
     page = website_origin + f"/catalogue/?search={query}"
 
-    response = _get(page)
+    response = _get(page, cache_ttl=1800)
     response.raise_for_status()
 
     results: list[SearchResult] = []
@@ -111,11 +127,9 @@ def get_season(url: str) -> SamaSeason:
     episodes: dict[str, list[Episode]] = {}
     valid_lang = []
     for lang_code in lang_codes:
-        nurl = (
-            url.replace("vostfr", lang_code).removesuffix("/")
-            + f"/episodes.js?filever={randint(1, 100000)}"
-        )
-        response = _get(nurl)
+        stable = url.replace("vostfr", lang_code).removesuffix("/") + "/episodes.js"
+        nurl = stable + f"?filever={randint(1, 100000)}"
+        response = _get(nurl, cache_ttl=3600, cache_key=stable)
 
         if response.status_code == 404:
             continue
@@ -138,7 +152,7 @@ def get_season(url: str) -> SamaSeason:
 
 # season_container_class = "flex flex-wrap overflow-y-hidden justify-start bg-slate-900 bg-opacity-70 rounded mt-2 h-auto"
 def get_series(url: str) -> SamaSeries:
-    response = _get(url)
+    response = _get(url, cache_ttl=3600)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html5lib")
