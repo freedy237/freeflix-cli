@@ -32,6 +32,16 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0"
 )
 
+# Set after each mpv playback (via IPC) : did the video reach end-of-file
+# (finished) or did the user quit? Consumed by the auto-play-next / binge flow.
+_LAST_PLAYBACK = {"finished": False}
+
+
+def last_playback_finished_naturally() -> bool:
+    """True if the last mpv playback ended at EOF (not a user quit). Only
+    meaningful right after a play_video() call that used mpv + IPC."""
+    return bool(_LAST_PLAYBACK.get("finished"))
+
 # ─── Optimus / PRIME : detect dGPU and offload mpv onto it ──────────
 # On hybrid Linux laptops (iGPU + dGPU), launching mpv with the right
 # env vars routes rendering to the dedicated card :
@@ -994,6 +1004,42 @@ def _save_mpv_position(out_path: str, key: str, completion_threshold: float = 0.
         tracker.set_episode_position(key, pos)
 
 
+def _mpv_ipc_args(key: str):
+    """
+    Set up mpv's JSON IPC so we can save the position LIVE (survives a crash,
+    unlike the lua-on-exit file) and learn WHY mpv stopped (eof vs quit — used
+    for auto-play-next). Returns (cli_args, monitor) ; ([], None) if unavailable.
+
+    Strictly additive : the lua-file path stays the authoritative fallback, so
+    if IPC isn't supported the resume still works exactly as before.
+    """
+    if not key:
+        return [], None
+    try:
+        from . import mpv_ipc
+    except Exception:
+        return [], None
+
+    path = mpv_ipc.make_ipc_path()
+
+    def _save(pos, dur):
+        if pos is None:
+            return
+        try:
+            if dur and dur > 0 and (pos / dur) >= 0.95:
+                tracker.clear_episode_position(key)
+            elif pos > 30:
+                tracker.set_episode_position(key, pos)
+        except Exception:
+            pass
+
+    try:
+        mon = mpv_ipc.PlaybackMonitor(path, on_position=_save, poll=10.0)
+    except Exception:
+        return [], None
+    return [f"--input-ipc-server={path}"], mon
+
+
 def _sweep_download_litter():
     """Remove leftover HLS fragment / temp clutter (the `*-Frag*`, `*.aria2`,
     `*.frag.urls` files the old aria2c-per-fragment path left behind) so the
@@ -1297,6 +1343,8 @@ def play_video(
     # Lazy import : keeps Flask out of FreeFlix startup (the proxy is only
     # imported / started the first time something is actually played).
     from . import proxy
+
+    _LAST_PLAYBACK["finished"] = False  # reset the auto-next signal per playback
 
     if hasattr(player, "new_url") and isinstance(player.new_url, dict):
         for old, new in player.new_url.items():
@@ -1718,13 +1766,21 @@ def play_video(
                         cmd.append(f"--sub-files={local_subtitle_path}")
 
                 pos_args, pos_file, pos_key = ([], None, None)
+                ipc_monitor = None
                 if player_name == "mpv":
                     pos_args, pos_file, pos_key = _mpv_position_args(title)
                     cmd.extend(pos_args)
+                    ipc_args, ipc_monitor = _mpv_ipc_args(pos_key)
+                    cmd.extend(ipc_args)
 
                 run_env = _nvidia_env() if player_name == "mpv" else None
                 # Proxy mode : show live data usage and the total at the end.
+                if ipc_monitor:
+                    ipc_monitor.start()
                 _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
+                if ipc_monitor:
+                    ipc_monitor.stop()
+                    _LAST_PLAYBACK["finished"] = ipc_monitor.finished_naturally()
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
                 print_success(t("Playback completed successfully!"))
@@ -1796,8 +1852,15 @@ def play_video(
                         cmd.append(f"--sub-files={local_subtitle_path}")
                     pos_args_d, pos_file_d, pos_key_d = _mpv_position_args(title)
                     cmd.extend(pos_args_d)
+                    ipc_args_d, ipc_mon_d = _mpv_ipc_args(pos_key_d)
+                    cmd.extend(ipc_args_d)
                     cmd.append(stream_url)
+                    if ipc_mon_d:
+                        ipc_mon_d.start()
                     subprocess.run(cmd, check=True, env=_nvidia_env())
+                    if ipc_mon_d:
+                        ipc_mon_d.stop()
+                        _LAST_PLAYBACK["finished"] = ipc_mon_d.finished_naturally()
                     _save_mpv_position(pos_file_d, pos_key_d)
 
                 print_success(t("Playback completed successfully!"))

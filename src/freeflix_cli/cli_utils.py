@@ -150,6 +150,74 @@ def pause():
     console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
 
 
+def confirm_or_timeout(message: str, seconds: int = 6, default: bool = True) -> bool:
+    """
+    Show *message* with a live countdown and auto-return *default* when it
+    elapses — used for auto-play-next / binge : the next episode starts on its
+    own unless the user intervenes. Enter/Space/y = accept, Esc/n/q = decline.
+
+    On a non-interactive terminal it returns *default* immediately (never
+    blocks a script). Fully cross-platform (POSIX select + Windows msvcrt).
+    """
+    import sys
+    import time as _time
+    from .i18n import t as _t
+
+    if not console.is_terminal or not sys.stdin.isatty():
+        return default
+
+    accent = color("accent")
+    dim = color("dim")
+
+    def _render(remaining):
+        return Text.from_markup(
+            f"  [bold {accent}]{iconify(message)}[/]   "
+            f"[{dim}]{_t('Enter')}: {_t('yes')} · {_t('Esc')}: {_t('no')} · "
+            f"{_t('auto in')} {remaining}s[/]"
+        )
+
+    end = _time.time() + seconds
+    decided = None
+
+    if os.name == "nt":
+        import msvcrt
+        with Live(_render(seconds), console=console, refresh_per_second=8,
+                  transient=True) as live:
+            while _time.time() < end and decided is None:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch in ("\r", "\n", " ", "y", "Y"):
+                        decided = True
+                    elif ch in ("\x1b", "n", "N", "q", "Q"):
+                        decided = False
+                else:
+                    _time.sleep(0.05)
+                live.update(_render(max(0, int(end - _time.time()) + 1)))
+    else:
+        import termios
+        import tty
+        import select as _sel
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            with Live(_render(seconds), console=console, refresh_per_second=8,
+                      transient=True) as live:
+                while _time.time() < end and decided is None:
+                    r, _, _ = _sel.select([fd], [], [], 0.15)
+                    if r:
+                        ch = os.read(fd, 1)
+                        if ch in (b"\r", b"\n", b" ", b"y", b"Y"):
+                            decided = True
+                        elif ch in (b"\x1b", b"n", b"N", b"q", b"Q"):
+                            decided = False
+                    live.update(_render(max(0, int(end - _time.time()) + 1)))
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    return default if decided is None else decided
+
+
 def disable_terminal_reports():
     """
     Turn OFF terminal focus-reporting / mouse tracking / bracketed paste.

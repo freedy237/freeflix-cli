@@ -297,13 +297,24 @@ def handle_anime_sama():
                     )
                     if not success:
                         break  # play returned Back → episode picker
-                    if ep_idx + 1 < len(episodes) and select_from_list(
-                        [t("Yes"), t("No")],
-                        f"{t('Play next episode:')} {episodes[ep_idx + 1].title}?",
-                    ) == 0:
-                        ep_idx += 1
-                        continue
-                    break  # done watching → episode picker
+                    if ep_idx + 1 < len(episodes):
+                        from ..player_manager import last_playback_finished_naturally
+                        from ..cli_utils import confirm_or_timeout
+                        nxt = episodes[ep_idx + 1].title
+                        # Binge : if the episode reached its end (mpv IPC says
+                        # EOF), auto-play the next after a cancelable countdown.
+                        # If the user quit early, just ask (no countdown).
+                        if last_playback_finished_naturally():
+                            go = confirm_or_timeout(
+                                f"{t('Next episode')}: {nxt}", seconds=6, default=True)
+                        else:
+                            go = select_from_list(
+                                [t("Yes"), t("No")],
+                                f"{t('Play next episode:')} {nxt}?") == 0
+                        if go:
+                            ep_idx += 1
+                            continue  # play the next episode
+                    break  # declined, or no next → back to episode picker
                 # loop back to the episode picker
 
             # Back out of the episode picker :
