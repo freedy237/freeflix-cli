@@ -71,18 +71,23 @@ _MARKERS = (
     "attention required",
     "just a moment",
     "checking your browser",
+    "botblocker",
+    "globus.studio",
 )
 
 
 def is_blocked(response) -> bool:
-    """Heuristic : does this response look like a Cloudflare challenge?"""
+    """Heuristic : does this response look like a Cloudflare/BotBlocker challenge?"""
     try:
-        if response.status_code not in (403, 429, 503):
-            return False
         body = (response.text or "").lower()
     except Exception:
         return False
-    return any(m in body for m in _MARKERS)
+    if response.status_code in (403, 429, 503):
+        return any(m in body for m in _MARKERS)
+    # BotBlocker returns 200 with challenge page
+    if response.status_code == 200:
+        return any(m in body for m in ("botblocker", "globus.studio"))
+    return False
 
 
 CF_HELP = (
