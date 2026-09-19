@@ -436,15 +436,18 @@ def _read_menu_key():
         # mistaken for a lone Esc; only a truly isolated \x1b is Esc.
         if ch == "\x1b":
             seq = ch
-            for _ in range(6):
+            for _ in range(12):
                 if msvcrt.kbhit():
                     seq += msvcrt.getwch()
                     if len(seq) >= 3:
                         break
                 else:
-                    _t.sleep(0.004)
+                    _t.sleep(0.008)
             if seq == "\x1b":
                 return readchar.key.ESC
+            # Explicitly ignore focus events (\x1b[I / \x1b[O)
+            if seq in ("\x1b[I", "\x1b[O"):
+                return ""          # focus in/out → ignore
             return {"\x1b[A": readchar.key.UP, "\x1bOA": readchar.key.UP,
                     "\x1b[B": readchar.key.DOWN, "\x1bOB": readchar.key.DOWN,
                     "\x1b[C": readchar.key.RIGHT, "\x1b[D": readchar.key.LEFT,
@@ -475,10 +478,10 @@ def _read_menu_key():
         if ch == b"\x1b":
             # Drain the WHOLE escape sequence (arrows, but also focus events
             # \x1b[I / \x1b[O and mouse reports) before deciding. Only a truly
-            # isolated \x1b — nothing follows within 50 ms — is a real Esc.
+            # isolated \x1b — nothing follows within 100 ms — is a real Esc.
             seq = ch
             while True:
-                r, _, _ = _sel.select([fd], [], [], 0.05)
+                r, _, _ = _sel.select([fd], [], [], 0.10)
                 if not r:
                     break
                 seq += os.read(fd, 8)
@@ -486,11 +489,14 @@ def _read_menu_key():
                     break
             if seq == b"\x1b":
                 return readchar.key.ESC          # lone Esc → go back
+            # Explicitly ignore focus events (\x1b[I / \x1b[O) and other non-arrow CSI
+            if seq in (b"\x1b[I", b"\x1b[O"):
+                return ""          # focus in/out → ignore, don't trigger Esc
             return {
                 b"\x1b[A": readchar.key.UP,   b"\x1bOA": readchar.key.UP,
                 b"\x1b[B": readchar.key.DOWN,  b"\x1bOB": readchar.key.DOWN,
                 b"\x1b[C": readchar.key.RIGHT, b"\x1b[D": readchar.key.LEFT,
-            }.get(seq, "")          # focus/mouse/unknown CSI → ignore
+            }.get(seq, "")          # other CSI/mouse → ignore
         if ch in (b"\r", b"\n"):
             return readchar.key.ENTER
         if ch == b"\x03":
