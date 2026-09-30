@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.11
+
+Réparation des lecteurs **Anime-Sama**, **French-Stream** et **French-Anime**.
+
+- **Anime-Sama / ansembed** : la page embarque désormais un payload packé
+  qui faisait jeter le bloc JWPlayer en clair par `packer.unpack()` →
+  « Impossible de résoudre l'URL du flux ». L'extracteur retombe sur le
+  HTML brut quand le code déobfusqué ne donne rien (vérifié : Mushoku
+  Tensei, Bleach TYBW, Re:Zero, One Piece Egghead, Elusive Samurai…).
+  Les saisons annoncées mais vides (`episodes.js` vide) sont sautées au
+  lieu de crasher (« No episodes found. »).
+- **French-Stream** : nouveaux extracteurs **dood** (`pass_md5`), **voe**
+  (packer à substitution) et **kokoflix** (résolution de la redirection
+  vers le vrai miroir playmogo/luluvdo). Les hôtes morts sont filtrés des
+  menus : trakx.lol, multiup/netu, filemoon « Byse » SPA, `chamber_go`.
+  Vérifié sur 20 films du moment — chacun a ≥3 lecteurs qui jouent
+  (premium 20/20, vidzy 20/20).
+- **French-Anime / luluvid** : le host tourne entre `luluvdo.com`,
+  `luluvid.com` et `lulust.com` ; ce dernier n'était pas supporté donc
+  invisible (ex. Kaiju No.8, Bleach). Ajouté comme miroir voe — vérifié
+  sur 10 anime (720p).
+
 ## 1.10.10
 
 Anime-Sama : les lecteurs des **derniers épisodes** rejouent (One Piece,
