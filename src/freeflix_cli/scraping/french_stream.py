@@ -128,6 +128,31 @@ def _abs_img(src: str) -> str:
     return website_origin + "/" + src.lstrip("/")
 
 
+# Hosts verified dead (Sept 2026) — filtered so menus only offer working
+# players instead of entries that can never resolve :
+#   * trakx.lol (old dood/voe proxy) : "No video found with that id" / timeouts
+#   * multiup.us (netu) : ad-wall redirector, no static stream + movie entries
+#     are short codes, not URLs
+#   * bysesayeveum.com (filemoon "Byse Frontend" SPA) : client-side rendered,
+#     no static stream to extract — same for the kokoflix chamber_go.php
+#     endpoint, which always lands on that SPA (tokyo_go→dood and
+#     rosewood_go→voe are both supported, chamber_go never is)
+_DEAD_PLAYER_HOSTS = ("trakx.lol", "multiup.us", "multiup.io", "bysesayeveum.com")
+_DEAD_PLAYER_PATHS = ("chamber_go.php",)
+
+
+def _is_usable_player_link(link: str) -> bool:
+    """True if a player link is a fetchable http(s) URL on a live host."""
+    if not link or not isinstance(link, str):
+        return False
+    low = link.lower()
+    if not (low.startswith("http://") or low.startswith("https://")):
+        return False  # e.g. netu short codes
+    if any(h in low for h in _DEAD_PLAYER_HOSTS):
+        return False
+    return not any(p in low for p in _DEAD_PLAYER_PATHS)
+
+
 def search(query: str) -> list[SearchResult]:
     page_search = "/engine/ajax/search.php"
 
@@ -215,6 +240,8 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
 
     for player_name, player_links in movie_info["players"].items():
         for lang, link in player_links.items():
+            if not _is_usable_player_link(link):
+                continue  # dead host (trakx/netu) or non-URL code
             players.append(Player(player_name + " " + lang, link))
 
     return FrenchStreamMovie(title, url, img, genres, players)
@@ -261,6 +288,8 @@ def get_episodes_from_lang(lang: str, serie_info: dict):
     for number, players_raw in episodes_raw.items():
         players: list[Player] = []
         for player_name, link in players_raw.items():
+            if not _is_usable_player_link(link):
+                continue  # dead host (trakx/netu) or non-URL code
             players.append(Player(player_name, link))
 
         episode = Episode(f"Episode {number}", players)

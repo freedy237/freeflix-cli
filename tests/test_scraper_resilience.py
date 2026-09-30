@@ -291,10 +291,197 @@ class TestPlayerResilience:
         finally:
             player_mod._get = original_get
 
+    def test_default_extractor_falls_back_to_raw_html(self):
+        """ansembed (2026): la page ship un payload packé + un bloc JWPlayer en
+        clair. packer.unpack() jette le bloc en clair, donc le code
+        déobfusqué ne contient plus l'URL — l'extracteur doit retomber sur le
+        HTML brut au lieu de retourner None."""
+        from freeflix_cli.scraping import player as player_mod
+        page = """<html><head><title>ansembed</title></head><body>
+<script>eval(function(p,a,c,k,e,d){return 'unpacked without stream url'})</script>
+<script>var playerInstance = player.setup({
+sources: [{ file: 'https://prx-ps-a-1.vmpx.online/hls2/01/02915/x0m0qz3h132d_,n,l,.urlset/master.m3u8?t=abc&s=123' }],
+});</script>
+</body></html>"""
+        original_get = player_mod._get
+        original_deobfuscate = player_mod.deobfuscate
+        player_mod._get = lambda url, **kw: _mock_response(page)
+        # Simule le drop observé en prod : l'unpack ne garde que le payload.
+        player_mod.deobfuscate = lambda code: "unpacked without stream url"
+        try:
+            result = player_mod.get_hls_link_default(
+                "https://ansembed.net/embed-x0m0qz3h132d.html", {}
+            )
+            assert result == (
+                "https://prx-ps-a-1.vmpx.online/hls2/01/02915/"
+                "x0m0qz3h132d_,n,l,.urlset/master.m3u8?t=abc&s=123"
+            )
+        finally:
+            player_mod._get = original_get
+            player_mod.deobfuscate = original_deobfuscate
+
+    def test_dood_pass_md5_flow(self):
+        """DoodStream : page /e/ -> token pass_md5 -> URL mp4 directe."""
+        from freeflix_cli.scraping import player as player_mod
+        page = """<html><body><script>$.get('/pass_md5/abc-123/tokenxyz',
+function(data) { dpload(data); });</script></body></html>"""
+        calls = []
+
+        def fake_get(url, **kw):
+            calls.append(url)
+            if "pass_md5" in url:
+                return _mock_response("https://cdn.example.com/vid/x.mp4?token=t")
+            return _mock_response(page)
+
+        original_get = player_mod._get
+        player_mod._get = fake_get
+        try:
+            result = player_mod.get_hls_link_dood("https://playmogo.com/e/kgbwsacgucje", {})
+            assert result == "https://cdn.example.com/vid/x.mp4?token=t"
+            assert any("pass_md5" in u for u in calls)
+        finally:
+            player_mod._get = original_get
+
+    def test_dood_no_token_returns_none(self):
+        from freeflix_cli.scraping import player as player_mod
+        original_get = player_mod._get
+        player_mod._get = lambda url, **kw: _mock_response(NO_OG_TITLE)
+        try:
+            assert player_mod.get_hls_link_dood("https://playmogo.com/e/abc", {}) is None
+        finally:
+            player_mod._get = original_get
+
+    def test_voe_substitution_decode(self):
+        """Voe/luluvdo : le packer à substitution de mots se décode en pur."""
+        from freeflix_cli.scraping.player import _voe_substitution_decode
+        # c.toString(36) : 10 -> 'a', 11 -> 'b' ; table remplace a->HI, b->BYE
+        table = [""] * 10 + ["HI", "BYE"]
+        assert _voe_substitution_decode("a b a", 36, table) == "HI BYE HI"
+
+    def test_voe_extractor_decodes_packed_setup(self):
+        from freeflix_cli.scraping import player as player_mod
+        page = """<html><body><script>eval(function(p,a,c,k,e,d){while(c--)if(k[c])p=p.replace(
+new RegExp('\\\\b'+c.toString(a)+'\\\\b','g'),k[c]);return p}('0 1:{2:"3"}',36,4,'file|var|sources|https://cdn.example.com/v/master.m3u8'.split('|')))</script>
+</body></html>"""
+        original_get = player_mod._get
+        player_mod._get = lambda url, **kw: _mock_response(page)
+        try:
+            result = player_mod.get_hls_link_voe("https://luluvdo.com/e/abc123", {})
+            assert result == "https://cdn.example.com/v/master.m3u8"
+        finally:
+            player_mod._get = original_get
+
+    def test_lulust_routes_to_voe_extractor(self):
+        """French-Anime 'luluvid' tourne entre luluvdo.com et lulust.com :
+        les deux doivent être supportés et décodés comme voe."""
+        from freeflix_cli.scraping import player as player_mod
+        assert player_mod.is_supported("https://luluvdo.com/e/abc123")
+        assert player_mod.is_supported("https://lulust.com/e/abc123")
+        assert player_mod.players["lulust"]["type"] == "voe"
+
+    def test_kokoflix_dispatches_on_final_host(self):
+        """kokoflix : suit la redirection puis dispatche sur l'hôte final."""
+        from freeflix_cli.scraping import player as player_mod
+        resp = _mock_response("<html></html>")
+        resp.url = "https://playmogo.com/e/kgbwsacgucje"
+        original_get = player_mod._get
+        original_link = player_mod.get_hls_link
+        seen = []
+        player_mod._get = lambda url, **kw: resp
+        player_mod.get_hls_link = lambda url, headers=None: seen.append(url) or "FINAL"
+        try:
+            assert player_mod.get_hls_link_kokoflix(
+                "https://kokoflix.lol/tokyo_go.php?id=x", {}) == "FINAL"
+            assert seen == ["https://playmogo.com/e/kgbwsacgucje"]
+        finally:
+            player_mod._get = original_get
+            player_mod.get_hls_link = original_link
+
+    def test_default_extractor_prefers_deobfuscated_code(self):
+        """Le fallback brut ne doit pas écraser le comportement historique :
+        quand le code déobfusqué contient l'URL, c'est lui qui gagne."""
+        from freeflix_cli.scraping import player as player_mod
+        page = """<html><body><script>var x = 1;</script>
+<script>file: 'https://raw.example.com/vid/master.m3u8'</script></body></html>"""
+        original_get = player_mod._get
+        original_deobfuscate = player_mod.deobfuscate
+        player_mod._get = lambda url, **kw: _mock_response(page)
+        player_mod.deobfuscate = lambda code: "file: 'https://unpacked.example.com/vid/master.m3u8'"
+        try:
+            result = player_mod.get_hls_link_default("https://example.com/e/abc.html", {})
+            assert result == "https://unpacked.example.com/vid/master.m3u8"
+        finally:
+            player_mod._get = original_get
+            player_mod.deobfuscate = original_deobfuscate
+
 
 # ======================================================================
 # French-Stream: _get() gère maintenant le challenge fsschal
 # ======================================================================
+
+
+class TestFrenchStreamPlayerFilter:
+    """Lecteurs morts (trakx/dood/voe/netu) exclus, vivants gardés."""
+
+    def _mock_json(self, payload: dict):
+        resp = _mock_response("")
+        resp.json = lambda: payload
+        return resp
+
+    def test_is_usable_player_link(self):
+        from freeflix_cli.scraping.french_stream import _is_usable_player_link
+        assert _is_usable_player_link("https://fsvid.lol/embed-a.html")
+        assert _is_usable_player_link("https://vidzy.cc/embed-b.html")
+        assert _is_usable_player_link("https://uqload.vc/embed-c.html")
+        assert not _is_usable_player_link("https://trakx.lol/sydney/newPlayer.php?id=x")
+        assert not _is_usable_player_link("https://trakx.lol/d00d//newPlayer.php?id=y")
+        assert not _is_usable_player_link("https://1.multiup.us/e/xyz")
+        assert not _is_usable_player_link(
+            "https://kokoflix.lol/chamber_go.php?id=x")  # Byse SPA, cul-de-sac
+        assert _is_usable_player_link(
+            "https://kokoflix.lol/rosewood_go.php?id=x")  # voe, supporté
+        assert not _is_usable_player_link("BafWadqiVSI2")  # netu code, pas une URL
+        assert not _is_usable_player_link("")
+        assert not _is_usable_player_link(None)
+
+    def test_get_movie_drops_dead_players(self):
+        from freeflix_cli.scraping import french_stream
+        payload = {"players": {
+            "premium": {"vf": "https://fsvid.lol/embed-a.html"},
+            "voe": {"vf": "https://trakx.lol/sydney/newPlayer.php?id=x"},
+            "dood": {"vf": "https://trakx.lol/d00d//newPlayer.php?id=y"},
+            "netu": {"vf": "BafWadqiVSI2"},
+        }}
+        orig = french_stream._get
+        french_stream._get = lambda url, **kw: self._mock_json(payload)
+        try:
+            movie = french_stream.get_movie("https://french-stream.net/1022-x.html", "")
+            names = [p.name for p in movie.players]
+            assert any("premium" in n for n in names)
+            assert not any("voe" in n or "dood" in n or "netu" in n for n in names)
+        finally:
+            french_stream._get = orig
+
+    def test_get_series_season_drops_dead_players(self):
+        from freeflix_cli.scraping import french_stream
+        payload = {
+            "vf": {"1": {
+                "premium": "https://fsvid.lol/embed-a.html",
+                "voe": "https://trakx.lol/sydney/newPlayer.php?id=x",
+                "netu": "https://1.multiup.us/e/xyz",
+            }},
+            "vostfr": {},
+            "vo": {},
+        }
+        orig = french_stream._get
+        french_stream._get = lambda url, **kw: self._mock_json(payload)
+        try:
+            season = french_stream.get_series_season(
+                "https://french-stream.net/9561-x.html", "")
+            names = [p.name for p in season.episodes["vf"][0].players]
+            assert names == ["premium"]
+        finally:
+            french_stream._get = orig
 
 
 class TestFrenchStreamGetFsschal:

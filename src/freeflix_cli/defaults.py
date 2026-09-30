@@ -110,7 +110,7 @@ DEFAULT_PLAYERS = {
     "kakaflix": {"type": "kakaflix"},
     # "myvidplay": {"type": "myvidplay", "referrer": "https://myvidplay.com/"},
     # ansembed.net — Anime-Sama's own embed (JWPlayer). The real stream is a
-    # plain vmget.online HLS (fsvid family, NOT Akamai), served only with the
+    # plain vmpx.online HLS (fsvid family, NOT Akamai), served only with the
     # embed's Origin+Referer. This is the player that actually works for recent
     # episodes (One Piece, Mushoku Tensei…) where embed4me now hits Akamai.
     "ansembed": {
@@ -129,6 +129,16 @@ DEFAULT_PLAYERS = {
     "coflix.upn": {"type": "embed4me"},
     "veev": {"type": "veev", "ext": "mp4"},
     "xtremestream": {"type": "xtremestream"},
+    # french-stream's kokoflix.lol proxy : *_go.php?id=… 302-redirects to the
+    # real mirror (playmogo/dood, luluvdo/voe, …) which is then dispatched
+    # on its final host.
+    "kokoflix": {"type": "kokoflix"},
+    # DoodStream mirrors (playmogo.com…) : /e/ page + pass_md5 AJAX token.
+    "playmogo": {"type": "dood", "ext": "mp4"},
+    # Voe mirrors (luluvdo.com, lulust.com…) : word-substitution packed
+    # JWPlayer setup. French-Anime's "luluvid" player rotates between them.
+    "luluvdo": {"type": "voe"},
+    "lulust": {"type": "voe"},
 
 }
 

@@ -150,6 +150,11 @@ def get_season(url: str) -> SamaSeason:
             continue
         response.raise_for_status()
 
+        # Season announced but not yet published (episodes.js is empty,
+        # e.g. `//`) — skip instead of crashing in parse_episodes_from_js.
+        if "var eps" not in response.text:
+            continue
+
         episodes[lang_code] = parse_episodes_from_js(response.text)
         valid_lang.append(lang_code)
 

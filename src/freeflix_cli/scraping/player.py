@@ -107,9 +107,18 @@ def get_hls_link_default(url: str, headers: dict) -> str:
 
     response.raise_for_status()
 
-    code = deobfuscate(response.text)
-
-    return extract_hls_url(code)
+    try:
+        code = deobfuscate(response.text)
+    except Exception:
+        code = None
+    link = extract_hls_url(code) if code else None
+    if not link:
+        # Plain (non-packed) embeds keep the stream URL in the raw HTML —
+        # e.g. ansembed's JWPlayer `sources: [{file: '…master.m3u8…'}]` block,
+        # which packer.unpack() drops when the page also ships a packed
+        # payload. Fall back to the raw page before giving up.
+        link = extract_hls_url(response.text)
+    return link
 
 
 def get_hls_link_embed4me(embed_url: str) -> str:
@@ -648,6 +657,133 @@ def get_hls_link_xtremestream(url, headers):
     return f"https://{url_root}/player/xs1.php?data={data_id}"
 
 
+def get_hls_link_dood(url: str, headers: dict) -> str | None:
+    """
+    DoodStream mirrors (playmogo.com, doodstream mirrors reached via
+    french-stream's kokoflix proxy).
+
+    The /e/ page embeds a same-origin token path which the player fetches
+    via AJAX (``$.get('/pass_md5/<token>')``) ; that endpoint answers the
+    DIRECT mp4 URL as plain text. Reproduce both calls with the browser's
+    headers (Referer + X-Requested-With).
+    """
+    h = dict(headers or {})
+    try:
+        host = url.split("/")[2]
+    except Exception:
+        return None
+    h.setdefault("Referer", f"https://{host}/")
+    resp = _get(url, headers=h, impersonate="chrome")
+    try:
+        resp.raise_for_status()
+    except Exception:
+        return None
+    m = re.search(r"/pass_md5/[^\"'\s]*", resp.text or "")
+    if not m:
+        return None
+    h2 = dict(h)
+    h2["X-Requested-With"] = "XMLHttpRequest"
+    try:
+        r2 = _get(f"https://{host}" + m.group(0), headers=h2,
+                  impersonate="chrome")
+        r2.raise_for_status()
+    except Exception:
+        return None
+    link = (r2.text or "").strip()
+    return link if link.startswith("http") else None
+
+
+def _voe_substitution_decode(payload: str, radix: int, table: list) -> str:
+    """Emulate the voe/luluvdo packer loop :
+    ``while(c--)if(k[c])p=p.replace(new RegExp('\\\\b'+c.toString(a)+'\\\\b','g'),k[c])``.
+    Pure (no network) : testable.
+    """
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+    def _to_base(n: int) -> str:
+        if n == 0:
+            return "0"
+        out = ""
+        while n:
+            out = digits[n % radix] + out
+            n //= radix
+        return out
+
+    p = payload or ""
+    c = len(table)
+    while c:
+        c -= 1
+        if c < len(table) and table[c]:
+            p = re.sub(r"\b" + _to_base(c) + r"\b", table[c], p)
+    return p
+
+
+def get_hls_link_voe(url: str, headers: dict) -> str | None:
+    """
+    Voe mirrors (luluvdo.com, reached via french-stream's kokoflix proxy).
+
+    The /e/ page ships the JWPlayer setup with the stream URL hidden behind
+    a word-substitution packer (``eval(function(p,a,c,k,e,d){while(c--)…})``).
+    Decode it and pull the m3u8/mp4 out of the ``sources`` block.
+    """
+    h = dict(headers or {})
+    try:
+        host = url.split("/")[2]
+    except Exception:
+        return None
+    h.setdefault("Referer", f"https://{host}/")
+    resp = _get(url, headers=h, impersonate="chrome")
+    try:
+        resp.raise_for_status()
+    except Exception:
+        return None
+    body = resp.text or ""
+    i = body.find("eval(function(p,a,c,k,e,d)")
+    if i < 0:
+        return extract_hls_url(body)
+    m = re.search(r"\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)",
+                  body[i:i + 20000], re.DOTALL)
+    if not m:
+        return extract_hls_url(body)
+    try:
+        radix = int(m.group(2))
+    except ValueError:
+        return extract_hls_url(body)
+    decoded = _voe_substitution_decode(m.group(1), radix, m.group(4).split("|"))
+    for pat in (
+        r'file\s*:\s*"([^"]+\.m3u8[^"]*)"',
+        r'file\s*:\s*"([^"]+\.mp4[^"]*)"',
+    ):
+        f = re.search(pat, decoded)
+        if f:
+            return f.group(1)
+    return extract_hls_url(decoded) or extract_hls_url(body)
+
+
+def get_hls_link_kokoflix(url: str, headers: dict) -> str | None:
+    """
+    french-stream's kokoflix.lol proxy (``*_go.php?id=…``).
+
+    The endpoint 302-redirects to the real mirror embed (playmogo/dood,
+    luluvdo/voe, bysesayeveum/filemoon…). Follow the redirect and dispatch
+    on the FINAL host so each mirror uses its own extractor. Loops back to
+    kokoflix (or unknown hosts) → None.
+    """
+    h = dict(headers or {})
+    h.setdefault("Referer", "https://french-stream.net/")
+    try:
+        resp = _get(url, headers=h, impersonate="chrome")
+        resp.raise_for_status()
+    except Exception:
+        return None
+    final = str(getattr(resp, "url", "") or "")
+    if not final or "kokoflix" in final.lower():
+        return None
+    if final == url:
+        return None
+    return get_hls_link(final, h)
+
+
 def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
     """
     fsvid.lol / vidzy.org (french-stream's "premium" host).
@@ -815,6 +951,12 @@ def get_hls_link(url: str, headers: dict = None) -> str | None:
                 link = get_hls_link_xtremestream(url, headers)
             elif parse_type == "fsvid":
                 link = get_hls_link_fsvid(url, headers)
+            elif parse_type == "dood":
+                link = get_hls_link_dood(url, headers)
+            elif parse_type == "voe":
+                link = get_hls_link_voe(url, headers)
+            elif parse_type == "kokoflix":
+                link = get_hls_link_kokoflix(url, headers)
 
             # Some hosts (e.g. french-stream's fsvid.lol) serve an anti-scraper
             # DECOY stream — a "troll" placeholder video — to non-browser
