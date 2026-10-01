@@ -14,20 +14,7 @@ DEFAULT_PLAYERS = {
     "gradehgplus": {"type": "default"},
     "taylorplayer": {"type": "default"},
     "vidmoly": {"type": "vidmoly"},
-    # "oneupload": {"type": "default"},
     "tipfly": {"type": "default"},
-    # "luluvdoo": {
-    #     "type": "b",
-    #     "sec_headers": "Sec-Fetch-Dest:empty;Sec-Fetch-Mode:cors;Sec-Fetch-Site:cross-site",
-    # },
-    # "luluvdo": {
-    #     "type": "b",
-    #     "sec_headers": False,
-    # },
-    # "lulustream": {
-    #     "type": "b",
-    #     "sec_headers": "Sec-Fetch-Dest:empty;Sec-Fetch-Mode:cors;Sec-Fetch-Site:cross-site",
-    # },
     "ups2up": {"type": "default"},
     "ico3c": {"type": "default"},
     "fsvid": {"type": "fsvid", "referrer": "https://fsvid.lol"},
@@ -108,7 +95,6 @@ DEFAULT_PLAYERS = {
         "no-header": True,
     },
     "kakaflix": {"type": "kakaflix"},
-    # "myvidplay": {"type": "myvidplay", "referrer": "https://myvidplay.com/"},
     # ansembed.net — Anime-Sama's own embed (JWPlayer). The real stream is a
     # plain vmpx.online HLS (fsvid family, NOT Akamai), served only with the
     # embed's Origin+Referer. This is the player that actually works for recent
@@ -160,7 +146,6 @@ DEFAULT_NEW_URL = {
 DEFAULT_KAKAFLIX_PLAYERS = {
     "moon2": "ico3c",
     "viper": "ico3c",
-    # "tokyo": "myvidplay"
 }
 
 DEFAULT_SOURCE_PORTAL = {

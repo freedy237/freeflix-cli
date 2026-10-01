@@ -486,7 +486,7 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
     if not console.is_terminal:
         return subprocess.run(cmd, env=env).returncode
 
-    state = {"line": "", "tail": [], "done": False}
+    state = {"line": "", "done": False}
 
     def _reader(proc):
         buf = b""
@@ -502,9 +502,6 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
                     s = raw.decode("utf-8", "replace").strip()
                     if not s:
                         continue
-                    state["tail"].append(s)
-                    if len(state["tail"]) > 10:
-                        state["tail"].pop(0)
                     # Keep ONLY progress-bearing lines as the "current" line.
                     # aria2c prints each "[#… (X%) … DL:…]" line inside a
                     # multi-line summary block (… / FILE:/ ---- / blank), and

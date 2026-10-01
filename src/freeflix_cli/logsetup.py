@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
-import os
 import sys
 from pathlib import Path
 
@@ -79,19 +78,11 @@ def _stderr_debug():
     _logger.addHandler(sh)
 
 
-def is_verbose() -> bool:
-    return os.environ.get("FREEFLIX_VERBOSE") == "1"
-
-
 def log(msg: str, level: int = logging.INFO):
     try:
         _logger.log(level, msg)
     except Exception:
         pass
-
-
-def debug(msg):
-    log(str(msg), logging.DEBUG)
 
 
 def warning(msg):

@@ -513,43 +513,6 @@ class ProgressTracker:
     def is_episode_watched(self, key: str) -> bool:
         return key in self.data.get("watched_episodes", [])
 
-    # --- Portal URL Cache (avoids re-resolving on every launch) ---
-
-    def get_portal_cache(self, name: str, ttl_hours: int = 24) -> Optional[str]:
-        """Return a cached portal URL if still fresh, else None."""
-        cache = self.data.get("portal_cache", {})
-        entry = cache.get(name)
-        if not entry:
-            return None
-        try:
-            ts = datetime.fromisoformat(entry["ts"])
-        except (KeyError, ValueError, TypeError):
-            return None
-        age_hours = (datetime.now() - ts).total_seconds() / 3600
-        if age_hours > ttl_hours:
-            return None
-        return entry.get("url")
-
-    def set_portal_cache(self, name: str, url: str):
-        if "portal_cache" not in self.data:
-            self.data["portal_cache"] = {}
-        self.data["portal_cache"][name] = {
-            "url": url,
-            "ts": datetime.now().isoformat(),
-        }
-        self._save_data()
-
-    def clear_portal_cache(self, name: Optional[str] = None):
-        if "portal_cache" not in self.data:
-            return
-        if name is None:
-            self.data["portal_cache"] = {}
-        else:
-            self.data["portal_cache"].pop(name, None)
-        self._save_data()
-
-
-
     def get_anilist_mapping(
         self, provider: str, series_title: str, season_title: Optional[str] = None
     ) -> Optional[int]:

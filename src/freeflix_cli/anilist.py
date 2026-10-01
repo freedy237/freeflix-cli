@@ -89,29 +89,7 @@ class AniListClient:
             return data["Page"]["media"]
         return []
 
-    def get_media_status(self, media_id: int, user_id: int) -> Optional[Dict[str, Any]]:
-        """Get the user's current status for a specific media."""
-        query = """
-        query ($mediaId: Int, $userId: Int) {
-            MediaList(mediaId: $mediaId, userId: $userId) {
-                id
-                status
-                progress
-                score
-            }
-        }
-        """
-        variables = {"mediaId": media_id, "userId": user_id}
-        # Note: MediaList returns 404/null if not found, we need to handle that gracefully
-        try:
-            data = self._query(
-                query, variables
-            )  # This might fail if not found depending on API behavior
-            if data:
-                return data.get("MediaList")
-        except Exception:
-            pass
-        return None
+
 
     def update_progress(self, media_id: int, progress: int) -> bool:
         """Update the progress for a media item. Also sets status to CURRENT if not already."""

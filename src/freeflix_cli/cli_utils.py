@@ -273,7 +273,7 @@ def disable_terminal_reports():
 # ─── Breadcrumb trail (1.8) ────────────────────────────────────────────
 # A tiny global stack rendered above every menu :
 #   🏠 Home › Anime-Sama › Naruto › Season 2
-# Handlers call crumb_reset()/crumb_push()/crumb_pop() at each level, so the
+# Handlers call crumb_reset()/crumb_push() at each level, so the
 # user always knows where they are and what Esc will go back to.
 _crumbs: list = []
 
@@ -286,11 +286,6 @@ def crumb_reset(*labels):
 def crumb_push(label):
     if label:
         _crumbs.append(str(label))
-
-
-def crumb_pop():
-    if _crumbs:
-        _crumbs.pop()
 
 
 def crumbs_text() -> str:

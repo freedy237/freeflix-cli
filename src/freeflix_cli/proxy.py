@@ -225,14 +225,6 @@ def _reset_session():
     _thread_local.session = None
 
 
-def create_session(headers_dict=None):
-    """Back-compat shim : some callers still expect a fresh session."""
-    session = _build_session()
-    if headers_dict:
-        session.headers.update(headers_dict)
-    return session
-
-
 def _upstream_total(resp, start_offset: int):
     """Total bytes we still expect to receive from *resp* (from Content-Range
     or Content-Length), or None if unknown."""
@@ -395,194 +387,15 @@ def resilient_body(url, base_headers, start_offset=0, first_resp=None,
             time.sleep(1.0)
 
 
-# ── Completed-segment disk cache (LRU) ────────────────────────────────
-# fetch_segment buffers a whole segment then, before this, threw it away. When
-# mpv re-requests the SAME segment (seek-back, or after a 502) it had to be
-# re-downloaded in full. This caps a small on-disk LRU of completed segments so
-# those re-requests are near-free. Keyed by the exact segment URL (tokens and
-# all), so it only ever returns byte-identical data. Best-effort: any I/O error
-# just behaves as a miss.
-class _SegmentCache:
-    def __init__(self, max_mb: float = 200.0):
-        self.max_bytes = int(max_mb * 1024 * 1024)
-        self._lock = threading.Lock()
-        self._dir = None
-
-    def _ensure_dir(self):
-        if self._dir is None:
-            try:
-                from platformdirs import user_cache_dir
-                import os
-                d = os.path.join(user_cache_dir("freeflix-cli", "PaulExplorer"), "segments")
-                os.makedirs(d, exist_ok=True)
-                self._dir = d
-            except Exception:
-                self._dir = ""
-        return self._dir
-
-    def _path(self, url: str):
-        import hashlib
-        import os
-        d = self._ensure_dir()
-        if not d:
-            return None
-        return os.path.join(d, hashlib.sha256(url.encode("utf-8")).hexdigest() + ".seg")
-
-    def get(self, url: str):
-        p = self._path(url)
-        if not p:
-            return None
-        try:
-            import os
-            with open(p, "rb") as f:
-                data = f.read()
-            os.utime(p, None)  # bump mtime → most-recently-used
-            return data
-        except OSError:
-            return None
-
-    def put(self, url: str, data: bytes):
-        p = self._path(url)
-        if not p or not data:
-            return
-        try:
-            import os
-            tmp = p + ".tmp"
-            with open(tmp, "wb") as f:
-                f.write(data)
-            os.replace(tmp, p)
-        except OSError:
-            return
-        self._evict()
-
-    def _evict(self):
-        import os
-        with self._lock:
-            try:
-                files = []
-                total = 0
-                for name in os.listdir(self._dir):
-                    fp = os.path.join(self._dir, name)
-                    try:
-                        st = os.stat(fp)
-                    except OSError:
-                        continue
-                    files.append((st.st_mtime, st.st_size, fp))
-                    total += st.st_size
-                if total <= self.max_bytes:
-                    return
-                for _mtime, size, fp in sorted(files):  # oldest first
-                    if total <= self.max_bytes:
-                        break
-                    try:
-                        os.remove(fp)
-                        total -= size
-                    except OSError:
-                        pass
-            except OSError:
-                pass
-
-    def clear(self):
-        import os
-        d = self._ensure_dir()
-        if not d:
-            return
-        try:
-            for name in os.listdir(d):
-                try:
-                    os.remove(os.path.join(d, name))
-                except OSError:
-                    pass
-        except OSError:
-            pass
-
-
-_segment_cache = _SegmentCache()
-
-
-def fetch_segment(url, base_headers, budget=120.0):
-    """
-    Download a WHOLE HLS segment into memory — resuming on a stall (HTTP Range)
-    and re-resolving on an expired token — and return ``(ok, data)``.
-
-    ``ok`` is True only when the segment is COMPLETE. A partial / failed segment
-    returns ``(False, b"")`` so /ts can answer 502 and let the player re-request
-    it. This is the crux of the A/V-sync fix : mpv must never receive a
-    truncated segment (a half-segment desyncs audio from video), so we buffer +
-    verify the whole thing before sending a single byte.
-
-    A completed segment is cached on disk (LRU) so an identical re-request
-    (seek-back, or a retry after a 502) is served instantly without re-download.
-    """
-    cached = _segment_cache.get(url)
-    if cached is not None:
-        return True, cached
-
-    buf = bytearray()
-    sent = 0
-    total = None
-    refresh_tries = 0
-    last_progress = time.time()
-
-    while True:
-        if time.time() - last_progress > budget:
-            return False, b""
-        h = dict(base_headers or {})
-        if sent:
-            h["Range"] = f"bytes={sent}-"
-        try:
-            resp = get_session().request("GET", url, headers=h, stream=True, timeout=60)
-        except Exception:
-            _reset_session()
-            time.sleep(0.5)
-            continue
-
-        st = getattr(resp, "status_code", 0)
-        if st in (401, 403, 410):
-            fresh = _refreshed_url(url)
-            if fresh and fresh != url and refresh_tries < 4:
-                refresh_tries += 1
-                url = fresh
-                time.sleep(0.3)
-                continue
-            return False, b""
-        if st == 404:
-            return False, b""
-        if st == 200 and sent > 0:
-            # Server ignored our Range → it's resending from the start ; drop
-            # what we had and take the full body cleanly (no duplication).
-            buf = bytearray()
-            sent = 0
-            total = None
-        if st not in (200, 206):
-            time.sleep(0.5)
-            continue
-        if total is None:
-            total = _upstream_total(resp, 0)
-
-        try:
-            for chunk in resp.iter_content():
-                if chunk:
-                    buf += chunk
-                    sent += len(chunk)
-                    add_bytes(len(chunk))
-                    last_progress = time.time()
-            # Upstream ended : complete if we reached the known size (or size
-            # unknown but a clean EOF).
-            if total is None or sent >= total:
-                data = bytes(buf)
-                _segment_cache.put(url, data)
-                return True, data
-            # Short read → loop and resume from `sent`.
-        except Exception:
-            _reset_session()
-            time.sleep(0.5)
-
-
 def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3,
-                     client_range=None):
+                     client_range=None, _max_hops=3):
     """Request with retries, reusing the thread-local session. *client_range*
-    (the player's Range header) is forwarded when present (MP4 seeking)."""
+    (the player's Range header) is forwarded when present (MP4 seeking).
+
+    Redirects are followed MANUALLY (≤3 sauts) : chaque hop est re-soumis au
+    garde SSRF, sinon une cible publique qui 302 vers l'interne contournerait
+    le contrôle initial (fonctionne partout : Windows, Linux, macOS).
+    """
     attempt = 0
     while attempt < max_retries:
         try:
@@ -1033,12 +846,6 @@ def _run_server(port):
 
 def start_proxy_server(port=0):
     global PROXY_PORT, PROXY_URL
-    # Fresh session: drop any completed segments left over from a previous run
-    # (a crash could leave stale files); the cap keeps it bounded during play.
-    try:
-        _segment_cache.clear()
-    except Exception:
-        pass
     if port == 0:
         port = find_free_port()
     PROXY_PORT = port
@@ -1048,10 +855,6 @@ def start_proxy_server(port=0):
     t.daemon = True
     t.start()
     return port
-
-
-# Back-compat alias (older code / tests referenced run_flask).
-run_flask = _run_server
 
 
 def ensure_started(port=0, wait=5.0):

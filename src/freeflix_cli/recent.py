@@ -30,10 +30,6 @@ def get_items() -> list:
     return list(_state["items"])
 
 
-def is_ready() -> bool:
-    return _state["ready"]
-
-
 def _fetch():
     items = []
     try:

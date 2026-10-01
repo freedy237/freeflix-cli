@@ -50,12 +50,6 @@ _selectors: dict[str, dict[str, list[str]]] = {
 _lock = threading.Lock()
 
 
-def selectors(source: str) -> dict[str, list[str]]:
-    """Selector table for *source* (live, with any remote overrides applied)."""
-    with _lock:
-        return dict(_selectors.get(source, {}))
-
-
 def get(source: str, key: str, default: list[str] | None = None) -> list[str]:
     """Ordered list of CSS selectors for (source, key)."""
     with _lock:

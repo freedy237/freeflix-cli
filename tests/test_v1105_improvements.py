@@ -4,7 +4,6 @@ proxy segment cache, and the smooth progress bar."""
 import hashlib
 import os
 import time
-from pathlib import Path
 
 import pytest
 
@@ -79,28 +78,6 @@ def test_httpcache_prune_enforces_size_cap(tmp_path, monkeypatch):
     removed = httpcache.prune(max_age_s=10_000_000, max_mb=2.0)
     assert removed >= 1
     assert not (tmp_path / "0.json").exists()  # oldest gone first
-
-
-# ── Proxy completed-segment cache ─────────────────────────────────────
-def test_segment_cache_roundtrip(tmp_path, monkeypatch):
-    from freeflix_cli import proxy
-    cache = proxy._SegmentCache(max_mb=1.0)
-    cache._dir = str(tmp_path)
-    url = "https://cdn.example/seg1.ts?token=abc"
-    assert cache.get(url) is None
-    cache.put(url, b"SEGMENTDATA")
-    assert cache.get(url) == b"SEGMENTDATA"
-
-
-def test_segment_cache_evicts_over_cap(tmp_path):
-    from freeflix_cli import proxy
-    cache = proxy._SegmentCache(max_mb=0.002)  # ~2 KB cap
-    cache._dir = str(tmp_path)
-    cache.put("u1", b"a" * 1500)
-    time.sleep(0.01)
-    cache.put("u2", b"b" * 1500)  # total 3 KB > 2 KB → oldest (u1) evicted
-    assert cache.get("u1") is None
-    assert cache.get("u2") is not None
 
 
 # ── Smooth progress bar ───────────────────────────────────────────────

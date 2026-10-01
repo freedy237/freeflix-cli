@@ -2,11 +2,10 @@
 Launch splash screen — ASCII art logo coloured with the active theme.
 """
 
-import time
 from rich.align import Align
 from rich.text import Text
 
-from .cli_utils import console, clear_screen
+from .cli_utils import console
 from .themes import color
 
 # FreeFlix wordmark (ANSI Shadow style).
@@ -46,24 +45,4 @@ def tagline_text(width: int = None) -> Text:
     return Text(tag, style=color("info"))
 
 
-def show_splash(version: str = "", duration: float = 1.2):
-    """
-    Render the logo centered, themed, with a tagline + version, then
-    pause briefly. Skipped silently on tiny terminals.
-    """
-    try:
-        w, h = console.size.width, console.size.height
-        if h < 10 or w < 26:
-            return  # genuinely too small — don't garble the screen
 
-        clear_screen()
-        console.print()
-        console.print(logo_renderable(w, h))
-        console.print(Align.center(tagline_text(w)))
-        if version:
-            console.print(Align.center(Text(f"v{version}", style=color("dim"))))
-        console.print()
-        time.sleep(duration)
-    except Exception:
-        # Never let the splash block startup.
-        pass
