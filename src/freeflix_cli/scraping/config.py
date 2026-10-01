@@ -50,19 +50,27 @@ if _local_portals:
     portals.update(_local_portals)
 
 
+import threading as _threading  # noqa: E402 (deliberate late import — order matters)
+
+_portals_lock = _threading.Lock()
+
+
 def _refresh_remote_portals():
-    remote = load_remote_jsonc(REMOTE_CONFIG_URL, None)
+    try:
+        remote = load_remote_jsonc(REMOTE_CONFIG_URL, None)
+    except Exception:
+        return
     if not remote:
         return
     merged = dict(DEFAULT_SOURCE_PORTAL)
     merged.update(remote)
     if _local_portals:
         merged.update(_local_portals)  # local stays the final word
-    portals.clear()
-    portals.update(merged)
+    # Jamais de dict vu vide par un lecteur concurrent (KeyError transitoire).
+    with _portals_lock:
+        portals.clear()
+        portals.update(merged)
 
-
-import threading as _threading  # noqa: E402 (deliberate late import — order matters)
 
 _threading.Thread(target=_refresh_remote_portals, daemon=True).start()
 

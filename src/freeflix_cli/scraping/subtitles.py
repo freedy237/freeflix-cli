@@ -29,8 +29,6 @@ class SubtitleExtractor:
             data = response.json()
             return data.get("subtitles", [])
         except Exception:
-            # Uncomment for debugging:
-            # print(f"Subtitles Error ({base_url}): {e}")
             # In library mode, we stay discreet about network errors
             return []
 
@@ -40,8 +38,9 @@ class SubtitleExtractor:
         base_url = "https://opensubtitles-v3.strem.io"
         subs = self._fetch_stremio(base_url, imdb_id, season, episode)
         for s in subs:
-            s["source"] = "OpenSubtitles (Stremio)"
-        return subs
+            if isinstance(s, dict):
+                s["source"] = "OpenSubtitles (Stremio)"
+        return [s for s in subs if isinstance(s, dict)]
 
     def get_opensubtitles_ai(self, imdb_id, season=None, episode=None):
         """OpenSubtitles via AI-translated Stremio bridge."""
@@ -49,8 +48,9 @@ class SubtitleExtractor:
         base_url = "https://opensubtitles.stremio.homes/en%7Cfr%7Chi%7Cde%7Car%7Ctr%7Ces%7Cta%7Cte%7Cru%7Cko/ai-translated=true%7Cfrom=all%7Cauto-adjustment=true"
         subs = self._fetch_stremio(base_url, imdb_id, season, episode)
         for s in subs:
-            s["source"] = "OpenSubtitles (AI)"
-        return subs
+            if isinstance(s, dict):
+                s["source"] = "OpenSubtitles (AI)"
+        return [s for s in subs if isinstance(s, dict)]
 
     def get_subsense(self, imdb_id, season=None, episode=None):
         """Subsense via Stremio bridge (French support included)."""
@@ -61,8 +61,9 @@ class SubtitleExtractor:
         base_url = f"https://subsense.nepiraw.com/{config}"
         subs = self._fetch_stremio(base_url, imdb_id, season, episode)
         for s in subs:
-            s["source"] = "Subsense"
-        return subs
+            if isinstance(s, dict):
+                s["source"] = "Subsense"
+        return [s for s in subs if isinstance(s, dict)]
 
     def get_wyzie(self, imdb_id, season=None, episode=None):
         """WYZIE Subtitles API."""
@@ -109,17 +110,35 @@ class SubtitleExtractor:
             aliases = get_language_aliases()
             target = aliases.get(f, f)
 
+            import re as _re
+
+            def _lang_ok(lg: str) -> bool:
+                # Match sur mots entiers + préfixe de codes 2 lettres :
+                # "en" ne matche plus "french", mais "eng"/"fra" passent.
+                toks = set(_re.findall(r"[a-z]+", (lg or "").lower()))
+                if f in toks or target in toks:
+                    return True
+                for code in (f, target):
+                    if len(code) == 2 and any(
+                        len(t) > 2 and t.startswith(code) for t in toks
+                    ):
+                        return True
+                return False
+
             filtered = []
             for sub in all_subs:
-                lg = (sub.get("lang") or sub.get("lang_code") or "").lower()
-                if target in lg or lg in target or (len(f) == 2 and lg.startswith(f)):
+                if not isinstance(sub, dict):
+                    continue
+                lg = sub.get("lang") or sub.get("lang_code") or ""
+                if _lang_ok(lg):
                     filtered.append(sub)
             all_subs = filtered
 
         # 2. Sort by source priority (OpenSubs > WYZIE > Subsense)
         # First shuffle to have a random order between links from the same source
         random.shuffle(all_subs)
-        all_subs.sort(key=lambda x: self.SOURCE_PRIORITY.get(x["source"], 99))
+        all_subs.sort(key=lambda x: self.SOURCE_PRIORITY.get(
+            x.get("source") if isinstance(x, dict) else None, 99))
         return all_subs
 
 

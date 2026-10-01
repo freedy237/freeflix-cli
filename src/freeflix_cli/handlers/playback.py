@@ -58,10 +58,12 @@ def _search_subtitle(series_title, season_title, episode_title):
 
     season = episode = None
     if not is_movie:
-        m = _re.search(r"(\d+)", episode_title or "")
-        episode = int(m.group(1)) if m else 1
-        m2 = _re.search(r"(\d+)", season_title or "")
-        season = int(m2.group(1)) if m2 else 1
+        # Dernier nombre du titre d'épisode (pas le premier : "Top 10 Ep 5"
+        # → 5, pas 10), idem saison.
+        m = _re.findall(r"(\d+)", episode_title or "")
+        episode = int(m[-1]) if m else 1
+        m2 = _re.findall(r"(\d+)", season_title or "")
+        season = int(m2[-1]) if m2 else 1
 
     try:
         with spinner(t("Searching for subtitles…")):
@@ -75,10 +77,14 @@ def _search_subtitle(series_title, season_title, episode_title):
         print_warning(t("No subtitles found."))
         return None
 
-    choices = [f"{s['source']} - {s.get('lang', lang)}" for s in subs[:6]] + [t("None")]
+    subs = [s for s in (subs or []) if isinstance(s, dict) and s.get("url")]
+    if not subs:
+        print_warning(t("No subtitles found."))
+        return None
+    choices = [f"{s.get('source', '?')} - {s.get('lang', lang)}" for s in subs[:6]] + [t("None")]
     idx = select_from_list(choices, f"{icon('subtitle')} {t('Select Subtitle:')}")
     if idx < len(subs[:6]):
-        print_info(f"{t('Selected subtitle from:')} {subs[idx]['source']}")
+        print_info(f"{t('Selected subtitle from:')} {subs[idx].get('source', '?')}")
         return subs[idx]["url"]
     return None
 
@@ -393,10 +399,16 @@ def _download_one_episode(
         return False
 
     # Move preferred player to the front so it is tried first.
+    # Comparaison insensible à la casse/espaces : les noms varient selon
+    # les épisodes ("Premium" vs "premium"), sinon le préféré est raté.
     if preferred_player:
-        preferred = [p for p in supported_players if p.name == preferred_player]
+        want = str(preferred_player).strip().lower()
+        preferred = [p for p in supported_players
+                     if str(getattr(p, "name", "")).strip().lower() == want]
         if preferred:
-            supported_players = preferred + [p for p in supported_players if p.name != preferred_player]
+            rest = [p for p in supported_players
+                    if str(getattr(p, "name", "")).strip().lower() != want]
+            supported_players = preferred + rest
 
     print_info(f"{icon('download')} {label} — {t('starting download')}")
 
@@ -558,12 +570,17 @@ def download_episodes_batch(
                 )
                 time.sleep(0.08)
 
-        for fut, episode in futures:
+        # Compté par LABEL unique ("[n/N] titre"), pas par titre : deux
+        # épisodes homonymes n'écrasent plus leurs résultats mutuellement.
+        ok_by_label: dict = {}
+        for n, (fut, episode) in enumerate(futures):
             try:
-                results[episode.title] = fut.result()
+                ok_by_label[labels[n]] = bool(fut.result())
             except Exception:
-                results[episode.title] = False
+                ok_by_label[labels[n]] = False
 
-    succeeded = sum(1 for v in results.values() if v)
+    succeeded = sum(1 for v in ok_by_label.values() if v)
+    for n, (i, ep) in enumerate(sel):
+        results[ep.title] = ok_by_label[labels[n]]
     print_info(f"Batch complete: {succeeded}/{total} episodes downloaded.")
     return results

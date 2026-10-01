@@ -38,7 +38,34 @@ from .. import cloudflare  # noqa: E402 (deliberate late import — order matter
 
 def _get(url, **kw):
     """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade), per thread."""
+    kw.setdefault("timeout", 20)  # un host mort ne doit jamais geler l'UI
     return cloudflare.cf_get(_scraper(), url, **kw)
+
+
+def _url_host(url: str) -> str:
+    """Hostname minuscule d'une URL, "" si inparsable (jamais d'exception)."""
+    try:
+        return (urllib.parse.urlparse(url or "").hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _host_matches(host: str, key: str) -> bool:
+    """La clé matche-t-elle ce hostname, alignée aux labels DNS ?
+    Évite les faux positifs de substring (book.ru ne matche PAS ok.ru),
+    tout en gardant les préfixes (fsvid ↔ fsvid.lol) et suffixes
+    multi-labels (x.coflix.upn ↔ coflix.upn)."""
+    if not host or not key:
+        return False
+    key = key.lower()
+    if host == key:
+        return True
+    labels = host.split(".")
+    if key in labels:
+        return True
+    if host.startswith(key + ".") or host.endswith("." + key):
+        return True
+    return False
 
 # vidmoly's live domain is .net ; .to is a PARKED ad domain, .biz/.me are 404.
 _VIDMOLY_FIX = {
@@ -92,7 +119,7 @@ def get_hls_link_default(url: str, headers: dict) -> str:
     """
     cfg = _get_apc() or {}
 
-    use_headers = headers
+    use_headers = headers = headers or {}
     if cfg.get("m3u8-extractor"):
         if cfg.get("m3u8-extractor").get("no-header"):
             use_headers = {}
@@ -154,7 +181,10 @@ def get_hls_link_embed4me(embed_url: str) -> str:
         return None
 
     video_id = match.group(1)
-    url_root = "https://" + embed_url.split("/")[2]
+    url_host = _url_host(embed_url)
+    if not url_host:
+        return None
+    url_root = "https://" + url_host
     api_url = f"{url_root}/api/v1/video?id={video_id}&w=1920&h=1080&r={url_root}"
 
     headers = {"Referer": url_root}
@@ -167,8 +197,14 @@ def get_hls_link_embed4me(embed_url: str) -> str:
         hex_data = hex_data[1:-1]
 
     decrypted = _decrypt_data(hex_data)
-
-    data = json.loads(decrypted)
+    if not decrypted:
+        return None
+    try:
+        data = json.loads(decrypted)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
 
     # Legacy layout : a direct {"source": "…m3u8"}.
     source = data.get("source")
@@ -232,10 +268,8 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     # uqload rotates its domain (uqload.is / .vc / .cx…). Use the EMBED's own
     # host for the Referer instead of a hardcoded one, so a domain change
     # doesn't break extraction — and the token the CDN signs matches.
-    try:
-        host = url.split("/")[2]
-    except IndexError:
-        host = "uqload.vc"
+    host = _url_host(url) or "uqload.vc"
+    headers = headers or {}
     response = _get(
         url.replace("embed-", ""),
         headers={**headers, "Referer": f"https://{host}/"},
@@ -388,6 +422,7 @@ def get_hls_link_filemoon(url: str, headers: dict) -> str:
         return None
 
     code = url.split("/")[-1]
+    headers = headers or {}
     try:
         response = _get(
             "https://9n8o.com/api/videos/" + code + "/embed/playback",
@@ -471,7 +506,12 @@ def get_hls_link_kakaflix(url: str, headers: dict) -> str:
     try:
         link: str = soup.find("iframe").attrs["src"]
     except Exception:
-        return get_hls_link(response.url, headers)
+        # Pas d'iframe : ne re-dispatch que si l'URL a changé (redirect vers
+        # un autre host), sinon récursion infinie garantie sur le même host.
+        final = str(getattr(response, "url", "") or "")
+        if not final or _url_host(final) == _url_host(url):
+            return None
+        return get_hls_link(final, headers)
     else:
         return get_hls_link(link, headers)
 
@@ -494,9 +534,12 @@ def get_hls_link_myvidplay(url: str, headers: dict) -> str:
     )
     response.raise_for_status()
 
-    link = response.text.split("vtt: '")[1].split("'")[0]
+    try:
+        link = response.text.split("vtt: '")[1].split("'")[0]
+    except IndexError:
+        return None
 
-    return link
+    return link or None
 
 
 def get_hls_link_vidmoly(url: str, headers: dict) -> str:
@@ -515,7 +558,7 @@ def get_hls_link_vidmoly(url: str, headers: dict) -> str:
     }
 
     # Merge but prioritize our specific headers
-    final_headers = {**headers, **vidmoly_headers}
+    final_headers = {**(headers or {}), **vidmoly_headers}
     # Ensure Referer is actually removed if we mapped it to empty string/None
     if "Referer" in final_headers and not final_headers["Referer"]:
         del final_headers["Referer"]
@@ -635,7 +678,8 @@ def get_hls_link_veev(url):
             continue
 
         # Kotlin equivalent: .getJSONObject(0).getString("s")
-        dv_string = dv_list[0].get("s")
+        first = dv_list[0]
+        dv_string = first.get("s") if isinstance(first, dict) else None
 
         if not dv_string:
             continue
@@ -651,8 +695,15 @@ def get_hls_link_veev(url):
 
 
 def get_hls_link_xtremestream(url, headers):
-    data_id = url.split("?data=")[1]
-    url_root = url.removeprefix("https://").removesuffix("http://").split("/")[0]
+    try:
+        data_id = url.split("?data=")[1].split("&")[0].split("#")[0]
+    except IndexError:
+        return None
+    if not data_id:
+        return None
+    url_root = _url_host(url)
+    if not url_root:
+        return None
 
     return f"https://{url_root}/player/xs1.php?data={data_id}"
 
@@ -918,9 +969,16 @@ def get_hls_link(url: str, headers: dict = None) -> str | None:
         HLS/video stream URL if successful, None otherwise
     """
     headers = headers or {}
+    # Matching sur le HOSTNAME aligné aux labels : matcher en substring sur
+    # l'URL complète prenait des faux positifs (book.ru → ok.ru,
+    # ?ref=sibnet, /veev/ tiers).
+    host = _url_host(url)
+    if not host:
+        _set_apc(None)
+        return None
     # Find matching player and parse accordingly
     for player_name, config in players.items():
-        if player_name in url.lower():
+        if _host_matches(host, player_name):
             _set_apc(config)
             parse_type = config["type"]
 
@@ -978,14 +1036,17 @@ def is_supported(url: str) -> bool:
     Returns:
         True if the player is supported, False otherwise
     """
-    for player in players.keys():
-        if "kakaflix" in url.lower():
-            for player in kakaflix_players.keys():
-                if player in url.lower():
-                    return True
-            return False
+    host = _url_host(url)
+    if not host:
+        return False
+    if _host_matches(host, "kakaflix"):
+        for sub in kakaflix_players.keys():
+            if _host_matches(host, sub):
+                return True
+        return False
 
-        elif player in url.lower():
+    for player in players.keys():
+        if _host_matches(host, player):
             return True
 
     return False

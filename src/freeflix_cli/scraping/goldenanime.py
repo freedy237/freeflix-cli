@@ -162,7 +162,14 @@ class AnimeExtractor:
 
             results = []
             for src in sources:
-                url = src.get("sourceUrl")
+                if not isinstance(src, dict):
+                    continue  # un miroir malformé ne jette plus les autres
+                try:
+                    url = src.get("sourceUrl")
+                except AttributeError:
+                    continue
+                if not url:
+                    continue
                 if url.startswith("--"):
                     url = self._decrypt_allanime(url)
 
@@ -192,14 +199,15 @@ class AnimeExtractor:
             # 1. Search. anizone migrated to a Livewire app : the search
             #    is /anime?search=… and result links are now ABSOLUTE with
             #    short opaque slugs (…/anime/bmwdgxhk), not title slugs.
+            from urllib.parse import quote as _quote
             r = _get(
-                f"{base_url}/anime?search={title}",
+                f"{base_url}/anime?search={_quote(title)}",
                 headers=self.headers,
                 timeout=10,
             )
 
             slugs = re.findall(
-                r'href="' + re.escape(base_url) + r'/anime/([a-z0-9]+)"',
+                r'href="(?:' + re.escape(base_url) + r')?/anime/([A-Za-z0-9_-]+)"',
                 r.text,
             )
             # de-dupe, keep order
@@ -248,20 +256,26 @@ class AnimeExtractor:
             # Find match by title or anilist_id
             gojo_id = None
             for item in results:
-                if item.get("anilist_id") == anilist_id:
-                    gojo_id = item["id"]
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("anilist_id")) == str(anilist_id):
+                    gojo_id = item.get("id")
                     break
 
             if not gojo_id and results:
                 # Fallback to title match
                 t_lower = title.lower().strip()
                 for item in results:
+                    if not isinstance(item, dict):
+                        continue
                     titles = item.get("title", {})
+                    if not isinstance(titles, dict):
+                        continue
                     if (
                         t_lower in (titles.get("english") or "").lower()
                         or t_lower in (titles.get("romaji") or "").lower()
                     ):
-                        gojo_id = item["id"]
+                        gojo_id = item.get("id")
                         break
 
             if not gojo_id:
@@ -276,7 +290,11 @@ class AnimeExtractor:
             servers_data = r.json()
 
             results = []
+            if not isinstance(servers_data, list):
+                return results
             for server_obj in servers_data:
+                if not isinstance(server_obj, dict):
+                    continue
                 server_id = server_obj.get("id")
                 if not server_id:
                     continue
@@ -343,8 +361,10 @@ class AnimeExtractor:
         # Simple deduplication by URL
         unique = {}
         for r in results:
-            if r["url"] not in unique:
-                unique[r["url"]] = r
+            u = r.get("url") if isinstance(r, dict) else None
+            if not u or u in unique:
+                continue
+            unique[u] = r
         return list(unique.values())
 
 

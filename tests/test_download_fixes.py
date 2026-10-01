@@ -2,10 +2,7 @@
 
 import os
 import shutil
-import tempfile
-from pathlib import Path
 
-import pytest
 
 from freeflix_cli.player_manager import (
     clean_season_title,
@@ -121,3 +118,58 @@ class TestStableTempDir:
         assert _sanitize_filename("   ") == "video"
         assert "?" not in _sanitize_filename("bad?name")
         assert "/" not in _sanitize_filename("a/b")
+
+
+class TestDownloadQualityHeights:
+    """Le choix batch 2160/480/360… est honoré, plus seulement 1080/720/480."""
+
+    def test_roundtrip_any_height(self):
+        from freeflix_cli.tracker import tracker
+        old = tracker.get_download_quality()
+        try:
+            for q in ("2160", "1440", "480", "360", "1080", "720"):
+                tracker.set_download_quality(q)
+                assert tracker.get_download_quality() == q
+            tracker.set_download_quality("1080p")
+            assert tracker.get_download_quality() == "1080"
+            tracker.set_download_quality("nimporte-quoi")
+            assert tracker.get_download_quality() == "auto"
+        finally:
+            tracker.set_download_quality(old)
+
+
+class TestStableTempSubfolder:
+    """Deux saisons aux mêmes noms d'épisodes ne mélangent plus .temp."""
+
+    def test_subfolder_namespaces(self):
+        d1 = _stable_temp_dir("Episode_1", "Serie A - S1")
+        d2 = _stable_temp_dir("Episode_1", "Serie B - S1")
+        d3 = _stable_temp_dir("Episode_1", "Serie A - S1")
+        assert d1 != d2
+        assert d1 == d3  # déterministe → resume intact
+        shutil.rmtree(d1, ignore_errors=True)
+        shutil.rmtree(d2, ignore_errors=True)
+
+    def test_no_subfolder_unchanged(self):
+        d1 = _stable_temp_dir("Episode_1")
+        d2 = _stable_temp_dir("Episode_1")
+        assert d1 == d2
+        shutil.rmtree(d1, ignore_errors=True)
+
+
+class TestIsAlreadyDownloaded:
+    """Extensions +.avi/.mov/.m4v et comparaison insensible à la casse."""
+
+    def test_case_and_extra_exts(self, tmp_path, monkeypatch):
+        import freeflix_cli.player_manager as pm
+        monkeypatch.setattr(pm, "DOWNLOAD_DIR", str(tmp_path))
+        pm._invalidate_download_index()
+        (tmp_path / "Show - Ep1.MP4").write_bytes(b"x")
+        (tmp_path / "Show - Ep2.avi").write_bytes(b"x")
+        (tmp_path / "other.txt").write_bytes(b"x")
+        try:
+            assert pm.is_already_downloaded("show - ep1") is True
+            assert pm.is_already_downloaded("Show - Ep2") is True
+            assert pm.is_already_downloaded("Show - Ep3") is False
+        finally:
+            pm._invalidate_download_index()

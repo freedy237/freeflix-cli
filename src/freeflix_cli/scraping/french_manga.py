@@ -36,35 +36,53 @@ def _ajax_headers():
     }
 
 
+def _post(url, data=None, **kw):
+    """POST avec les headers cf_clearance éventuels (sinon Cloudflare 403
+    → recherche vide sans diagnostic)."""
+    base_headers = kw.pop("headers", {})
+    try:
+        cf = cloudflare.get_cf_headers(url)
+        headers = {**cf, **base_headers} if cf else dict(base_headers)
+    except Exception:
+        headers = dict(base_headers)
+    kw.setdefault("timeout", 15)
+    return scraper.post(url, data=data, headers=headers, **kw)
+
+
 def search(query: str) -> list:
     """Search via the DLE ajax endpoint. Returns a list of SearchResult."""
     try:
-        r = scraper.post(
+        r = _post(
             f"{website_origin}/engine/ajax/search.php",
             data={"query": query},
             headers=_ajax_headers(),
-            timeout=15,
         )
+        r.raise_for_status()
     except Exception:
         return []
 
+    from .utils import parse_html
     results = []
-    # Each card : <div class='search-item' onclick="location.href='/NNN-…html'">
-    #   <div class='search-poster'><img src='https://image.tmdb.org/…'></div>
-    #   <div class='search-info'><div class='search-title'>Title (Year)</div>
-    for m in re.finditer(
-        r"location\.href='([^']+)'(.*?)search-title[^>]*>([^<]+)",
-        r.text,
-        re.DOTALL,
-    ):
-        url, mid, title = m.group(1), m.group(2), m.group(3).strip()
+    # Par carte (BeautifulSoup) plutôt qu'une regex DOTALL inter-cartes qui
+    # mélangeait les posters quand une carte n'avait pas de titre.
+    soup = parse_html(r.text)
+    for card in soup.find_all("div", {"class": "search-item"}):
+        onclick = card.attrs.get("onclick", "")
+        m = re.search(r"location\.href='([^']+)'", onclick)
+        if not m:
+            continue
+        url = m.group(1)
         if not url.startswith("http"):
             url = website_origin + url
+        title_tag = card.find("div", {"class": "search-title"})
+        title = title_tag.get_text(strip=True) if title_tag else ""
+        if not title:
+            continue
         # Pull the card's poster (TMDB thumbnail) so the preview pane has a cover.
         img = ""
-        im = re.search(r"<img[^>]+src=['\"]([^'\"]+)", mid)
-        if im:
-            img = im.group(1)
+        img_tag = card.find("img")
+        if img_tag:
+            img = img_tag.attrs.get("src", "") or ""
             if img.startswith("//"):
                 img = "https:" + img
             elif img.startswith("/"):
@@ -157,7 +175,7 @@ def get_episodes(url: str) -> dict:
             players = [
                 Player(host, embed)
                 for host, embed in players_dict.items()
-                if embed
+                if isinstance(embed, str) and embed.strip()
             ]
             if players:
                 out[lang][ep_num] = players

@@ -430,11 +430,13 @@ class ProgressTracker:
     # --- Download Quality Preference ---
 
     def get_download_quality(self) -> str:
-        """One of: 'auto', '1080', '720', '480'. Defaults to 'auto'."""
+        """'auto' ou une hauteur en px ('1080', '720', '480', '2160'…).
+        Defaults to 'auto'."""
         return self.data.get("download_quality", "auto")
 
     def set_download_quality(self, q: str):
-        if q not in ("auto", "1080", "720", "480"):
+        q = str(q or "auto").strip().lower().removesuffix("p")
+        if q != "auto" and not (q.isdigit() and 144 <= int(q) <= 4320):
             q = "auto"
         self.data["download_quality"] = q
         self._save_data()

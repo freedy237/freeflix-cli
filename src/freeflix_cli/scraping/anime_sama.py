@@ -73,7 +73,7 @@ def get_website_url(portal=portals["anime-sama"]):
     soup = parse_html(response.text)
 
     btn = soup.find("a", {"class": "btn-primary"})
-    recommanded_url = btn.attrs["href"] if btn else base
+    recommanded_url = (btn.attrs.get("href") if btn else None) or base
 
     # Resolve the final mirror (follows redirects). cf_get already follows them,
     # so response.url is the settled origin.
@@ -86,7 +86,8 @@ def get_website_url(portal=portals["anime-sama"]):
 
 
 def search(query: str) -> list[SearchResult]:
-    page = website_origin + f"/catalogue/?search={query}"
+    import urllib.parse as _up
+    page = website_origin + f"/catalogue/?search={_up.quote(query)}"
 
     response = _get(page, cache_ttl=1800)
     response.raise_for_status()
@@ -98,9 +99,13 @@ def search(query: str) -> list[SearchResult]:
     # Selectors are hot-patchable via the remote selectors.jsonc (see
     # scraping.resilient) — a layout change on Anime-Sama can be fixed for
     # everyone without a release. The [0] default mirrors today's behavior.
-    container_css = resilient.get("anime-sama", "search_container", ["#list_catalog"])[0]
-    card_css = resilient.get("anime-sama", "search_card", ["div.card-content"])[0]
-    info_css = resilient.get("anime-sama", "search_info", ["p.info-value"])[0]
+    def _css(key: str, default: str) -> str:
+        vals = resilient.get("anime-sama", key, [default])
+        return vals[0] if vals else default  # remote [] corrompu → défaut
+
+    container_css = _css("search_container", "#list_catalog")
+    card_css = _css("search_card", "div.card-content")
+    info_css = _css("search_info", "p.info-value")
 
     result_container = soup.select_one(container_css)
 
@@ -119,6 +124,8 @@ def search(query: str) -> list[SearchResult]:
             if not link_tag:
                 continue
             url: str = link_tag.attrs.get("href", "")
+            if url and not url.startswith("http"):
+                url = website_origin.rstrip("/") + "/" + url.lstrip("/")
             img_tag = link_tag.img
             img: str = img_tag.attrs.get("src", "") if img_tag else ""
             info_block = result.select_one(card_css)
@@ -141,21 +148,38 @@ lang_codes = ["vostfr", "vf", "vj", "vcn", "vqc", "vkr", "va", "vf1", "vf2"]
 def get_season(url: str) -> SamaSeason:
     episodes: dict[str, list[Episode]] = {}
     valid_lang = []
+    # Ne remplace que le SEGMENT de langue final (…/saison1/vostfr/) : un
+    # replace("vostfr") aveugle dupliquait toutes les langues quand l'URL
+    # d'entrée était déjà en vf, et corrompait les slugs contenant "vostfr".
+    m = re.search(r"/(vostfr|vf|vj|vcn|vqc|vkr|va|vf1|vf2)/?$", url)
+    base = url[:m.start()] if m else url.rstrip("/")
+    seen_stable = set()
     for lang_code in lang_codes:
-        stable = url.replace("vostfr", lang_code).removesuffix("/") + "/episodes.js"
+        stable = base + f"/{lang_code}/episodes.js"
+        if stable in seen_stable:
+            continue
+        seen_stable.add(stable)
         nurl = stable + f"?filever={randint(1, 100000)}"
-        response = _get(nurl, cache_ttl=3600, cache_key=stable)
-
+        try:
+            response = _get(nurl, cache_ttl=3600, cache_key=stable)
+        except Exception:
+            continue
         if response.status_code == 404:
             continue
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except Exception:
+            continue  # une langue en 500/403 n'aborte plus toute la saison
 
         # Season announced but not yet published (episodes.js is empty,
         # e.g. `//`) — skip instead of crashing in parse_episodes_from_js.
-        if "var eps" not in response.text:
+        if "var eps" not in (response.text or ""):
             continue
 
-        episodes[lang_code] = parse_episodes_from_js(response.text)
+        parsed = parse_episodes_from_js(response.text)
+        if not parsed:
+            continue
+        episodes[lang_code] = parsed
         valid_lang.append(lang_code)
 
     # Clean up the title based on the URL
@@ -163,9 +187,8 @@ def get_season(url: str) -> SamaSeason:
     # Take the second to last element if the url ends with the language, otherwise adjust according to structure
     name = parts[-2].title() if len(parts) >= 2 else "Unknown"
 
-    num = "0123456789"
-    for char in num:
-        name = name.replace(char, " " + char)
+    # Espace entre lettres et groupes de chiffres : "Saison 10", pas "Saison 1 0".
+    name = re.sub(r"(?<=[^\W\d_])(\d+)", r" \1", name)
 
     return SamaSeason(name, url, valid_lang, episodes)
 
@@ -224,9 +247,6 @@ def get_series(url: str) -> SamaSeries:
 
 
 if __name__ == "__main__":
-    # print(search("one piece"))
-    # print(get_series("https://anime-sama.fr/catalogue/bofuri/"))
-    # print(get_season("https://anime-sama.fr/catalogue/hunter-x-hunter/saison1/vostfr/"))
     print(
         get_season(
             "https://anime-sama.fr/catalogue/le-chateau-dans-le-ciel/film/vostfr"

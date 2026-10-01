@@ -57,6 +57,9 @@ _resolve_lock = _threading.Lock()
 _RESOLVE_TTL = 90.0
 
 
+_prefetch_inflight: set = set()  # urls avec un prefetch déjà en cours
+
+
 def prefetch_stream(url: str, headers: dict) -> None:
     """Resolve *url*'s stream in a daemon thread and cache it. Best-effort."""
     if not url:
@@ -65,6 +68,9 @@ def prefetch_stream(url: str, headers: dict) -> None:
         ent = _resolve_cache.get(url)
         if ent and time.time() - ent[1] < _RESOLVE_TTL:
             return  # already warm
+        if url in _prefetch_inflight:
+            return  # un thread le résout déjà
+        _prefetch_inflight.add(url)
 
     def _work():
         try:
@@ -74,6 +80,9 @@ def prefetch_stream(url: str, headers: dict) -> None:
                     _resolve_cache[url] = (s, time.time())
         except Exception:
             pass
+        finally:
+            with _resolve_lock:
+                _prefetch_inflight.discard(url)
 
     _threading.Thread(target=_work, name="freeflix-prefetch", daemon=True).start()
 
@@ -317,9 +326,20 @@ def _probe_stream(stream_url: str, headers: dict,
         # Plain GET (HLS playlists — incl. .txt / .urlset masters — are
         # small text files ; we already skipped obvious direct video files
         # by extension above). A non-stream GET is reliable ; curl_cffi's
-        # stream=True + early break can hang.
+        # stream=True + early break can hang. Garde-fou : si le serveur
+        # annonce > 2 Mo c'est une vidéo directe sans extension, pas une
+        # playlist — on ne la charge pas en RAM.
+        try:
+            _h = sess.head(stream_url, headers=headers or {}, timeout=12)
+            _cl = _h.headers.get("Content-Length") or _h.headers.get("content-length")
+            if _cl is not None and int(_cl) > _PROBE_MAX_BYTES:
+                return result
+        except Exception:
+            pass
         r = sess.get(stream_url, headers=headers or {}, timeout=12)
         text = r.text or ""
+        if len(text) > _PROBE_MAX_BYTES:
+            return result
 
         if r.status_code != 200:
             hl = text[:1500].lower()
@@ -378,6 +398,29 @@ def _probe_stream(stream_url: str, headers: dict,
                 sess.close()
             except Exception:
                 pass
+
+
+_PROBE_MAX_BYTES = 2_000_000  # une playlist HLS fait des Ko, jamais des Mo
+
+
+def _safe_probe_text(sess, url: str, headers: dict, timeout: int = 12) -> str | None:
+    """GET capé pour les sondes : HEAD d'abord (skip si > max), sinon GET.
+    Évite de charger des Go en RAM quand l'URL est une vidéo directe sans
+    extension. Fail-open : en cas de doute on tente le GET normal."""
+    try:
+        h = sess.head(url, headers=headers or {}, timeout=timeout)
+        cl = h.headers.get("Content-Length") or h.headers.get("content-length")
+        if cl is not None and int(cl) > _PROBE_MAX_BYTES:
+            return None
+    except Exception:
+        pass
+    try:
+        text = sess.get(url, headers=headers or {}, timeout=timeout).text or ""
+    except Exception:
+        return None
+    if len(text) > _PROBE_MAX_BYTES:
+        return None
+    return text
 
 
 def _prompt_hls_quality(variants: list):
@@ -553,13 +596,17 @@ def estimate_episode_seconds(info: dict) -> float | None:
         # Reuse this thread's persistent session (don't close it — it's shared).
         sess = shared_session()
         headers = info.get("probe_headers") or {}
-        text = sess.get(media_url, headers=headers, timeout=10).text or ""
+        text = _safe_probe_text(sess, media_url, headers, timeout=10)
+        if text is None:
+            return None
         # If we landed on a master, descend into its first media playlist.
         if "#EXT-X-STREAM-INF" in text:
             obj = _m3u8.loads(text, uri=media_url)
             if obj.playlists:
                 media_url = obj.playlists[0].absolute_uri
-                text = sess.get(media_url, headers=headers, timeout=10).text or ""
+                text = _safe_probe_text(sess, media_url, headers, timeout=10)
+                if text is None:
+                    return None
         total = 0.0
         for line in text.splitlines():
             if line.startswith("#EXTINF:"):
@@ -779,13 +826,19 @@ def handle_player_error(context: str = "player") -> int:
     )
 
 
-def _stable_temp_dir(safe_title: str) -> str:
+def _stable_temp_dir(safe_title: str, subfolder: str = None) -> str:
     """
     Return a *deterministic* temp dir for download fragments, enabling
     yt-dlp resume on re-launch. The directory is **hidden** (``.temp/``)
     so it never shows up in My Downloads.
+
+    Namespacé par subfolder : deux saisons avec les mêmes noms d'épisodes
+    (ex. deux "Episode 1" en batch parallèle) ne mélangent plus fragments
+    ni resume-meta. Déterministe → le resume inter-sessions survit.
     """
-    d = os.path.join(TEMP_DIR, safe_title)
+    key = safe_title if not subfolder else (
+        _sanitize_filename(subfolder) + "__" + safe_title)
+    d = os.path.join(TEMP_DIR, key[:200])
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -1180,21 +1233,28 @@ def _download_stream(
     safe_title = _sanitize_filename(title)
     out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
                if subfolder else DOWNLOAD_DIR)
-    os.makedirs(out_dir, exist_ok=True)
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        print_error(f"Cannot write to download folder {out_dir}: {e}")
+        return False
     _sweep_download_litter()  # clear any old fragment clutter up front
 
     url_lower = stream_url.lower()
-    is_hls = ".m3u8" in url_lower or (not is_mp4 and ".mp4" not in url_lower)
+    _direct_exts = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")
+    is_hls = ".m3u8" in url_lower or (not is_mp4 and not url_lower.split("?")[0].endswith(_direct_exts))
 
     backend_name = None
     cmd = None
     frag_tmp = None  # temp dir for fragments / partial file (kept out of Downloads)
     needs_move = False  # True when the finished file must be moved temp → out_dir
 
-    # Use user-selected quality from probe, or fall back to tracker default
+    # Use user-selected quality from probe, or fall back to tracker default.
+    # Toute hauteur numérique est honorée (2160/1440/480/360…), pas seulement
+    # le trio historique — sinon le choix batch était silencieusement ignoré.
     quality_str = str(quality) if quality else tracker.get_download_quality()
     format_arg = None
-    if quality_str in ("1080", "720", "480"):
+    if quality_str.isdigit() and 144 <= int(quality_str) <= 4320:
         format_arg = (
             f"bv*[height<={quality_str}]+ba/b[height<={quality_str}]/bv*+ba/b"
         )
@@ -1218,7 +1278,7 @@ def _download_stream(
         # Fragments + the .part go to a STABLE hidden temp dir that
         # survives interruptions — yt-dlp finds its .ytdl state on
         # re-launch and resumes where it left off.
-        frag_tmp = _stable_temp_dir(safe_title)
+        frag_tmp = _stable_temp_dir(safe_title, subfolder)
         backend_name = "yt-dlp (16 fragments)"
         cmd = [
             ytdlp,
@@ -1252,7 +1312,7 @@ def _download_stream(
             # dropped connection never leaves a half-finished .mp4 in the user's
             # folder. The finished file is moved to out_dir only on success
             # (--continue=true + the .aria2 control file resume the same partial).
-            frag_tmp = _stable_temp_dir(safe_title)
+            frag_tmp = _stable_temp_dir(safe_title, subfolder)
             needs_move = True
             cmd = [
                 aria,
@@ -1281,7 +1341,7 @@ def _download_stream(
             backend_name = "yt-dlp"
             # Same idea: the .part lives in temp, the final file lands in out_dir
             # only when complete (yt-dlp renames atomically on success).
-            frag_tmp = _stable_temp_dir(safe_title)
+            frag_tmp = _stable_temp_dir(safe_title, subfolder)
             cmd = [
                 ytdlp,
                 "--no-warnings",
@@ -1380,6 +1440,17 @@ def _download_stream(
             print_success(f"Subtitle saved: {final_sub}")
         except Exception as e:
             print_info(f"Could not save subtitle next to video: {e}")
+        finally:
+            # Les sous-titres téléchargés en temp (freeflix_sub_*) ne doivent
+            # pas s'accumuler dans /tmp d'une lecture à l'autre.
+            try:
+                base = os.path.basename(local_subtitle_path)
+                tmpd = os.path.realpath(tempfile.gettempdir())
+                if base.startswith("freeflix_sub_") and os.path.realpath(
+                        local_subtitle_path).startswith(tmpd + os.sep):
+                    os.unlink(local_subtitle_path)
+            except OSError:
+                pass
 
     print_success(f"Download completed in {out_dir}")
     _invalidate_download_index()  # new file → refresh badges immediately
@@ -1421,9 +1492,10 @@ def is_already_downloaded(title: str, subfolder: str = None) -> bool:
     """
     out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
                if subfolder else DOWNLOAD_DIR)
-    base = _sanitize_filename(title)
-    names = _downloaded_names(out_dir)
-    return any(base + ext in names for ext in (".mp4", ".mkv", ".webm"))
+    base = _sanitize_filename(title).lower()
+    names = {n.lower() for n in _downloaded_names(out_dir)}
+    return any(base + ext in names
+               for ext in (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v"))
 
 
 def _refresh_stream_url(u: str, h: dict):
@@ -1475,6 +1547,7 @@ def play_video(
 
     output_suppressed = getattr(_suppress_print, "active", False)
 
+    headers = headers or {}
     if not output_suppressed:
         print_info(f"Resolving stream for: [cyan]{url}[/cyan]")
 
@@ -1538,6 +1611,11 @@ def play_video(
 
             r = requests.get(subtitle_url, timeout=10, impersonate="chrome")
             content = r.content
+            if len(content or b"") > 5 * 1024 * 1024:
+                raise ValueError("subtitle file too large (>5 MB)")
+            head = (content[:512] or b"").lower()
+            if b"<html" in head or b"<!doctype" in head:
+                raise ValueError("subtitle URL returned an HTML page, not subtitles")
             sub_ext = ".vtt" if "vtt" in subtitle_url.lower() else ".srt"
             # Many subtitle hosts (OpenSubtitles & co, used by GoldenAnime)
             # serve the .srt GZIPPED or inside a ZIP — writing the raw bytes
@@ -1675,6 +1753,7 @@ def play_video(
 
         # --- 1. Preparation of Headers & Referer for both players ---
         # Calculate Referer
+        domain = ""
         if not is_direct:
             try:
                 domain = url.split("/")[2].lower()
@@ -1994,10 +2073,12 @@ def play_video(
                 # Proxy mode : show live data usage and the total at the end.
                 if ipc_monitor:
                     ipc_monitor.start()
-                _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
-                if ipc_monitor:
-                    ipc_monitor.stop()
-                    _LAST_PLAYBACK["finished"] = ipc_monitor.finished_naturally()
+                try:
+                    _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
+                finally:
+                    if ipc_monitor:
+                        ipc_monitor.stop()
+                        _LAST_PLAYBACK["finished"] = ipc_monitor.finished_naturally()
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
                 print_success(t("Playback completed successfully!"))
@@ -2031,7 +2112,10 @@ def play_video(
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
                     # MPV Command construction
-                    origin_domain = referer.split('/')[2] if referer else ""
+                    try:
+                        origin_domain = referer.split('/')[2] if referer else ""
+                    except IndexError:
+                        origin_domain = ""
                     headers_mpv = f"Origin: https://{origin_domain}" if origin_domain else ""
                     add_default_sec_headers = False
 
@@ -2075,10 +2159,12 @@ def play_video(
                     cmd.append(stream_url)
                     if ipc_mon_d:
                         ipc_mon_d.start()
-                    subprocess.run(cmd, check=True, env=_nvidia_env())
-                    if ipc_mon_d:
-                        ipc_mon_d.stop()
-                        _LAST_PLAYBACK["finished"] = ipc_mon_d.finished_naturally()
+                    try:
+                        subprocess.run(cmd, check=True, env=_nvidia_env())
+                    finally:
+                        if ipc_mon_d:
+                            ipc_mon_d.stop()
+                            _LAST_PLAYBACK["finished"] = ipc_mon_d.finished_naturally()
                     _save_mpv_position(pos_file_d, pos_key_d)
 
                 print_success(t("Playback completed successfully!"))
@@ -2112,44 +2198,4 @@ def play_video(
             return False
 
 
-def select_and_play_player(
-    supported_players: list, referer: str, title: str, subtitle_url: str = None
-) -> bool:
-    """
-    Let user select a player and attempt playback with retry logic.
 
-    Args:
-        supported_players: List of supported player objects
-        referer: HTTP Referer header value
-        title: Title of the video
-
-    Returns:
-        True if playback succeeded, False otherwise
-    """
-    while True:
-        player_idx = select_from_list(
-            [p.name for p in supported_players] + [t("← Back")], t("🎮 Select Player:")
-        )
-
-        if player_idx == len(supported_players):  # Back
-            return False
-
-        success = play_video(
-            supported_players[player_idx].url,
-            headers={"Referer": referer},
-            title=title,
-            subtitle_url=subtitle_url,
-        )
-
-        if success:
-            return True
-        else:
-            # Playback failed, ask if they want to retry
-            retry = select_from_list(
-                ["Try another server/player", "← Back to main menu"],
-                "What would you like to do?",
-            )
-            if retry == 1:  # Back
-                return False
-
-            # Otherwise continue the loop to choose another player

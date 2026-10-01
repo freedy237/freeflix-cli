@@ -10,7 +10,7 @@ import shutil
 import tempfile
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -20,7 +20,6 @@ from freeflix_cli.cli_utils import (
     print_success,
     print_warning,
     print_error,
-    console,
 )
 from freeflix_cli.progress import _download_screen_lock, run_download_with_bar
 
@@ -146,7 +145,6 @@ class TestRealDownload:
 
     def test_run_download_with_bar_sequential(self):
         """Single download via run_download_with_bar — expected to succeed."""
-        import subprocess
         aria = os.environ.get("FREEFLIX_TEST_DOWNLOADER") or shutil.which("aria2c") or shutil.which("yt-dlp")
         if not aria:
             pytest.skip("No aria2c or yt-dlp available")

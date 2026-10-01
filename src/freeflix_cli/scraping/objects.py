@@ -105,7 +105,7 @@ class CoflixMovie:
         url: str,
         img: str,
         genres: list[str],
-        year: int,
+        year: "int | str",  # int quand parsé, "Unknown" sinon (stocké seul)
         players: list[Player],
     ):
         self.title = title

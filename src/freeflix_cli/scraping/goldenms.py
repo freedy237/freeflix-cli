@@ -133,6 +133,8 @@ class MediaExtractor:
                 f"{self.multi_decrypt_api}/enc-vidlink?text={tmdb_id}", timeout=10
             )
             enc_data = r_enc.json().get("result")
+            if not enc_data:
+                return []
 
             headers = {
                 "User-Agent": scraper.headers.get("User-Agent", "Mozilla/5.0"),
@@ -148,7 +150,7 @@ class MediaExtractor:
 
             r = _get(url, headers=headers, timeout=10)
             data = r.json()
-            m3u8_url = data.get("stream", {}).get("playlist")
+            m3u8_url = (data.get("stream") or {}).get("playlist")
 
             if m3u8_url:
                 return [
@@ -182,7 +184,10 @@ class MediaExtractor:
 
             # Fetch X-Cap-Token from multi-decrypt
             r_token = _get(f"{self.multi_decrypt_api}/enc-hexa", timeout=10)
-            cap_token = r_token.json().get("result", {}).get("token")
+            _res = r_token.json().get("result")
+            cap_token = _res.get("token") if isinstance(_res, dict) else None
+            if not cap_token:
+                return []
 
             headers = {
                 "User-Agent": scraper.headers.get("User-Agent", "Mozilla/5.0"),
@@ -245,7 +250,7 @@ class MediaExtractor:
 
             r = _get(watch_url, headers=headers, timeout=10)
             token_match = re.search(
-                r'window\.__REQUEST_TOKEN__\s*=\s*"([^"]+)"', r.text
+                r"window\.__REQUEST_TOKEN__\s*=\s*[\"']([^\"']+)[\"']", r.text
             )
             if not token_match:
                 return []
@@ -286,7 +291,13 @@ class MediaExtractor:
                     if not stream_path:
                         continue
 
-                    final_url = f"{base_url}{stream_path}&requestToken={token}"
+                    if stream_path.startswith("http"):
+                        final_url = stream_path
+                        sep = "&" if "?" in stream_path else "?"
+                    else:
+                        sep = "&" if "?" in stream_path else "?"
+                        final_url = f"{base_url}{stream_path}"
+                    final_url = f"{final_url}{sep}requestToken={token}"
                     r_streams = _get(
                         final_url, headers=headers, timeout=10
                     ).json()
@@ -324,7 +335,11 @@ class MediaExtractor:
             r = _get(embed_url, headers={"Referer": f"{base_url}/"}, timeout=10)
 
             # Extract backups/sources via regex
-            matches = re.findall(r'href=["\']([^"\']+/playlist/[^"\']+)["\']', r.text)
+            import html as _html
+            matches = [
+                _html.unescape(m)
+                for m in re.findall(r'href=["\']([^"\']+/playlist/[^"\']+)["\']', r.text)
+            ]
             results = []
 
             for url in matches:

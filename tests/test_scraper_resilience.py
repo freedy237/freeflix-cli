@@ -4,7 +4,6 @@ Après le fix, chaque test vérifie que les scrapers retournent une valeur
 par défaut ou None au lieu de crasher avec AttributeError.
 """
 
-import pytest
 from unittest.mock import MagicMock
 from bs4 import BeautifulSoup
 
@@ -484,11 +483,264 @@ class TestFrenchStreamPlayerFilter:
             french_stream._get = orig
 
 
+class TestPlayerMatching:
+    """Matching sur hostname : finis les faux positifs de substring."""
+
+    def test_substring_false_positives_rejected(self):
+        from freeflix_cli.scraping import player as player_mod
+        assert player_mod.is_supported("https://book.ru/x") is False
+        assert player_mod.is_supported("https://evil.com/?ref=sibnet") is False
+        assert player_mod.is_supported("https://cdn.example.com/veev/x") is False
+
+    def test_unknown_host_resolves_none_without_network(self):
+        from freeflix_cli.scraping import player as player_mod
+        assert player_mod.get_hls_link("not a url", {}) is None
+        assert player_mod.get_hls_link("https://unknown-host-xyz.test/e/1", {}) is None
+
+    def test_xtremestream_missing_data_returns_none(self):
+        from freeflix_cli.scraping import player as player_mod
+        assert player_mod.get_hls_link_xtremestream("https://xs.test/player/xs1.php", {}) is None
+
+    def test_myvidplay_missing_pattern_returns_none(self):
+        from freeflix_cli.scraping import player as player_mod
+        original_get = player_mod._get
+        player_mod._get = lambda url, **kw: _mock_response(NO_OG_TITLE)
+        try:
+            assert player_mod.get_hls_link_myvidplay("https://myvidplay.com/e/abc", {}) is None
+        finally:
+            player_mod._get = original_get
+
+
+class TestProbeCap:
+    """Les sondes ne chargent jamais un corps > 2 Mo en RAM."""
+
+    def test_big_body_skipped(self):
+        from freeflix_cli import player_manager as pm
+
+        class _FakeResp:
+            headers = {"Content-Length": str(10_000_000)}
+
+        class _FakeSess:
+            def head(self, *a, **k):
+                return _FakeResp()
+
+            def get(self, *a, **k):
+                raise AssertionError("GET ne doit pas partir")
+
+        assert pm._safe_probe_text(_FakeSess(), "https://cdn.test/big.mp4", {}) is None
+
+    def test_small_body_returned(self):
+        from freeflix_cli import player_manager as pm
+
+        class _FakeResp:
+            headers = {}
+
+            def __init__(self, text):
+                self.text = text
+
+        class _FakeSess:
+            def head(self, *a, **k):
+                return _FakeResp("")
+
+            def get(self, *a, **k):
+                return _FakeResp("#EXTM3U\n#EXTINF:10,\nseg.ts\n")
+
+        assert "#EXTM3U" in pm._safe_probe_text(_FakeSess(), "https://cdn.test/a.m3u8", {})
+
+
+class TestAnimeSamaSeasonLang:
+    """URL d'entrée en vf : plus de duplication, 500 par langue = skip."""
+
+    def _fake_get(self, url, cache_ttl=0, cache_key=None, **kw):
+        if "/vf/" in url:
+            return _mock_response("var eps1=['https://x.test/e/1'];")
+        if "/vostfr/" in url:
+            resp = _mock_response("", status=500)
+            return resp
+        return _mock_response("", status=404)
+
+    def test_vf_entry_no_duplicates_500_skipped(self):
+        from freeflix_cli.scraping import anime_sama
+        orig = anime_sama._get
+        anime_sama._get = self._fake_get
+        try:
+            season = anime_sama.get_season(
+                "https://anime-sama.to/catalogue/test/saison1/vf/")
+            assert list(season.episodes.keys()) == ["vf"]
+            assert len(season.episodes["vf"]) == 1
+        finally:
+            anime_sama._get = orig
+
+
+class TestCoflixPlayersSkipBadLi:
+    """Un <li> malformé ne tue plus tous les players."""
+
+    def test_one_bad_li_skipped(self):
+        from freeflix_cli.scraping import coflix
+        html = """<html><body><ul>
+<li onclick="showVideo('aHR0cDovL3Rlc3QuY29tL3YvYi5tcDM4')"><span>Host OK</span></li>
+<li onclick="showVideo(broken-no-quotes)"><span>Host KO</span></li>
+</ul></body></html>"""
+        orig = coflix._get
+        coflix._get = lambda url, **kw: _mock_response(html)
+        try:
+            players = coflix.get_players("https://coflix.ac/player/1/")
+            assert [p.name for p in players] == ["Host OK"]
+        finally:
+            coflix._get = orig
+
+
+class TestFrenchStreamSearchContinues:
+    """Une carte sans titre ne jette plus les résultats suivants."""
+
+    def test_bad_card_first(self):
+        from freeflix_cli.scraping import french_stream
+        html = """<div class="search-item"><div class="search-title"></div></div>
+<div class="search-item" onclick="location.href='/1-x.html'">
+<div class="search-title">Bon Film</div><img src="https://img.test/a.jpg"/></div>"""
+        orig = french_stream._post
+        french_stream._post = lambda url, **kw: _mock_response(html)
+        try:
+            # carte vide d'abord : l'ancien `break` rendait []
+            results = french_stream.search("x")
+            assert [r.title for r in results] == ["Bon Film"]
+        finally:
+            french_stream._post = orig
+
+    def test_missing_lang_returns_empty_not_crash(self):
+        from freeflix_cli.scraping import french_stream
+        payload = {"vf": {"1": {"premium": "https://fsvid.lol/embed-a.html"}}}
+        resp = _mock_response("")
+        resp.json = lambda: payload
+        orig = french_stream._get
+        french_stream._get = lambda url, **kw: resp
+        try:
+            season = french_stream.get_series_season("https://french-stream.net/1-x.html", "")
+            assert list(season.episodes.keys()) == ["vf"]
+        finally:
+            french_stream._get = orig
+
+
+class TestPlaybackPreferred:
+    """preferred insensible à la casse + résultats par label unique."""
+
+    def test_preferred_case_insensitive(self):
+        from freeflix_cli.handlers import playback as pb
+        from freeflix_cli.scraping.objects import Player
+
+        class _Ep:
+            title = "Episode 1"
+            url = "https://x.test/s/1"
+            players = [Player("VIDZY", "https://vidzy.test/e/1"),
+                       Player("Premium", "https://fsvid.test/e/1")]
+
+        calls = []
+        orig_play = pb.play_video
+        orig_save = pb.tracker.save_progress
+        orig_prints = {}
+        for fn in ("print_info", "print_success", "print_warning", "print_error"):
+            orig_prints[fn] = getattr(pb, fn)
+            setattr(pb, fn, lambda *a, **k: None)
+        pb.play_video = lambda url, **k: calls.append(url) or True
+        pb.tracker.save_progress = lambda **k: None
+        try:
+            assert pb._download_one_episode(
+                "P", "S", "S1", _Ep(), "su", "se", "", {"Referer": "x"},
+                label="[1/1] Episode 1", preferred_player="premium",
+                _with_ui=False, file_title="Episode 1", subfolder="S - S1",
+            ) is True
+            # Premium (2e) essayé en premier malgré la casse.
+            assert calls == ["https://fsvid.test/e/1"]
+        finally:
+            pb.play_video = orig_play
+            pb.tracker.save_progress = orig_save
+            for fn, orig in orig_prints.items():
+                setattr(pb, fn, orig)
+
+
+class TestSubtitlesFilter:
+    """Filtre de langue sans crash ni faux positifs."""
+
+    def test_non_dict_and_sort_no_crash(self):
+        from freeflix_cli.scraping.subtitles import SubtitleExtractor
+        ex = SubtitleExtractor()
+        ex.get_opensubtitles_stremio = lambda *a, **k: ["http://x", {"lang": "French"}]
+        ex.get_opensubtitles_ai = lambda *a, **k: []
+        ex.get_wyzie = lambda *a, **k: [{"lang": "English", "url": "http://y", "source": "WYZIE"}]
+        ex.get_subsense = lambda *a, **k: [{"nolang": 1}]
+        res = ex.search("tt1234", lang_filter="fr")
+        assert all(isinstance(s, dict) for s in res)
+        assert all("french" in (s.get("lang") or "").lower() for s in res)
+
+    def test_english_not_matched_for_french(self):
+        from freeflix_cli.scraping.subtitles import SubtitleExtractor
+        ex = SubtitleExtractor()
+        ex.get_opensubtitles_stremio = lambda *a, **k: []
+        ex.get_opensubtitles_ai = lambda *a, **k: []
+        ex.get_wyzie = lambda *a, **k: [
+            {"lang": "English", "url": "http://en", "source": "WYZIE"},
+            {"lang": "French", "url": "http://fr", "source": "WYZIE"},
+        ]
+        ex.get_subsense = lambda *a, **k: []
+        res = ex.search("tt1234", lang_filter="fr")
+        assert [s["url"] for s in res] == ["http://fr"]
+
+
+class TestNyaaGuards:
+    """Tableau sans tbody + href absolu + colonnes remappées."""
+
+    def test_no_tbody_absolute_href(self):
+        from freeflix_cli.scraping import nyaa
+        import freeflix_cli.cloudflare as cf
+        html = """<table class="torrent-list">
+<tr><td>c</td><td><a href="https://nyaa.si/view/123">Titre Test</a></td>
+<td><a href="magnet:?xt=abc">m</a></td><td>1.2 GiB</td><td>d</td>
+<td>42</td><td>3</td><td>e</td></tr></table>"""
+        orig = cf.cf_get
+        cf.cf_get = lambda *a, **k: _mock_response(html)
+        try:
+            res = nyaa.search("test")
+            assert len(res) == 1
+            assert res[0]["page_url"] == "https://nyaa.si/view/123"
+            assert res[0]["seeders"] == 42
+        finally:
+            cf.cf_get = orig
+
+
+class TestGoldenmsGuards:
+    """API null/invalide → [] au lieu de requêtes absurdes."""
+
+    def test_vidlink_none_result_no_request(self):
+        from freeflix_cli.scraping import goldenms
+        calls = []
+        resp = _mock_response("")
+        resp.json = lambda: {"result": None}
+        orig = goldenms._get
+        goldenms._get = lambda url, **kw: calls.append(url) or resp
+        try:
+            assert goldenms.MediaExtractor().search_vidlink("123") == []
+            assert not any("/api/b/" in u for u in calls)
+        finally:
+            goldenms._get = orig
+
+    def test_hexa_missing_token_no_request(self):
+        from freeflix_cli.scraping import goldenms
+        calls = []
+        resp = _mock_response("")
+        resp.json = lambda: {}
+        orig = goldenms._get
+        goldenms._get = lambda url, **kw: calls.append(url) or resp
+        try:
+            assert goldenms.MediaExtractor().search_hexa("123") == []
+            assert not any("/images" in u for u in calls)
+        finally:
+            goldenms._get = orig
+
+
 class TestFrenchStreamGetFsschal:
     """_get() détecte maintenant le challenge fsschal comme _post()."""
 
     def test_get_detects_fsschal(self):
-        from freeflix_cli.scraping.french_stream import _get
         from freeflix_cli import cloudflare
         resp = _mock_response(CHALLENGE_FS, status=200)
         assert not cloudflare.is_blocked(resp)

@@ -69,7 +69,12 @@ def _get(url, **kw):
     try:
         body = (resp.text or "").lower()
         if not cloudflare.is_blocked(resp) and "verification" in body and "anti-robot" in body:
-            scraper.cookies.set("fsschal", "1", domain="french-stream.one", path="/")
+            try:
+                import urllib.parse as _up
+                host = _up.urlparse(website_origin).hostname or _up.urlparse(url).hostname or ""
+            except Exception:
+                host = ""
+            scraper.cookies.set("fsschal", "1", domain=host, path="/")
             need_retry = True
     except Exception:
         pass
@@ -108,7 +113,12 @@ def _post(url, data=None, **kw):
     try:
         body = (resp.text or "").lower()
         if not cloudflare.is_blocked(resp) and "verification" in body and "anti-robot" in body:
-            scraper.cookies.set("fsschal", "1", domain="french-stream.one", path="/")
+            try:
+                import urllib.parse as _up
+                host = _up.urlparse(website_origin).hostname or _up.urlparse(url).hostname or ""
+            except Exception:
+                host = ""
+            scraper.cookies.set("fsschal", "1", domain=host, path="/")
             need_retry = True
     except Exception:
         pass
@@ -145,10 +155,17 @@ def _is_usable_player_link(link: str) -> bool:
     """True if a player link is a fetchable http(s) URL on a live host."""
     if not link or not isinstance(link, str):
         return False
-    low = link.lower()
+    import urllib.parse as _up
+    low = link.strip().lower()
     if not (low.startswith("http://") or low.startswith("https://")):
         return False  # e.g. netu short codes
-    if any(h in low for h in _DEAD_PLAYER_HOSTS):
+    # Hosts morts jugés sur le HOSTNAME seul : ?x=trakx.lol ne doit pas
+    # disqualifier un host valide.
+    try:
+        host = _up.urlparse(low).hostname or ""
+    except Exception:
+        return False
+    if any(h in host for h in _DEAD_PLAYER_HOSTS):
         return False
     return not any(p in low for p in _DEAD_PLAYER_PATHS)
 
@@ -184,7 +201,7 @@ def search(query: str) -> list[SearchResult]:
         try:
             title: str = result.find("div", {"class": "search-title"}).text
         except AttributeError:
-            break  # no results
+            continue  # carte promo sans titre : on saute, pas tout le reste
 
         onclick = result.attrs.get("onclick", "")
         if "location.href='" not in onclick:
@@ -194,7 +211,8 @@ def search(query: str) -> list[SearchResult]:
             + onclick.split("location.href='")[1].split("'")[0]
         )
         try:
-            img: str = _abs_img(result.find("img").attrs["src"])
+            img_tag = result.find("img")
+            img: str = _abs_img((img_tag.attrs.get("src") or "") if img_tag else "")
         except AttributeError:
             img: str = ""  # no image
 
@@ -229,16 +247,24 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
                     genres.append(genre.text)
 
     players: list[Player] = []
-    movie_id = url.split("/")[-1].split("-")[0]
+    movie_id = url.rstrip("/").split("/")[-1].split("-")[0]
 
-    movie_info_response = _get(
-        f"{website_origin}/engine/ajax/film_api.php?id={movie_id}"
-    )
-    movie_info_response.raise_for_status()
+    try:
+        movie_info_response = _get(
+            f"{website_origin}/engine/ajax/film_api.php?id={movie_id}",
+            timeout=15,
+        )
+        movie_info_response.raise_for_status()
+        movie_info = movie_info_response.json()
+    except Exception:
+        return FrenchStreamMovie(title, url, img, genres, players)
 
-    movie_info = movie_info_response.json()
-
-    for player_name, player_links in movie_info["players"].items():
+    raw_players = movie_info.get("players") if isinstance(movie_info, dict) else None
+    if not isinstance(raw_players, dict):
+        return FrenchStreamMovie(title, url, img, genres, players)
+    for player_name, player_links in raw_players.items():
+        if not isinstance(player_links, dict):
+            continue
         for lang, link in player_links.items():
             if not _is_usable_player_link(link):
                 continue  # dead host (trakx/netu) or non-URL code
@@ -255,14 +281,19 @@ def get_series_season(url: str, content: str) -> FrenchStreamSeason:
         title = og.attrs["content"]
     else:
         title = soup.title.get_text(strip=True) if soup.title else url.rstrip("/").split("/")[-1].replace("-", " ").title()
-    serie_id = url.split("/")[-1].split("-")[0]
+    serie_id = url.rstrip("/").split("/")[-1].split("-")[0]
 
-    serie_info_response = _get(
-        f"{website_origin}/ep-data.php?id={serie_id}"
-    )
-    serie_info_response.raise_for_status()
-
-    serie_info = serie_info_response.json()
+    try:
+        serie_info_response = _get(
+            f"{website_origin}/ep-data.php?id={serie_id}",
+            timeout=15,
+        )
+        serie_info_response.raise_for_status()
+        serie_info = serie_info_response.json()
+    except Exception:
+        return FrenchStreamSeason(title, url, {})
+    if not isinstance(serie_info, dict):
+        return FrenchStreamSeason(title, url, {})
 
     episodes: dict[str, list[Episode]] = {}
 
@@ -282,7 +313,9 @@ def get_series_season(url: str, content: str) -> FrenchStreamSeason:
 
 
 def get_episodes_from_lang(lang: str, serie_info: dict):
-    episodes_raw = serie_info[lang]
+    episodes_raw = (serie_info or {}).get(lang) or {}
+    if not isinstance(episodes_raw, dict):
+        return []
     episodes: list[Episode] = []
 
     for number, players_raw in episodes_raw.items():
@@ -309,12 +342,6 @@ def get_content(url: str):
 
 
 if __name__ == "__main__":
-    # print(search("Mercredi"))
-    # print(
-    #     get_movie(
-    #         "https://french-stream.one/films/13448-la-soupe-aux-choux-film-streaming-complet-vf.html"
-    #     )
-    # )
     print(
         get_series_season(
             "https://french-stream.one/s-tv/15112935-mercredi-saison-1.html"

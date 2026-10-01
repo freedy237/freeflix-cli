@@ -72,23 +72,7 @@ def get_website_url(portal=portals["coflix"]):
     website_origin = str(response.url).rstrip("/")
 
 
-def _clean_image(raw: str) -> str:
-    """
-    Coflix's suggest endpoint returns the cover as an HTML ``<img …>`` snippet,
-    a protocol-relative ``//host/…`` URL, or sometimes a relative path. Pull a
-    usable absolute URL out of whatever it sends.
-    """
-    if not raw:
-        return ""
-    m = re.search(r'src=["\']([^"\']+)', raw)   # <img … src="…">
-    url = (m.group(1) if m else raw).strip()
-    if url.startswith("//"):
-        return "https:" + url
-    if url.startswith("http"):
-        return url
-    if url:
-        return website_origin.rstrip("/") + "/" + url.lstrip("/")
-    return ""
+
 
 
 def _norm_img(src: str) -> str:
@@ -117,7 +101,11 @@ def _search_html(query: str) -> list[SearchResult]:
         href = a["href"]
         if not re.search(r"/(film|serie)/[^/]+/?$", href) or href in seen:
             continue
-        img = a.find("img") or (a.parent.find("img") if a.parent else None)
+        if href and not href.startswith("http"):
+            href = website_origin.rstrip("/") + "/" + href.lstrip("/")
+        # Poster de LA carte uniquement : remonter au parent prenait le
+        # poster d'une carte voisine sur les liens texte sans image.
+        img = a.find("img")
         if img is None:
             continue
         title = (img.get("alt") or "").strip()
@@ -215,11 +203,15 @@ def get_players(players_url: str) -> list[Player]:
     players = []
     for li in soup.find_all("li"):
         if "onclick" in li.attrs and "showVideo" in li.attrs["onclick"]:
-            span = li.find("span")
-            player_name = span.text.strip() if span else "Unknown"
-            player_name = player_name.split(" /")[0]
-            link = base64.b64decode(li.attrs["onclick"].split("'")[1].split("'")[0])
-            players.append(Player(player_name, str(link, "utf-8")))
+            try:
+                span = li.find("span")
+                player_name = span.text.strip() if span else "Unknown"
+                player_name = player_name.split(" /")[0]
+                raw = li.attrs["onclick"].split("'")[1].split("'")[0]
+                link = base64.b64decode(raw)
+                players.append(Player(player_name, str(link, "utf-8")))
+            except (IndexError, ValueError, UnicodeDecodeError):
+                continue  # un <li> malformé ne tue plus tous les players
 
     return players
 
@@ -239,7 +231,9 @@ def get_episode(url: str) -> Episode:
     title: str = h1.get_text(strip=True) if h1 else ""
 
     iframe = soup.find("iframe")
-    players_url = iframe.attrs["src"] if iframe else ""
+    players_url = (iframe.attrs.get("src") or "") if iframe else ""
+    if players_url and not players_url.startswith("http"):
+        players_url = website_origin.rstrip("/") + "/" + players_url.lstrip("/")
 
     players = get_players(players_url) if players_url else []
 
@@ -256,7 +250,10 @@ def get_season(url: str) -> CoflixSeason:
     page_url, _, frag = url.partition("#")
     panel = ""
     if frag.startswith("panel="):
-        panel = frag[len("panel="):]
+        # N'accepte que [A-Za-z0-9_-] : le fragment vient de l'historique et
+        # est injecté tel quel dans un sélecteur CSS (SelectorSyntaxError).
+        raw = frag[len("panel="):]
+        panel = raw if re.fullmatch(r"[A-Za-z0-9_-]+", raw) else ""
 
     response = _get(page_url)
     response.raise_for_status()
@@ -357,7 +354,9 @@ def get_movie(url: str) -> CoflixMovie:
     year = year_elem.text.strip() if year_elem else "Unknown"
 
     iframe = soup.find("iframe")
-    players_url = iframe.attrs["src"] if iframe else ""
+    players_url = (iframe.attrs.get("src") or "") if iframe else ""
+    if players_url and not players_url.startswith("http"):
+        players_url = website_origin.rstrip("/") + "/" + players_url.lstrip("/")
     players = get_players(players_url) if players_url else []
 
     return CoflixMovie(title, url, img, genres, year, players)
@@ -421,7 +420,4 @@ def get_content(url: str):
 
 
 if __name__ == "__main__":
-    # print(search("mercredi"))
-    # print(get_series("https://coflix.foo/serie/game-of-thrones/"))
-    # print(get_season("https://coflix.foo/wp-json/apiflix/v1/series/14261/4"))
     print(get_episode("https://coflix.foo/episode/game-of-thrones-4x9/"))

@@ -1,8 +1,5 @@
 """Tests for Nerd Font detection and installation helpers."""
 
-import os
-import subprocess
-import sys
 
 import pytest
 

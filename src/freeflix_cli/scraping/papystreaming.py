@@ -19,12 +19,15 @@ import urllib.parse
 from curl_cffi import requests as cffi_requests
 from ..net_config import DNS_OPTIONS
 from bs4 import BeautifulSoup
+from .config import portals
 
-BASE = "https://papystreaming.fr"
+# Portail hot-patchable (changement de miroir sans release), comme les
+# autres scrapers — avec le domaine actuel en repli.
+BASE = portals.get("papystreaming", "https://papystreaming.fr").rstrip("/")
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
-_CARD = re.compile(r"/(movie|tv)/(\d+)")
+_CARD = re.compile(r"/(movie|tv)/(\d+)(?:[/?#]|$)")
 
 
 def _title_year(anchor, img) -> tuple[str, str]:
@@ -44,12 +47,16 @@ def _title_year(anchor, img) -> tuple[str, str]:
 
 def search(query: str) -> list[dict]:
     """Search Papystreaming. Returns [] on any network/parse error."""
+    from .. import cloudflare
     try:
-        r = scraper.get(
+        r = cloudflare.cf_get(
+            scraper,
             BASE + "/search?q=" + urllib.parse.quote(query),
             headers={"Referer": BASE + "/"},
             timeout=15,
         )
+        if r is None:
+            return []
         r.raise_for_status()
     except Exception:
         return []
@@ -77,6 +84,8 @@ def search(query: str) -> list[dict]:
             poster = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
             if poster.startswith("//"):
                 poster = "https:" + poster
+            elif poster and not poster.startswith("http"):
+                poster = BASE + "/" + poster.lstrip("/")
 
         seen.add(key)
         results.append({
