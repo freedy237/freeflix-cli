@@ -36,10 +36,54 @@ def test_ssrf_allows_public_hosts():
         assert not proxy._is_ssrf_blocked(u), u
 
 
-def test_ssrf_malformed_url_is_not_blocked():
-    # No host to judge → don't block (route still validates downstream).
-    assert not proxy._is_ssrf_blocked("")
-    assert not proxy._is_ssrf_blocked("not a url")
+def test_ssrf_non_http_schemes_blocked():
+    # Seuls http/https sortent vers un CDN : file://, gopher://, URL sans
+    # schéma ou sans host sont refusés (anti-LFI / anti-SSRF).
+    assert proxy._is_ssrf_blocked("")
+    assert proxy._is_ssrf_blocked("not a url")
+    assert proxy._is_ssrf_blocked("file:///etc/passwd")
+    assert proxy._is_ssrf_blocked("gopher://127.0.0.1:70/x")
+    assert proxy._is_ssrf_blocked("dict://127.0.0.1:11211/x")
+
+
+def test_ssrf_blocks_ip_obfuscation():
+    # Formes hex/octal/décimales/short que ipaddress rejette mais que les
+    # stacks résolvent vers loopback/privé.
+    for u in [
+        "http://0x7f.0.0.1/x",
+        "http://0x7f000001/x",
+        "http://2130706433/x",      # 127.0.0.1 décimal
+        "http://0177.0.0.1/x",      # 127.0.0.1 octal
+        "http://127.1/x",           # forme courte
+        "http://0xC0.0xA8.0x01.0x01/x",
+    ]:
+        assert proxy._is_ssrf_blocked(u), u
+
+
+class TestDnsVerdict:
+    """On juge la réponse DNS, pas le nom (anti DNS-rebinding)."""
+
+    def _check(self, host, fake_ips):
+        import socket as _sock
+        orig = _sock.getaddrinfo
+        _sock.getaddrinfo = lambda *a, **k: [
+            (None, None, None, None, (ip, 0)) for ip in fake_ips
+        ]
+        try:
+            with proxy._DNS_VERDICT_LOCK:
+                proxy._DNS_VERDICT_CACHE.pop(host, None)
+            return proxy._is_ssrf_blocked(f"http://{host}/x")
+        finally:
+            _sock.getaddrinfo = orig
+
+    def test_rebinding_to_loopback_blocked(self):
+        assert self._check("cdn.evil.test", ["127.0.0.1"])
+
+    def test_rebinding_to_metadata_blocked(self):
+        assert self._check("cdn.evil.test", ["169.254.169.254"])
+
+    def test_public_answer_allowed(self):
+        assert not self._check("cdn.good.test", ["93.184.216.34"])
 
 
 def test_ensure_started_is_idempotent():
@@ -48,3 +92,79 @@ def test_ensure_started_is_idempotent():
     assert p1 == p2
     assert proxy.PROXY_URL == f"http://{proxy.PROXY_HOST}:{p1}"
     proxy.stop_proxy_server()
+
+
+class _StubHandler:
+    """Appelle _h_subtitle sans serveur : capture _send_bytes."""
+
+    def __init__(self):
+        self.calls = []
+
+    def _send_bytes(self, status, body, content_type="text/plain; charset=utf-8",
+                    extra=None):
+        self.calls.append((status, body, content_type, extra))
+
+
+def _subtitle_status(path):
+    stub = _StubHandler()
+    proxy._ProxyHandler._h_subtitle(stub, {"path": path})
+    assert stub.calls, "no response sent"
+    return stub.calls[-1]
+
+
+class TestSubtitleJail:
+    """?path= ne sort jamais des dossiers autorisés (anti-LFI)."""
+
+    def test_outside_allowed_dirs_forbidden(self):
+        for p in ["/etc/passwd", "/etc/hosts", "/proc/self/environ"]:
+            status, *_ = _subtitle_status(p)
+            assert status == 403, p
+
+    def test_symlink_escape_forbidden(self):
+        import os
+        import tempfile
+        link = os.path.join(tempfile.gettempdir(), "freeflix_test_link.srt")
+        try:
+            os.symlink("/etc/hostname", link)
+        except (OSError, NotImplementedError):
+            return  # FS sans symlinks : rien à tester
+        try:
+            # Le lien est DANS tempdir mais pointe DEHORS : realpath doit le voir.
+            status, *_ = _subtitle_status(link)
+            assert status == 403
+        finally:
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
+
+    def test_legit_temp_subtitle_served_without_cors(self, tmp_path):
+        import os
+        import tempfile
+        sub = os.path.join(tempfile.gettempdir(), "freeflix_test_ok.srt")
+        with open(sub, "w") as f:
+            f.write("1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+        try:
+            status, body, ctype, extra = _subtitle_status(sub)
+            assert status == 200
+            assert ctype == "text/vtt"
+            assert extra is None  # plus de CORS ouvert sur cette route
+            assert b"hello" in (body if isinstance(body, bytes) else body.encode())
+        finally:
+            os.unlink(sub)
+
+    def test_oversized_subtitle_rejected(self, tmp_path):
+        import os
+        import tempfile
+        sub = os.path.join(tempfile.gettempdir(), "freeflix_test_big.srt")
+        with open(sub, "wb") as f:
+            f.truncate(proxy._SUBTITLE_MAX_BYTES + 1)  # creux, pas 2 Mo écrits
+        try:
+            status, *_ = _subtitle_status(sub)
+            assert status == 413
+        finally:
+            os.unlink(sub)
+
+    def test_missing_subtitle_404(self):
+        status, *_ = _subtitle_status("/tmp/freeflix_nope_does_not_exist.srt")
+        assert status == 404

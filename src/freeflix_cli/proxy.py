@@ -63,20 +63,7 @@ def get_bytes_served() -> int:
 _BLOCK_HOST_LITERALS = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
 
 
-def _is_ssrf_blocked(target_url: str) -> bool:
-    try:
-        host = urllib.parse.urlparse(target_url).hostname or ""
-    except Exception:
-        return False
-    if not host:
-        return False
-    h = host.lower().rstrip(".")
-    if h in _BLOCK_HOST_LITERALS:
-        return True
-    try:
-        ip = ipaddress.ip_address(h)
-    except ValueError:
-        return False  # a public hostname — allow (don't resolve; avoids latency)
+def _ip_is_blocked(ip) -> bool:
     return (
         ip.is_private
         or ip.is_loopback
@@ -85,6 +72,102 @@ def _is_ssrf_blocked(target_url: str) -> bool:
         or ip.is_multicast
         or ip.is_unspecified
     )
+
+
+def _normalize_ip_literal(host: str):
+    """Parse non-standard IPv4 forms (0x7f.0.0.1, 0177.0.0.1, 2130706433,
+    127.1) that ipaddress rejects but stacks resolve to loopback/private."""
+    import struct
+    try:
+        packed = socket.inet_aton(host)
+    except (OSError, ValueError):
+        return None
+    try:
+        return ipaddress.ip_address(struct.unpack("!I", packed)[0])
+    except ValueError:
+        return None
+
+
+# Hostname → (expires_ts, blocked) : juge la RÉPONSE DNS, pas le nom
+# (anti DNS-rebinding). TTL court pour garder la latence basse.
+_DNS_VERDICT_CACHE_TTL = 60.0
+_DNS_VERDICT_CACHE: dict = {}
+_DNS_VERDICT_LOCK = threading.Lock()
+
+
+def _hostname_resolves_blocked(host: str) -> bool:
+    """True si le host résout vers une IP interdite. Échec de résolution →
+    False (fail-open, comme avant : ne pas casser la lecture sur DNS flaky)."""
+    now = time.time()
+    with _DNS_VERDICT_LOCK:
+        hit = _DNS_VERDICT_CACHE.get(host)
+        if hit and hit[0] > now:
+            return hit[1]
+    try:
+        infos = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC,
+                                   type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return False
+    blocked = False
+    for fam, _typ, _proto, _canon, sockaddr in infos:
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if _ip_is_blocked(ip):
+            blocked = True
+            break
+    with _DNS_VERDICT_LOCK:
+        _DNS_VERDICT_CACHE[host] = (now + _DNS_VERDICT_CACHE_TTL, blocked)
+        if len(_DNS_VERDICT_CACHE) > 1024:
+            _DNS_VERDICT_CACHE.clear()
+    return blocked
+
+
+def _is_ssrf_blocked(target_url: str) -> bool:
+    try:
+        parts = urllib.parse.urlparse(target_url)
+    except Exception:
+        return False
+    # Seuls http/https sortent vers un CDN ; file://, gopher://, dict://…
+    # n'ont rien à faire dans ce proxy (hostname vide = refusé aussi).
+    if (parts.scheme or "").lower() not in ("http", "https"):
+        return True
+    host = parts.hostname or ""
+    if not host:
+        return True
+    h = host.lower().rstrip(".")
+    if h in _BLOCK_HOST_LITERALS:
+        return True
+    # Fast path : littéral IP (formes standard + hex/octal/décimales).
+    ip = None
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        ip = _normalize_ip_literal(h)
+    if ip is not None:
+        return _ip_is_blocked(ip)
+    # Hostname : on juge la réponse DNS, pas le nom.
+    return _hostname_resolves_blocked(h)
+
+
+# ── Subtitle endpoint jail ────────────────────────────────────────────
+# /player/subtitle?path= ne sert que les sous-titres que FreeFlix a lui-même
+# téléchargés (tempdir) ou placés dans le dossier de téléchargement. Tout le
+# reste (dont /etc/passwd, clés SSH, /dev/zero) est refusé en 403.
+_SUBTITLE_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _subtitle_allowed_dirs() -> list:
+    import os
+    import tempfile
+    dirs = [tempfile.gettempdir()]
+    try:
+        from .player_manager import DOWNLOAD_DIR  # import tardif : pas de cycle
+        dirs.append(DOWNLOAD_DIR)
+    except Exception:
+        dirs.append(os.path.expanduser("~/Downloads/FreeFlix"))
+    return dirs
 
 
 def find_free_port():
@@ -508,10 +591,33 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3,
             if client_range:
                 req_headers["Range"] = client_range
             effective_timeout = 180 if stream else 15
-            response = session.request(
-                method=method, url=url, headers=req_headers,
-                stream=stream, timeout=effective_timeout,
-            )
+            current = url
+            response = None
+            for _ in range(_max_hops + 1):
+                response = session.request(
+                    method=method, url=current, headers=req_headers,
+                    stream=stream, timeout=effective_timeout,
+                    allow_redirects=False,
+                )
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    break
+                loc = ""
+                try:
+                    loc = (response.headers.get("location")
+                           or response.headers.get("Location") or "")
+                except Exception:
+                    loc = ""
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                if not loc:
+                    break
+                current = urllib.parse.urljoin(current, loc)
+                if _is_ssrf_blocked(current):
+                    from . import logsetup as _ls
+                    _ls.warning(f"proxy: blocked redirect to {current}")
+                    return None
             if response.status_code == 429 or response.status_code >= 500:
                 raise requests.RequestsError(f"Status {response.status_code}")
             return response
@@ -858,14 +964,32 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def _h_subtitle(self, args):
         import os
         sub_path = args.get("path")
-        if not sub_path or not os.path.exists(sub_path):
+        if not sub_path:
+            self._send_bytes(404, "Subtitle not found")
+            return
+        # Jail to known subtitle locations (serveur-local temp + download dir).
+        # realpath() neutralise `..` et symlinks ; pas de CORS ici (le player
+        # est servi par ce même proxy, same-origin suffit).
+        try:
+            real = os.path.realpath(sub_path)
+        except Exception:
+            self._send_bytes(403, "Forbidden")
+            return
+        allowed = [os.path.realpath(d) for d in _subtitle_allowed_dirs()]
+        if not any(real == a or real.startswith(a + os.sep) for a in allowed):
+            self._send_bytes(403, "Forbidden")
+            return
+        if not os.path.isfile(real):
             self._send_bytes(404, "Subtitle not found")
             return
         try:
-            with open(sub_path, "rb") as f:
+            if os.path.getsize(real) > _SUBTITLE_MAX_BYTES:
+                self._send_bytes(413, "Subtitle too large")
+                return
+            with open(real, "rb") as f:
                 content = f.read()
-            vtt = _srt_to_vtt(content, sub_path.lower().endswith(".srt"))
-            self._send_bytes(200, vtt, "text/vtt", {"Access-Control-Allow-Origin": "*"})
+            vtt = _srt_to_vtt(content, real.lower().endswith(".srt"))
+            self._send_bytes(200, vtt, "text/vtt")
         except Exception as e:
             self._send_bytes(500, f"Error loading subtitle: {e}")
 

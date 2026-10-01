@@ -116,3 +116,41 @@ def test_connect_times_out_without_server(tmp_path):
 
 def test_make_ipc_path_is_unique():
     assert mpv_ipc.make_ipc_path() != mpv_ipc.make_ipc_path()
+
+
+def test_ipc_dir_is_private():
+    import os
+    import stat
+    d = mpv_ipc._ipc_dir()
+    assert d and os.path.isdir(d)
+    mode = stat.S_IMODE(os.stat(d).st_mode)
+    assert mode == 0o700, oct(mode)
+
+
+def test_make_ipc_path_inside_private_dir():
+    import os
+    p = mpv_ipc.make_ipc_path()
+    assert os.path.dirname(p) == mpv_ipc._ipc_dir()
+    assert os.path.basename(p).startswith("freeflix-mpv-")
+
+
+def test_connect_failure_leaks_no_fd(tmp_path):
+    import os
+    import sys
+    if sys.platform.startswith("win") or not os.path.isdir("/proc/self/fd"):
+        return  # comptage de fd dispo seulement sous Linux
+    def _fds():
+        return len(os.listdir("/proc/self/fd"))
+    before = _fds()
+    client = mpv_ipc.MpvIPC(str(tmp_path / "nope.sock"))
+    assert client.connect(timeout=0.6) is False
+    assert _fds() <= before + 1, "socket fuit à chaque tentative ratée"
+
+
+def test_close_unlinks_socket_file():
+    import os
+    p = mpv_ipc.make_ipc_path()
+    with open(p, "w") as f:
+        f.write("stale")
+    mpv_ipc.MpvIPC(p).close()
+    assert not os.path.exists(p)

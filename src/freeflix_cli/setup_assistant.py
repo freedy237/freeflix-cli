@@ -300,6 +300,10 @@ def _find_in_zip(archive: Path, target: str) -> Path | None:
         with zipfile.ZipFile(archive) as zf:
             for name in zf.namelist():
                 if name.endswith(f"/{target}") or name == target:
+                    # Refuse les membres dangereux même sur match exact.
+                    if (not name or name.startswith(("/", "\\"))
+                            or ".." in name.replace("\\", "/").split("/")):
+                        continue
                     zf.extract(name, parent)
                     return parent / name
     except Exception:
@@ -675,6 +679,90 @@ def _download(url: str, dest: Path) -> bool:
         return False
 
 
+# Pins d'intégrité pour les fichiers versionnés téléchargés au setup
+# (mpv.conf / lua / shaders) : un MITM ou un miroir corrompu est refusé
+# avant écriture — mpv exécute le lua, donc pas de compromis ici.
+# Calculés depuis les sources officielles ; si upstream change un fichier,
+# le pin échoue avec un message clair (mettre à jour le pin, jamais le
+# retirer). La nerd-font suit `releases/latest` (hash mouvant) : seul le
+# plancher de taille la protège, comme les builds ffmpeg nightly.
+_FILE_PINS: dict[str, dict] = {
+    "mpv.conf": {
+        "sha256": "e92b8fc46d10fa4a0d51f1bee2e7faee5708e4b95ae8b515712924792a19f28a",
+        "min_bytes": 2000,
+    },
+    "input.conf": {
+        "sha256": "3cb7d4db0481232cfe6c74101e7c2f97bcfb6ba2ff20a1f1f51717a0d2560bf5",
+        "min_bytes": 800,
+    },
+    "freeflix_position.lua": {
+        "sha256": "bc05fa41266ddf643c110205d526969903ddf20cff095ef8eedeca4641bb4101",
+        "min_bytes": 800,
+    },
+    "Anime4K_Clamp_Highlights.glsl": {
+        "sha256": "a2a9bf7fbc1d75d09660ca2e701e4d7fb0cf5457b94da47e1825032fa2b3671a",
+        "min_bytes": 1000,
+    },
+    "Anime4K_Restore_CNN_S.glsl": {
+        "sha256": "97c24dc370ab300c108bfaa09db7f175aeff343674842c299cf3940a3d330427",
+        "min_bytes": 8000,
+    },
+    "Anime4K_Restore_CNN_VL.glsl": {
+        "sha256": "35036722733305cd4d4e57660b883bbe2569ba2914033c254327107d7b77e35e",
+        "min_bytes": 70000,
+    },
+    "Anime4K_Upscale_CNN_x2_S.glsl": {
+        "sha256": "4c53ec2e287908f7ee7bcb266b0170421626d663576468b7d7dafc62962649a4",
+        "min_bytes": 9000,
+    },
+    "Anime4K_Upscale_CNN_x2_VL.glsl": {
+        "sha256": "5638fe31c37c151a3443fea3451a3ef91af073f4dbb9615f6c0d1e29db11493d",
+        "min_bytes": 70000,
+    },
+}
+
+
+def _download_verified(url: str, dest: Path, label: str = None) -> bool:
+    """Comme _download, mais vérifie le pin sha256 + plancher de taille
+    AVANT d'écrire la destination (via fichier .part + os.replace)."""
+    info = _FILE_PINS.get(dest.name)
+    if not info:
+        return _download(url, dest)
+    label = label or dest.name
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        part = dest.with_name(dest.name + ".part")
+        with urllib.request.urlopen(url, timeout=30) as r, open(part, "wb") as f:
+            shutil.copyfileobj(r, f)
+        if not _verify_archive(part, info, label):
+            try:
+                part.unlink()
+            except OSError:
+                pass
+            return False
+        os.replace(part, dest)
+        return True
+    except Exception as e:
+        print_warning(f"Could not download {url} ({type(e).__name__}: {e})")
+        return False
+
+
+def _safe_extract_zip(zf, dest_dir: str) -> None:
+    """extractall filtré : refuse membres absolus, `..` et liens (ZipSlip).
+    Multi-OS : pur os.path, aucun appel POSIX-only."""
+    dest_real = os.path.realpath(dest_dir)
+    for m in zf.infolist():
+        name = m.filename
+        if not name or os.path.isabs(name):
+            continue
+        target_real = os.path.realpath(os.path.join(dest_real, name))
+        if target_real != dest_real and not target_real.startswith(dest_real + os.sep):
+            continue
+        if (m.external_attr >> 16) & 0o120000 == 0o120000:  # symlink
+            continue
+        zf.extract(m, dest_dir)
+
+
 def install_config_files() -> bool:
     """Pull mpv.conf, input.conf and the lua hook from the repo."""
     cfg = get_mpv_config_dir()
@@ -688,7 +776,7 @@ def install_config_files() -> bool:
         (f"{REPO_RAW}/config/freeflix_position.lua",     cfg / "scripts" / "freeflix_position.lua"),
     ]
     for url, dest in files:
-        if _download(url, dest):
+        if _download_verified(url, dest):
             print_success(f"  ✓ {dest}")
         else:
             ok = False
@@ -710,7 +798,7 @@ def install_anime4k_shaders() -> bool:
         (f"{ANIME4K_RAW}/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl", sh_dir / "Anime4K_Upscale_CNN_x2_VL.glsl"),
     ]
     for url, dest in shaders:
-        if _download(url, dest):
+        if _download_verified(url, dest):
             print_success(f"  ✓ {dest.name}")
         else:
             ok = False
@@ -1089,14 +1177,19 @@ def install_nerd_font() -> bool:
     if os_name == "linux":
         dest = os.path.join(os.path.expanduser("~"), ".local", "share", "fonts")
         os.makedirs(dest, exist_ok=True)
-        tmp = "/tmp/freeflix-nerdfont"
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="freeflix-nerdfont-")
         zip_path = f"{tmp}.zip"
         print_info(t("Downloading CaskaydiaCove Nerd Font…"))
         try:
             urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
+            # releases/latest → hash mouvant : plancher de taille seul
+            # (une page d'erreur HTML fait quelques Ko, le zip ~30 Mo).
+            if os.path.getsize(zip_path) < 5_000_000:
+                raise ValueError("nerd-font archive too small, refusing install")
             import zipfile
             with zipfile.ZipFile(zip_path, "r") as z:
-                z.extractall(tmp)
+                _safe_extract_zip(z, tmp)
             for f in os.listdir(tmp):
                 if f.endswith(".ttf"):
                     shutil.copy2(os.path.join(tmp, f), os.path.join(dest, f))
@@ -1134,9 +1227,11 @@ def install_nerd_font() -> bool:
         print_info(t("Downloading CaskaydiaCove Nerd Font…"))
         try:
             urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
+            if os.path.getsize(zip_path) < 5_000_000:
+                raise ValueError("nerd-font archive too small, refusing install")
             import zipfile
             with zipfile.ZipFile(zip_path, "r") as z:
-                z.extractall(extract_dir)
+                _safe_extract_zip(z, extract_dir)
             import glob
             for ttf in glob.glob(os.path.join(extract_dir, "*.ttf")):
                 shutil.copy2(ttf, os.path.join(user_fonts, os.path.basename(ttf)))

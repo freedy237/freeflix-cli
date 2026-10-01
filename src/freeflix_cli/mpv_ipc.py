@@ -29,12 +29,58 @@ import uuid
 _IS_WIN = sys.platform in ("win32", "cygwin")
 
 
+def _ipc_dir() -> str:
+    """Répertoire privé (0700) des sockets IPC mpv. Sur Windows les named
+    pipes sont auto-supprimés, rien à faire (retourne "")."""
+    if _IS_WIN:
+        return ""
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        uid = "u"
+    d = os.path.join(tempfile.gettempdir(), f"freeflix-ipc-{uid}")
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+    except OSError:
+        return tempfile.gettempdir()
+    try:  # resserre un dir pré-existant aux perms laxistes
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    # Purge les sockets morts (>24h) pour ne pas remplir /tmp.
+    try:
+        now = time.time()
+        for name in os.listdir(d):
+            if name.startswith("freeflix-mpv-") and name.endswith(".sock"):
+                p = os.path.join(d, name)
+                try:
+                    if now - os.path.getmtime(p) > 24 * 3600:
+                        os.unlink(p)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return d
+
+
 def make_ipc_path() -> str:
     """A fresh, unique IPC endpoint path for one mpv launch."""
     tag = uuid.uuid4().hex[:12]
     if _IS_WIN:
         return rf"\\.\pipe\freeflix-mpv-{tag}"
-    return os.path.join(tempfile.gettempdir(), f"freeflix-mpv-{tag}.sock")
+    return os.path.join(_ipc_dir() or tempfile.gettempdir(),
+                        f"freeflix-mpv-{tag}.sock")
+
+
+def _unlink_ipc_path(path: str) -> None:
+    """Supprime le fichier socket après usage (POSIX ; best-effort)."""
+    if _IS_WIN or not path or not path.endswith(".sock"):
+        return
+    try:
+        if os.path.basename(path).startswith("freeflix-mpv-"):
+            os.unlink(path)
+    except OSError:
+        pass
 
 
 class MpvIPC:
@@ -57,8 +103,15 @@ class MpvIPC:
                     self._conn = open(self.path, "r+b", buffering=0)
                 else:
                     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.settimeout(1.0)
-                    s.connect(self.path)
+                    try:
+                        s.settimeout(1.0)
+                        s.connect(self.path)
+                    except Exception:
+                        try:
+                            s.close()  # pas de fuite de fd à chaque essai raté
+                        except Exception:
+                            pass
+                        raise
                     self._conn = s
                 return True
             except (FileNotFoundError, ConnectionRefusedError, OSError):
@@ -121,6 +174,7 @@ class MpvIPC:
         except Exception:
             pass
         self._conn = None
+        _unlink_ipc_path(self.path)  # pas de .sock mort dans /tmp
 
 
 class PlaybackMonitor:
