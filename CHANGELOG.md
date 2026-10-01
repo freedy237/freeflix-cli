@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.11.1
+
+Sécurité + robustesse + nettoyage.
+
+- **Sécurité** : jail `/player/subtitle` (allowlist tempdir/Downloads,
+  cap 2 Mo, plus de CORS ouvert), garde SSRF durcie (schémas http/https
+  seuls, formes IP obscures, verdict DNS + re-check des redirects),
+  sockets mpv IPC en dir privé `0700` + cleanup (plus de fuite fd),
+  pins sha256 pour configs/lua/shaders + extraction zip filtrée.
+- **Players/scrapers** : guards `IndexError/KeyError` partout, matching
+  hostname anti-faux-positifs, timeouts par défaut, qualités 2160/480/360
+  honorées, `.temp` namespacé par subfolder, batch compté par label.
+- **Nettoyage** : ~350 lignes mortes supprimées (extracteurs/cache/alias
+  inutilisés, helpers orphelins, commentaires morts).
+
 ## 1.11
 
 Réparation des lecteurs **Anime-Sama**, **French-Stream** et **French-Anime**.
