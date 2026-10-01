@@ -573,14 +573,14 @@ def download_episodes_batch(
         # Compté par LABEL unique ("[n/N] titre"), pas par titre : deux
         # épisodes homonymes n'écrasent plus leurs résultats mutuellement.
         ok_by_label: dict = {}
-        for n, (fut, episode) in enumerate(futures):
+        for n, (fut, _episode) in enumerate(futures):
             try:
                 ok_by_label[labels[n]] = bool(fut.result())
             except Exception:
                 ok_by_label[labels[n]] = False
 
     succeeded = sum(1 for v in ok_by_label.values() if v)
-    for n, (i, ep) in enumerate(sel):
+    for n, (_i, ep) in enumerate(sel):
         results[ep.title] = ok_by_label[labels[n]]
     print_info(f"Batch complete: {succeeded}/{total} episodes downloaded.")
     return results

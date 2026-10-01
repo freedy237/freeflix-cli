@@ -109,7 +109,7 @@ def _hostname_resolves_blocked(host: str) -> bool:
     except (OSError, UnicodeError):
         return False
     blocked = False
-    for fam, _typ, _proto, _canon, sockaddr in infos:
+    for _fam, _typ, _proto, _canon, sockaddr in infos:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
