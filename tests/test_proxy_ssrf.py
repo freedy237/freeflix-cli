@@ -166,5 +166,11 @@ class TestSubtitleJail:
             os.unlink(sub)
 
     def test_missing_subtitle_404(self):
-        status, *_ = _subtitle_status("/tmp/freeflix_nope_does_not_exist.srt")
+        import os
+        import tempfile
+        # Inexistant mais DANS un dossier autorisé → 404 (pas 403).
+        # Multi-OS : on construit depuis tempdir, jamais /tmp en dur.
+        missing = os.path.join(tempfile.gettempdir(), "freeflix_nope_does_not_exist.srt")
+        assert not os.path.exists(missing)
+        status, *_ = _subtitle_status(missing)
         assert status == 404
