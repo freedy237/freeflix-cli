@@ -283,10 +283,11 @@ class _EscCancel:
     Non-blocking "press Esc twice to cancel" detector for the download screens.
 
     Used as a context manager : it puts the terminal in cbreak mode on enter
-    and restores it on exit. ``poll()`` returns True once the user has pressed
+    (POSIX) and restores it on exit ; on Windows it uses msvcrt directly
+    (no raw mode needed). ``poll()`` returns True once the user has pressed
     Esc twice (either in one burst, or within 2 s). Arrow/CSI escape sequences
     (``\\x1b[…``) are ignored so they don't count as Esc. No-op on a non-tty
-    (Windows / piped) — there, Ctrl-C stays the way to abort.
+    (piped) — there, Ctrl-C stays the way to abort.
     """
 
     def __init__(self):
@@ -296,8 +297,14 @@ class _EscCancel:
         self.active = False
 
     def __enter__(self):
+        import os
         import sys
         try:
+            if os.name == "nt":
+                import msvcrt  # noqa: F401
+                if sys.stdin.isatty():
+                    self.active = True
+                return self
             import termios
             import tty
             if sys.stdin.isatty():
@@ -309,10 +316,47 @@ class _EscCancel:
             self.active = False
         return self
 
+    def _register_escs(self, escs: int) -> bool:
+        if escs >= 2:
+            return True
+        if escs == 1:
+            now = time.monotonic()
+            if self._armed and now - self._armed <= 2.0:
+                return True
+            self._armed = now
+        return False
+
+    def _poll_win(self) -> bool:
+        import msvcrt
+        # Draine tout le buffer d'un coup puis parse comme le POSIX : un
+        # double-Esc rapide compte (2 × \x1b), les séquences \x1b[/O non.
+        buf = ""
+        try:
+            while msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\x00", "\xe0"):
+                    if msvcrt.kbhit():
+                        msvcrt.getwch()  # scan code → ignoré
+                    continue
+                buf += ch
+        except Exception:
+            return False
+        escs, i = 0, 0
+        while i < len(buf):
+            if buf[i] == "\x1b":
+                if buf[i + 1:i + 2] in ("[", "O"):
+                    i += 3  # flèche / CSI / focus → ignoré
+                    continue
+                escs += 1
+            i += 1
+        return self._register_escs(escs)
+
     def poll(self) -> bool:
         if not self.active:
             return False
         import os
+        if os.name == "nt":
+            return self._poll_win()
         import select
         try:
             r, _, _ = select.select([self._fd], [], [], 0)
@@ -329,14 +373,7 @@ class _EscCancel:
                     continue
                 escs += 1
             i += 1
-        if escs >= 2:
-            return True
-        if escs == 1:
-            now = time.monotonic()
-            if self._armed and now - self._armed <= 2.0:
-                return True
-            self._armed = now
-        return False
+        return self._register_escs(escs)
 
     @property
     def armed(self) -> bool:

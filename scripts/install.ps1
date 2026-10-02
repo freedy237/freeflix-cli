@@ -99,6 +99,28 @@ if ($LASTEXITCODE -ne 0) {
     Err "yt-dlp install failed (exit $LASTEXITCODE)"
     exit 1
 }
+
+# ===== 3b. Media tools via winget (best-effort, never fatal) =====
+# Linux install.sh ships mpv/vlc/ffmpeg/aria2/chafa ; Windows gets the same
+# set here so playback, posters and downloads behave identically.
+# Each install is independent: one failure never aborts the rest.
+if (Get-Command "winget" -ErrorAction SilentlyContinue) {
+    $mediaPkgs = @(
+        @{ Id = "mpv.net";          Name = "mpv (player)" },
+        @{ Id = "VideoLAN.VLC";     Name = "VLC (alt player)" },
+        @{ Id = "Gyan.FFmpeg";      Name = "ffmpeg" },
+        @{ Id = "aria2.aria2";      Name = "aria2c" },
+        @{ Id = "hpjansson.Chafa";  Name = "chafa (posters)" }
+    )
+    foreach ($p in $mediaPkgs) {
+        Log "Installing $($p.Name) ..."
+        winget install --silent --accept-source-agreements --accept-package-agreements --id $p.Id 2>$null
+        if ($LASTEXITCODE -eq 0) { Ok "$($p.Name) installed" }
+        else { Log "$($p.Name) skipped (already present or unavailable)" }
+    }
+} else {
+    Log "winget not found - install mpv / VLC / ffmpeg manually if needed"
+}
 Ok "yt-dlp installed"
 
 # ===== 4. Add ~\.local\bin to user PATH =====

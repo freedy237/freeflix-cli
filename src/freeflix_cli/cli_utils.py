@@ -53,18 +53,16 @@ def get_user_input(prompt: str, default: str = None, header: str = None,
 
 
 def _input_fullscreen(prompt: str, default: str, header: str,
-                      history: list = None) -> str:
-    """Full-screen, resize-safe single-line text prompt (Unix raw mode).
+                       history: list = None) -> str:
+    """Full-screen, resize-safe single-line text prompt (cross-platform).
 
     Renders the header panel + prompt + live-typed text inside a screen=True
     Live, so resizing the window reflows the whole frame with no leftovers.
     Enter submits, Esc cancels (returns the default), Ctrl-C raises.
+    Keys come from _read_menu_key() (Windows msvcrt / POSIX with focus-event
+    filtering), so history recall works on every OS.
     """
     import sys
-
-    import termios
-    import tty
-    import select as _sel
 
     if not sys.stdin.isatty():
         raise RuntimeError("not a tty")
@@ -93,54 +91,37 @@ def _input_fullscreen(prompt: str, default: str, header: str,
                              style=color("dim")))
         return Group(*body)
 
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(fd)
-        with Live(render(), console=console, refresh_per_second=20, screen=True) as live:
-            while result["val"] is None:
-                r, _, _ = _sel.select([fd], [], [], 0.08)
-                if r:
-                    data = os.read(fd, 16)
-                    if data == b"\x1b":
-                        r2, _, _ = _sel.select([fd], [], [], 0.05)
-                        if r2:
-                            data += os.read(fd, 16)
-                    if data[:1] == b"\x1b":
-                        if len(data) == 1:
-                            result["val"] = ""  # lone Esc -> cancel
-                        elif history and data[1:3] in (b"[A", b"OA"):  # Up
-                            if hist_idx["i"] < len(history) - 1:
-                                hist_idx["i"] += 1
-                                text = history[hist_idx["i"]]
-                        elif history and data[1:3] in (b"[B", b"OB"):  # Down
-                            if hist_idx["i"] > 0:
-                                hist_idx["i"] -= 1
-                                text = history[hist_idx["i"]]
-                            else:
-                                hist_idx["i"] = -1
-                                text = ""
-                        # else: arrow/focus escape sequence -> ignore
+    with Live(render(), console=console, refresh_per_second=20, screen=True) as live:
+        while result["val"] is None:
+            key = _read_menu_key()
+            if key == "":
+                continue  # event focus/souris ignoré
+            if key == readchar.key.ESC:
+                result["val"] = ""  # Esc -> cancel
+            elif key == readchar.key.UP:
+                if history and hist_idx["i"] < len(history) - 1:
+                    hist_idx["i"] += 1
+                    text = history[hist_idx["i"]]
+            elif key == readchar.key.DOWN:
+                if history:
+                    if hist_idx["i"] > 0:
+                        hist_idx["i"] -= 1
+                        text = history[hist_idx["i"]]
                     else:
-                        b0 = data[:1]
-                        if b0 in (b"\r", b"\n"):
-                            result["val"] = text
-                        elif b0 in (b"\x7f", b"\x08"):
-                            text = text[:-1]
-                        elif b0 == b"\x03":
-                            raise KeyboardInterrupt("cancelled")
-                        else:
-                            try:
-                                ch = data.decode("utf-8", "ignore")
-                            except Exception:
-                                ch = ""
-                            for c in ch:
-                                if c.isprintable():
-                                    text += c
-                                    hist_idx["i"] = -1  # back to live editing
-                live.update(render())
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                        hist_idx["i"] = -1
+                        text = ""
+            elif key == readchar.key.ENTER:
+                result["val"] = text
+            elif key == readchar.key.BACKSPACE:
+                text = text[:-1]
+            elif key == readchar.key.CTRL_C:
+                raise KeyboardInterrupt("cancelled")
+            elif isinstance(key, str):
+                for c in key:
+                    if c.isprintable():
+                        text += c
+                        hist_idx["i"] = -1  # back to live editing
+            live.update(render())
 
     return result["val"].strip() or default
 

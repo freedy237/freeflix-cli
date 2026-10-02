@@ -883,32 +883,6 @@ def main():
     except Exception:
         _v = ""
 
-    # ── Split-install guard : metadata says new but code runs old (second
-    #    install shadowing PATH, locked files during a Windows upgrade…).
-    #    Warn once with the exact fix, then continue normally.
-    try:
-        from . import install_health as _ih
-        _st = _ih.install_state()
-        if _st["mismatch"]:
-            from rich.panel import Panel as _Panel
-            from rich.text import Text as _Text
-            _body = _Text()
-            _body.append(
-                f"{t('Version shown')} ({_st['metadata_version']}) "
-                f"{t('does not match the running code')} ({_st['code_version']}).\n",
-                style="bold yellow",
-            )
-            _body.append(t("Clean reinstall:") + "\n", style="white")
-            _body.append(_ih.cleanup_hint() + "\n", style="cyan")
-            console.print(_Panel(
-                _body,
-                title=f"[bold yellow]{icon('info')} {t('Mixed install detected')}[/bold yellow]",
-                border_style="yellow", expand=False,
-            ))
-            pause()
-    except Exception:
-        pass
-
     # ── Post-upgrade migrations : first launch after an upgrade finishes
     #    installing whatever the new version needs (and cleans up removals).
     setup_assistant.run_pending_migrations(_v)
@@ -1173,7 +1147,7 @@ def main():
                 from . import notifications as notif_mod
                 from . import themes as themes_mod
                 theme_label = themes_mod.active_theme().get("label", "?")
-                notif_on = notif_mod.is_systemd_timer_installed()
+                notif_on = notif_mod.is_daily_notify_installed()
                 # Sub-menu picker that always has a Back row, so Esc (which
                 # select_from_list maps to the last option) reliably goes back
                 # instead of silently picking the last item.
@@ -1250,18 +1224,25 @@ def main():
                 def _a_notif(notif_on=notif_on):
                     if notif_on:
                         if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
-                            ok = notif_mod.uninstall_systemd_timer()
+                            ok = notif_mod.uninstall_daily_notify()
                             toast(t("Notifications disabled.") if ok else t("Failed to disable notifications."),
                                   "success" if ok else "error")
                     else:
-                        print_info(t("This installs a systemd --user timer that runs once a day"))
-                        print_info(t("and uses notify-send to alert you about new episodes."))
+                        if os.name == "nt":
+                            print_info(t("This installs a daily scheduled task (09:00)"))
+                            print_info(t("and shows a Windows notification about new episodes."))
+                        else:
+                            print_info(t("This installs a systemd --user timer that runs once a day"))
+                            print_info(t("and uses notify-send to alert you about new episodes."))
                         if select_from_list([t("Yes"), t("No")], t("Enable daily notifications?")) == 0:
-                            if notif_mod.install_systemd_timer():
+                            if notif_mod.install_daily_notify():
                                 toast(t("Notifications enabled (runs daily)."))
                             else:
-                                print_error(t("Failed to enable. Make sure systemd --user works "
-                                              "and 'libnotify' is installed (sudo dnf install libnotify)."))
+                                if os.name == "nt":
+                                    print_error(t("Failed to enable. Make sure Task Scheduler is available."))
+                                else:
+                                    print_error(t("Failed to enable. Make sure systemd --user works "
+                                                  "and 'libnotify' is installed (sudo dnf install libnotify)."))
                                 pause()
 
                 def _a_nvidia():

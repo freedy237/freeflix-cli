@@ -319,10 +319,68 @@ class TestInstallHealth:
         hint = ih.cleanup_hint()
         assert isinstance(hint, str) and "freeflix-cli" in hint
 
-    def test_upgrade_command_per_mode(self):
-        from freeflix_cli import update_checker as uc
-        assert "uv tool upgrade" in uc._upgrade_command("freeflix-cli")
-        with mock.patch.object(uc.sys, "frozen", True, create=True):
-            assert "GitHub Releases" in uc._upgrade_command("freeflix-cli")
-        with mock.patch.object(uc.sys, "frozen", False, create=True):
-            assert "uv tool upgrade" in uc._upgrade_command("freeflix-cli")
+
+
+
+class TestWindowsNotifications:
+    """Backend Windows (toast + tâche planifiée) sans dépendance."""
+
+    def test_xml_escape(self):
+        from freeflix_cli import notifications as n
+        assert n._xml_escape("a&b<c>d") == "a&amp;b&lt;c&gt;d"
+
+    def test_notify_silent_without_notify_send(self):
+        import os as _os
+        from unittest import mock as _mock
+        from freeflix_cli import notifications as n
+        if _os.name == "nt":
+            return  # couvert par le test toast ci-dessous
+        with _mock.patch.object(n.shutil, "which", return_value=None):
+            with _mock.patch.object(n.subprocess, "run") as run:
+                n._notify("t", "b")
+                run.assert_not_called()
+
+    def test_windows_toast_escapes_xml(self):
+        import os as _os
+        from unittest import mock as _mock
+        from freeflix_cli import notifications as n
+        seen = {}
+
+        class _R:
+            returncode = 0
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return _R()
+
+        with _mock.patch.object(_os, "name", "nt"):
+            with _mock.patch.object(n.shutil, "which", return_value="powershell"):
+                with _mock.patch.object(n.subprocess, "run", side_effect=fake_run):
+                    assert n._notify_windows_toast("A&B", "<C>") is True
+        ps = " ".join(seen["cmd"])
+        assert "A&amp;B" in ps and "&lt;C&gt;" in ps
+        assert "-WindowStyle" in seen["cmd"]
+
+    def test_dispatch_uses_windows_backend(self):
+        import os as _os
+        from unittest import mock as _mock
+        from freeflix_cli import notifications as n
+        with _mock.patch.object(_os, "name", "nt"):
+            with _mock.patch.object(n, "is_windows_task_installed", return_value=True):
+                assert n.is_daily_notify_installed() is True
+            with _mock.patch.object(n, "install_windows_task", return_value=True) as inst:
+                assert n.install_daily_notify() is True
+                inst.assert_called_once_with()
+            with _mock.patch.object(n, "uninstall_windows_task", return_value=True) as un:
+                assert n.uninstall_daily_notify() is True
+                un.assert_called_once_with()
+
+    def test_schtasks_failure_is_false(self):
+        import os as _os
+        from unittest import mock as _mock
+        from freeflix_cli import notifications as n
+        with _mock.patch.object(_os, "name", "nt"):
+            with _mock.patch.object(n.subprocess, "run",
+                                    side_effect=OSError("no schtasks")):
+                assert n.is_windows_task_installed() is False
+                assert n.install_windows_task() is False

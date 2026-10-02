@@ -7,6 +7,7 @@ A systemd user timer at ~/.config/systemd/user/freeflix-notify.timer
 invokes it once a day. See `install_systemd_timer()` for setup.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -94,8 +95,45 @@ def scan_for_new_episodes() -> List[Dict]:
     return findings
 
 
+def _xml_escape(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _notify_windows_toast(title: str, body: str) -> bool:
+    """Toast natif Windows 10+ via WinRT (aucune dépendance). Best-effort."""
+    if os.name != "nt" or not shutil.which("powershell"):
+        return False
+    xml = (
+        "<toast><visual><binding template=\"ToastGeneric\">"
+        f"<text>{_xml_escape(title)}</text>"
+        f"<text>{_xml_escape(body)}</text>"
+        "</binding></visual></toast>"
+    )
+    ps = (
+        "[Windows.UI.Notifications.ToastNotificationManager, "
+        "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; "
+        "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; "
+        f"$doc.LoadXml('{xml}'); "
+        "[Windows.UI.Notifications.ToastNotificationManager]"
+        "::CreateToastNotifier('FreeFlix').Show("
+        "[Windows.UI.Notifications.ToastNotification]::new($doc))"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
+             "-Command", ps],
+            check=False, capture_output=True, timeout=15,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _notify(title: str, body: str):
     """Best-effort libnotify wrapper. Silent if notify-send is missing."""
+    if os.name == "nt":
+        _notify_windows_toast(title, body)
+        return
     notify = shutil.which("notify-send")
     if not notify:
         return
@@ -218,6 +256,65 @@ def uninstall_systemd_timer() -> bool:
 
 def is_systemd_timer_installed() -> bool:
     return (SYSTEMD_DIR / TIMER_NAME).exists()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Windows Task Scheduler backend (same daily scan, no new dependency)
+# ──────────────────────────────────────────────────────────────────
+
+_WINDOWS_TASK_NAME = "FreeFlixNotify"
+
+
+def _schtasks(*args: str):
+    try:
+        return subprocess.run(
+            ["schtasks", *args], capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return None
+
+
+def is_windows_task_installed() -> bool:
+    if os.name != "nt":
+        return False
+    r = _schtasks("/query", "/tn", _WINDOWS_TASK_NAME)
+    return bool(r is not None and r.returncode == 0)
+
+
+def install_windows_task() -> bool:
+    """Create a daily Task Scheduler entry running the same scan."""
+    if os.name != "nt":
+        return False
+    action = f'"{_python_path()}" -m freeflix_cli.notifications'
+    r = _schtasks("/create", "/tn", _WINDOWS_TASK_NAME, "/tr", action,
+                  "/sc", "daily", "/st", "09:00", "/f")
+    return bool(r is not None and r.returncode == 0)
+
+
+def uninstall_windows_task() -> bool:
+    _schtasks("/delete", "/tn", _WINDOWS_TASK_NAME, "/f")
+    return not is_windows_task_installed()
+
+
+# ── Cross-platform dispatch (Settings menu uses these) ─────────────
+
+def is_daily_notify_installed() -> bool:
+    """True if the daily scan is scheduled (either backend)."""
+    if os.name == "nt":
+        return is_windows_task_installed()
+    return is_systemd_timer_installed()
+
+
+def install_daily_notify() -> bool:
+    if os.name == "nt":
+        return install_windows_task()
+    return install_systemd_timer()
+
+
+def uninstall_daily_notify() -> bool:
+    if os.name == "nt":
+        return uninstall_windows_task()
+    return uninstall_systemd_timer()
 
 
 if __name__ == "__main__":
