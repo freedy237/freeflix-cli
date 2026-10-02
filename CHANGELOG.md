@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.2
+
+Diagnostic des installs mixtes (version affichée neuve, code exécuté vieux).
+
+- Nouveau module `install_health` : garde au démarrage qui compare la
+  version embarquée au metadata et affiche la procédure de nettoyage si
+  divergent, section INSTALL dans `freeflix --doctor` (mode, chemin du
+  module, code vs metadata, launchers sur PATH).
+- Bannière d’upgrade adaptée au mode : le `.exe` PyInstaller redirige
+  vers les GitHub Releases au lieu de `uv tool upgrade`.
+- Runbook d’upgrade Windows dans le README.
+
 ## 1.11.1
 
 Sécurité + robustesse + nettoyage.
