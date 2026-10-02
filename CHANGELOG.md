@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.11.4
+
+Parité Windows = Linux.
+
+- Recherche avec historique sur tous OS (prompt réécrit sans termios),
+  annulation Esc-Esc des downloads sur Windows, installeur Windows
+  complet (mpv, VLC, ffmpeg, aria2, chafa), notifications quotidiennes
+  Windows (toast natif + tâche planifiée).
+- Bannière de mise à jour d’origine restaurée.
+
 ## 1.11.3
 
 Les liens/fonctionnalités arrivent enfin sur Windows.
