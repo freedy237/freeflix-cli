@@ -238,7 +238,7 @@ wheels = [
 
 [[package]]
 name = "freeflix-cli"
-version = "1.11.2"
+version = "1.11.3"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },

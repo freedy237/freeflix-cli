@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.11.3
+
+Les liens/fonctionnalités arrivent enfin sur Windows.
+
+- Cause racine : le fichier des portails était cherché en comptant
+  `.. × 5` depuis `__file__` — juste sur Linux, faux d’un niveau sur
+  Windows (`Lib/site-packages`) → fichier bundled jamais trouvé →
+  repli sur URLs en dur périmées. Candidats désormais ancrés sur
+  `sys.prefix`/`sysconfig` (juste partout), avec le chemin gagnant
+  exposé dans `--doctor`.
+- Timeout du remote 2s → 8s, `selectors.jsonc` livré dans le wheel,
+  échecs de recherche French-Stream loggés avec la cause, `--doctor`
+  affiche portails effectifs + URL par recherche.
+
 ## 1.11.2
 
 Diagnostic des installs mixtes (version affichée neuve, code exécuté vieux).
