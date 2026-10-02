@@ -737,6 +737,96 @@ class TestGoldenmsGuards:
             goldenms._get = orig
 
 
+class TestSearchDiagnostics:
+    """La recherche vide se diagnostique (log fichier, pas UI)."""
+
+    def _logged(self, fn):
+        from freeflix_cli import logsetup as _ls
+        msgs = []
+        orig = _ls.warning
+        _ls.warning = msgs.append
+        try:
+            fn()
+        finally:
+            _ls.warning = orig
+        return msgs
+
+    def test_search_request_failure_logged(self):
+        from freeflix_cli.scraping import french_stream
+        orig = french_stream._post
+
+        def boom(*a, **k):
+            raise ConnectionError("dns fail")
+
+        french_stream._post = boom
+        try:
+            out = []
+            msgs = self._logged(lambda: out.append(french_stream.search("matrix")))
+            assert out == [[]]
+            assert any("request failed" in m for m in msgs)
+        finally:
+            french_stream._post = orig
+
+    def test_search_challenge_logged(self):
+        from freeflix_cli.scraping import french_stream
+        html = "<html><body>verification anti-robot in progress</body></html>"
+        orig = french_stream._post
+        french_stream._post = lambda *a, **k: _mock_response(html)
+        try:
+            msgs = self._logged(lambda: french_stream.search("matrix"))
+            assert any("anti-robot" in m for m in msgs)
+        finally:
+            french_stream._post = orig
+
+    def test_search_empty_parse_logged(self):
+        from freeflix_cli.scraping import french_stream
+        orig = french_stream._post
+        french_stream._post = lambda *a, **k: _mock_response("<html><body>ok</body></html>")
+        try:
+            msgs = self._logged(lambda: french_stream.search("matrix"))
+            assert any("0 results parsed" in m for m in msgs)
+        finally:
+            french_stream._post = orig
+
+    def test_portal_origins_tracked(self):
+        from freeflix_cli.scraping import config as cfg
+        assert set(cfg.portals) <= set(cfg.portal_origins) or set(cfg.portal_origins) >= set(cfg.portals)
+        for v in cfg.portal_origins.values():
+            assert v in ("default", "remote", "local")
+
+
+class TestPortalCandidates:
+    """Le fichier bundled se trouve sans compter les `..` (Windows)."""
+
+    def test_share_anchored_on_prefix(self, tmp_path, monkeypatch):
+        import os
+        import sys
+        from freeflix_cli.scraping import config as cfg
+        share_file = os.path.join(
+            str(tmp_path), "share", "freeflix-cli", "data", "source_portal.jsonc")
+        os.makedirs(os.path.dirname(share_file))
+        with open(share_file, "w") as f:
+            f.write('{"coflix": "https://coflix.ac"}')
+        import sysconfig as _sc
+        monkeypatch.setattr(_sc, "get_path", lambda *a, **k: str(tmp_path))
+        monkeypatch.setattr(sys, "prefix", str(tmp_path))
+        cands = cfg._local_candidates()
+        assert os.path.normpath(share_file) in cands
+
+    def test_empty_file_does_not_shadow_next(self, tmp_path, monkeypatch):
+        import os
+        from freeflix_cli.scraping import config as cfg
+        first = tmp_path / "a.json"
+        first.write_text("not json {{{")
+        second = tmp_path / "b.json"
+        second.write_text('{"coflix": "https://coflix.ac"}')
+        monkeypatch.setattr(cfg, "_LOCAL_CANDIDATES",
+                            [str(first), str(second)])
+        out = cfg._find_local_override()
+        assert out.get("coflix") == "https://coflix.ac"
+        assert cfg._local_portal_path == str(second)
+
+
 class TestFrenchStreamGetFsschal:
     """_get() détecte maintenant le challenge fsschal comme _post()."""
 

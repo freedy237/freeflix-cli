@@ -260,15 +260,24 @@ def run(upload: bool = False) -> str:
     L(sep)
 
     # ── Network ────────────────────────────────────────────────────
+    # Hosts lus depuis les portails EFFECTIFS (jamais de domaines périmés
+    # en dur : coflix.cymru / french-stream.xyz ont déjà induit en erreur).
     L("NETWORK")
     L()
     hosts = [
         ("GitHub", "github.com", 443),
-        ("coflix.cymru", "coflix.cymru", 443),
-        ("anime-sama.to", "anime-sama.to", 443),
-        ("french-stream.xyz", "french-stream.xyz", 443),
         ("api.anilist.co", "api.anilist.co", 443),
     ]
+    try:
+        from urllib.parse import urlparse as _up
+        from .scraping.config import portals as _portals
+        for _name in ("coflix", "anime-sama", "french-stream", "french-manga"):
+            _u = _portals.get(_name, "")
+            _h = (_up(_u).hostname or "").strip() if _u else ""
+            if _h:
+                hosts.append((_name, _h, 443))
+    except Exception:
+        pass
     for label, host, port in hosts:
         status = _check_connectivity(host, port)
         L(f"  {label:20s}  {status:<12s}  {host}:{port}")
@@ -280,6 +289,18 @@ def run(upload: bool = False) -> str:
     from .tracker import tracker
 
     L(f"  Tracker data : {tracker.data_dir}")
+    try:
+        from .scraping.config import portals as _portals
+        from .scraping.config import portal_origins as _origins
+        from .scraping import config as _cfg
+        L("  Portals (effective URL + source):")
+        for _name in ("anime-sama", "french-manga", "coflix", "french-stream"):
+            _u = _portals.get(_name, "") or "(missing)"
+            _o = _origins.get(_name, "?")
+            L(f"    {_name:14s} {_u}  [{_o}]")
+        L(f"  Local file : {getattr(_cfg, '_local_portal_path', '') or '(none found)'}")
+    except Exception as _e:
+        L(f"  Portals : (unavailable: {_e})")
     L(f"  mpv config   : {_mpv_config_dir()}")
     try:
         from platformdirs import user_data_dir
@@ -359,12 +380,17 @@ def check_sources() -> str:
         try:
             if hasattr(mod, "get_website_url"):
                 mod.get_website_url()
+            try:
+                _origin = getattr(mod, "website_origin", "") or ""
+            except Exception:
+                _origin = ""
             n = len(mod.search(query))
             dt = int((_t.time() - t0) * 1000)
+            _via = f" via {_origin}" if _origin else ""
             if n > 0:
-                lines.append(f"✓ {label:<14} OK — {n} results  ({dt} ms)")
+                lines.append(f"✓ {label:<14} OK — {n} results  ({dt} ms){_via}")
             else:
-                lines.append(f"⚠ {label:<14} reachable but 0 results for '{query}'  ({dt} ms)")
+                lines.append(f"⚠ {label:<14} reachable but 0 results for '{query}'  ({dt} ms){_via}")
         except Exception as e:
             msg = str(e)
             low = msg.lower()

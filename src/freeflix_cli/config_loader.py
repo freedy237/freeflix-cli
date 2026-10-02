@@ -28,12 +28,13 @@ def load_remote_jsonc(url: str, default: dict) -> dict:
 
     The local override file (loaded separately by callers) wins over
     whatever this returns, so when the remote is unreachable the app
-    is still fully functional. We therefore use a short timeout (2 s)
+    is still fully functional. We use an 8 s timeout (2 s starved slow
+    Windows/antivirus-intercepted links into permanent offline-mode)
     and only log a compact one-line warning instead of the verbose
     curl-cffi error message.
     """
     try:
-        response = requests.get(url, impersonate="chrome", timeout=2)
+        response = requests.get(url, impersonate="chrome", timeout=8)
         response.raise_for_status()
         clean_json = strip_json_comments(response.text)
         clean_json = strip_trailing_commas(clean_json)

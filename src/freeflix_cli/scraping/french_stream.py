@@ -182,6 +182,15 @@ def search(query: str) -> list[SearchResult]:
         "Referer": f"{website_origin}/",
     }
 
+    def _diag(msg: str):
+        # Fichier log uniquement (jamais l'UI) : la recherche vide sur
+        # certaines machines se diagnostique via le log, pas à l'aveugle.
+        try:
+            from .. import logsetup as _ls
+            _ls.warning(f"french-stream search: {msg}")
+        except Exception:
+            pass
+
     try:
         response = _post(
             website_origin + page_search,
@@ -190,12 +199,20 @@ def search(query: str) -> list[SearchResult]:
             timeout=15,
         )
         response.raise_for_status()
-    except Exception:
+    except Exception as e:
+        _diag(f"request failed url={website_origin + page_search} err={type(e).__name__}: {e}")
         return []
+
+    body = response.text or ""
+    low = body.lower()
+    if "verification" in low and "anti-robot" in low:
+        _diag(f"anti-robot challenge page ({len(body)} bytes)")
+    elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
+        _diag(f"cloudflare challenge page ({len(body)} bytes)")
 
     results: list[SearchResult] = []
 
-    soup = parse_html(response.text)
+    soup = parse_html(body)
 
     for result in soup.find_all("div", {"class": "search-item"}):
         try:
@@ -220,6 +237,9 @@ def search(query: str) -> list[SearchResult]:
 
         results.append(SearchResult(title, link, img, genres))
 
+    if not results:
+        _diag(f"0 results parsed from {len(body)}-byte response "
+              f"(status={getattr(response, 'status_code', '?')})")
     return results
 
 
