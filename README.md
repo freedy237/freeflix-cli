@@ -149,6 +149,26 @@ cd freeflix-cli
 uv pip install -e .
 ```
 
+### Upgrading on Windows (read this first)
+
+On Windows there are two distribution channels — pick **one**:
+
+- `uv tool` install → upgrade with `uv tool upgrade freeflix-cli`
+  (**close FreeFlix first**, locked files break the upgrade)
+- standalone `freeflix-windows-x86_64.exe` → re-download it from
+  [GitHub Releases](https://github.com/freedy237/freeflix-cli/releases)
+  (no package command can update the .exe)
+
+If the version looks new but players/search behave like the old one
+(mixed install — a second install shadowing PATH or a partial upgrade),
+run `freeflix --doctor` and check the INSTALL section, then clean up:
+
+```powershell
+where.exe freeflix
+uv tool uninstall freeflix-cli
+uv tool install freeflix-cli
+```
+
 ---
 
 ## 🚀 Usage

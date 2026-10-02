@@ -287,3 +287,42 @@ class TestCacheInvalidation:
         assert result is True
         mock_ready.assert_called_once()
         assert tracker.data.get("system_deps_ok_version") == "1.8.0"
+
+
+class TestInstallHealth:
+    """Split-install detection (metadata says new, code runs old)."""
+
+    def test_mismatch_detected(self):
+        from freeflix_cli import install_health as ih
+        with mock.patch.object(ih, "metadata_version", return_value="9.9.9"):
+            st = ih.install_state()
+            assert st["mismatch"] is True
+            assert st["code_version"] == ih.CODE_VERSION
+
+    def test_no_mismatch_when_equal(self):
+        from freeflix_cli import install_health as ih
+        with mock.patch.object(ih, "metadata_version", return_value=ih.CODE_VERSION):
+            assert ih.install_state()["mismatch"] is False
+
+    def test_no_metadata_no_mismatch(self):
+        from freeflix_cli import install_health as ih
+        with mock.patch.object(ih, "metadata_version", return_value=None):
+            assert ih.install_state()["mismatch"] is False
+
+    def test_find_shims_returns_list(self):
+        from freeflix_cli import install_health as ih
+        shims = ih.find_shims()
+        assert isinstance(shims, list)
+
+    def test_cleanup_hint_per_os(self):
+        from freeflix_cli import install_health as ih
+        hint = ih.cleanup_hint()
+        assert isinstance(hint, str) and "freeflix-cli" in hint
+
+    def test_upgrade_command_per_mode(self):
+        from freeflix_cli import update_checker as uc
+        assert "uv tool upgrade" in uc._upgrade_command("freeflix-cli")
+        with mock.patch.object(uc.sys, "frozen", True, create=True):
+            assert "GitHub Releases" in uc._upgrade_command("freeflix-cli")
+        with mock.patch.object(uc.sys, "frozen", False, create=True):
+            assert "uv tool upgrade" in uc._upgrade_command("freeflix-cli")

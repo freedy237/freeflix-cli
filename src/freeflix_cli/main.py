@@ -883,6 +883,32 @@ def main():
     except Exception:
         _v = ""
 
+    # ── Split-install guard : metadata says new but code runs old (second
+    #    install shadowing PATH, locked files during a Windows upgrade…).
+    #    Warn once with the exact fix, then continue normally.
+    try:
+        from . import install_health as _ih
+        _st = _ih.install_state()
+        if _st["mismatch"]:
+            from rich.panel import Panel as _Panel
+            from rich.text import Text as _Text
+            _body = _Text()
+            _body.append(
+                f"{t('Version shown')} ({_st['metadata_version']}) "
+                f"{t('does not match the running code')} ({_st['code_version']}).\n",
+                style="bold yellow",
+            )
+            _body.append(t("Clean reinstall:") + "\n", style="white")
+            _body.append(_ih.cleanup_hint() + "\n", style="cyan")
+            console.print(_Panel(
+                _body,
+                title=f"[bold yellow]{icon('info')} {t('Mixed install detected')}[/bold yellow]",
+                border_style="yellow", expand=False,
+            ))
+            pause()
+    except Exception:
+        pass
+
     # ── Post-upgrade migrations : first launch after an upgrade finishes
     #    installing whatever the new version needs (and cleans up removals).
     setup_assistant.run_pending_migrations(_v)

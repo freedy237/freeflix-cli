@@ -5,6 +5,7 @@ top of the home screen when one exists.
 """
 
 import json
+import sys
 import urllib.request
 import importlib.metadata
 from datetime import datetime, timedelta
@@ -74,6 +75,14 @@ def _cached_latest(package_name: str) -> str:
     return cached_ver  # fall back to whatever we have (may be None)
 
 
+def _upgrade_command(package_name: str = "freeflix-cli") -> str:
+    """La commande à afficher : le .exe PyInstaller ne se met pas à jour
+    via un gestionnaire de paquets, il faut le re-télécharger."""
+    if getattr(sys, "frozen", False):
+        return t("Re-download freeflix-windows-x86_64.exe from GitHub Releases")
+    return f"uv tool upgrade {package_name}"
+
+
 def check_update(package_name: str = "freeflix-cli") -> bool:
     """
     If a newer version is on PyPI, print a banner and return True.
@@ -99,7 +108,7 @@ def check_update(package_name: str = "freeflix-cli") -> bool:
     body.append(f"     {t('Latest')}:     ", style="white")
     body.append(f"{latest}\n\n", style="bold green")
     body.append(f"  {t('Upgrade with')}:\n\n", style="bold white")
-    body.append(f"     uv tool upgrade {package_name}\n", style="cyan")
+    body.append(f"     {_upgrade_command(package_name)}\n", style="cyan")
 
     console.print(
         Panel(

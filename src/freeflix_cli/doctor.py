@@ -185,6 +185,31 @@ def run(upload: bool = False) -> str:
     L(f"Version   : {_version()}")
     L(sep)
 
+    # ── Install health ─────────────────────────────────────────────
+    # Catches split installs (metadata says new, code runs old) and
+    # shadowing second installs — the classic "upgraded but still old".
+    L("INSTALL")
+    L()
+    try:
+        from . import install_health as _ih
+        _st = _ih.install_state()
+        _ok = "OK" if not _st["mismatch"] else "MIXED"
+        L(f"  Mode    : {'frozen .exe' if _st['frozen'] else 'python tool'}")
+        L(f"  Module  : {_st['module_file'] or '(unknown)'}")
+        L(f"  Code    : {_st['code_version']}")
+        L(f"  Metadata: {_st['metadata_version'] or '(none)'}  [{_ok}]")
+        if _st["mismatch"]:
+            L("  !! Metadata and code disagree — clean reinstall advised.")
+        _shims = _st["shims"]
+        L(f"  Launchers on PATH ({len(_shims)}):")
+        for _s in _shims[:6]:
+            L(f"    - {_s}")
+        if not _shims:
+            L("    (none found)")
+    except Exception as _e:
+        L(f"  (install check failed: {_e})")
+    L(sep)
+
     # ── Binaries ───────────────────────────────────────────────────
     L("BINARIES")
     L()

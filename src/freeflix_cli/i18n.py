@@ -511,6 +511,12 @@ _FR = {
         "puis ouvre un NOUVEAU Windows Terminal et lance :  freeflix",
     "to get a free API key, then paste it here.":
         "pour obtenir une clé API gratuite, puis colle-la ici.",
+    "Mixed install detected": "Installation mixte détectée",
+    "Version shown": "Version affichée",
+    "does not match the running code": "ne correspond pas au code exécuté",
+    "Clean reinstall:": "Réinstallation propre :",
+    "Re-download freeflix-windows-x86_64.exe from GitHub Releases":
+        "Re-télécharge freeflix-windows-x86_64.exe depuis les GitHub Releases",
 }
 
 
