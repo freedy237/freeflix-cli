@@ -67,6 +67,8 @@ def _input_fullscreen(prompt: str, default: str, header: str,
     if not sys.stdin.isatty():
         raise RuntimeError("not a tty")
 
+    flush_input_settled()
+
     from .i18n import t as _t
     text = ""
     result = {"val": None}
@@ -147,6 +149,8 @@ def confirm_or_timeout(message: str, seconds: int = 6, default: bool = True) -> 
     if not console.is_terminal or not sys.stdin.isatty():
         return default
 
+    flush_input_settled()
+
     accent = color("accent")
     dim = color("dim")
 
@@ -225,6 +229,28 @@ def drain_stdin():
             termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
     except Exception:
         pass
+
+
+def flush_input_settled(settle: float = 0.03):
+    """Purge stale stdin before an interactive screen.
+
+    Between two screens (spinner → menu, mpv → menu, menu → menu) any
+    keystroke or terminal event (focus ``\\x1b[I``/``\\x1b[O``, mouse report,
+    device-attribute reply) sitting in the input queue is *invalid* — the user
+    can't aim at a screen that isn't shown yet. Without this purge the next
+    menu misreads the leading ``\\x1b`` as a lone Esc → phantom "back".
+
+    Waits ~30 ms first so an escape sequence still in flight can complete,
+    then drains. Best-effort ; never raises.
+    """
+    try:
+        import sys
+        import time as _t
+        if sys.stdin.isatty():
+            _t.sleep(settle)
+    except Exception:
+        pass
+    drain_stdin()
 
 
 def disable_terminal_reports():
@@ -633,9 +659,12 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         else dict(refresh_per_second=10, transient=True)
     )
     result = None  # ORIGINAL index chosen
+    # Purge stale input at EVERY menu entry (not just Home): keystrokes typed
+    # during a spinner/network wait or terminal focus events must never leak
+    # into the fresh menu as a phantom Esc/Enter.
+    flush_input_settled()
     if flush_input:
-        # Discard any startup terminal-query / focus bytes so the first read
-        # isn't mis-parsed as a lone Esc (→ Exit "the moment you enter").
+        # Kept for compat — already covered by the settled flush above.
         drain_stdin()
     with Live(generate_renderable(), **live_kwargs) as live:
         while result is None:
@@ -730,6 +759,8 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
 
     cursor = next((i for i in range(n) if i not in disabled), 0)
     page = 12
+
+    flush_input_settled()
 
     from .i18n import t as _t
 
@@ -1209,6 +1240,10 @@ def select_with_preview(labels, prompt, previews, default_index=0):
 
     chosen = {"idx": None}
 
+    # Same purge as the other menus: background poster work runs while this
+    # screen opens, so any key typed during the search must not leak in.
+    flush_input_settled()
+
     try:
         if use_raw:
             import termios
@@ -1235,7 +1270,9 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                             if data == b"\x1b":
                                 # Lone ESC may be a split escape sequence
                                 # (arrow / focus event) - wait briefly for more.
-                                r2, _, _ = _sel.select([fd], [], [], 0.05)
+                                # Aligned with _read_menu_key (100 ms): under
+                                # poster-load contention the tail can lag.
+                                r2, _, _ = _sel.select([fd], [], [], 0.10)
                                 if r2:
                                     data += _os.read(fd, 16)
                             key = _decode_key(data) if data else None
