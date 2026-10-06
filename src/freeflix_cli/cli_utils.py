@@ -513,6 +513,58 @@ def _read_menu_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+# Language / quality badges + status glyphs get their own colours in every
+# menu (player lists, batch picker, theme list…). Labels stay PLAIN strings
+# (so _fit truncation and tests are unaffected) — styling is applied here,
+# centrally, on the already-fitted text. Spans never change display width,
+# and unknown [...] tokens (e.g. "[1/6]", episode titles) are left alone.
+_LANG_BADGE_ROLES = {
+    "VF": "success",
+    "VOSTFR": "info",
+    "VO": "accent",
+    "VFQ": "warning",
+}
+_OPT_TOKEN_PAT = re.compile(r"\[VFQ\]|\[VOSTFR\]|\[VF\]|\[VO\]|\b\d{3,4}p\b|✗|🔒|✓")
+_THEME_DOT_PAT = re.compile(r"^\[([#\w]+)\]●\[/\] ")
+
+
+def _styled_option(text: str, base: str = "") -> Text:
+    """Render a menu label with coloured badges.
+
+    * ``[VF]``/``[VOSTFR]``/``[VO]``/``[VFQ]`` → themed language colours
+    * ``1080p``/``720p``… → bold accent
+    * ``✗`` → error, ``🔒`` → warning, ``✓`` → success
+    * a leading ``[colour]●[/] `` (theme list) → a dot in that colour
+
+    Everything else keeps ``base``. ``.plain`` is always ``text``.
+    """
+    out = Text()
+    pos = 0
+    m = _THEME_DOT_PAT.match(text)
+    if m:
+        out.append("● ", style=m.group(1))
+        pos = m.end()
+    base_style = base or None
+    for mo in _OPT_TOKEN_PAT.finditer(text, pos):
+        if mo.start() > pos:
+            out.append(text[pos:mo.start()], style=base_style)
+        tok = mo.group(0)
+        if tok.startswith("["):
+            out.append(tok, style=f"bold {color(_LANG_BADGE_ROLES.get(tok[1:-1], 'info'))}")
+        elif tok == "✗":
+            out.append(tok, style=f"bold {color('error')}")
+        elif tok == "🔒":
+            out.append(tok, style=color("warning"))
+        elif tok == "✓":
+            out.append(tok, style=f"bold {color('success')}")
+        else:  # 1080p …
+            out.append(tok, style=f"bold {color('accent')}")
+        pos = mo.end()
+    if pos < len(text):
+        out.append(text[pos:], style=base_style)
+    return out
+
+
 def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                      header: str = None, group_headers: dict = None,
                      top=None, flush_input: bool = False,
@@ -627,16 +679,18 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 # Soft, high-end cursor: chevron + accent rail + bold accent
                 # text — no harsh full-width reverse. The prefix is 4 cells
                 # ("❯ ▌ ") so the label lines up with the 4-space unselected
-                # rows below.
+                # rows below. Badges keep their own colours on the cursor row.
                 row = Text()
                 row.append("❯ ", style=f"bold {color('accent')}")
                 row.append("▌ ", style=color("accent"))
-                row.append(option, style=f"bold {color('accent')}")
+                row.append_text(_styled_option(option, base=f"bold {color('accent')}"))
                 lines.append(row)
             else:
                 # No hardcoded colour → adopts the terminal's default fg, so it
                 # stays readable on BOTH dark and light themes.
-                lines.append(Text(f"    {option}"))
+                un = Text("    ")
+                un.append_text(_styled_option(option))
+                lines.append(un)
 
         if end_index < len(view):
             lines.append(Text("  ↓ ...", style=color("dim")))
@@ -776,11 +830,17 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
                 box = "[✓]"
             row = f"{box} {options[i]}"
             if i == cursor:
-                lines.append(Text(f"❯ {row}", style=f"bold {color('accent')} reverse"))
+                cur = Text("❯ ", style=f"bold {color('accent')} reverse")
+                cur.append_text(_styled_option(row, base=f"bold {color('accent')} reverse"))
+                lines.append(cur)
             elif i in disabled:
-                lines.append(Text(f"  {row}", style=color("dim")))
+                dis = Text("  ")
+                dis.append_text(_styled_option(row, base=color("dim")))
+                lines.append(dis)
             else:
-                lines.append(Text(f"  {row}", style="white"))
+                ena = Text("  ")
+                ena.append_text(_styled_option(row, base="white"))
+                lines.append(ena)
         if end < n:
             lines.append(Text("  ↓ ...", style=color("dim")))
         lines.append(Text(""))
@@ -1014,11 +1074,15 @@ def select_with_preview(labels, prompt, previews, default_index=0):
             i = vis[pos]
             lab = _fit_w(iconify(labels[i]), lw - 5)
             if pos == sel:
-                bar = f"  ▌ {lab}"
-                pad = max(1, lw - cell_len(bar) - 1)
-                lines.append(Text(bar + " " * pad, style=f"bold {color('accent')} reverse"))
+                pad = max(1, lw - cell_len(f"  ▌ {lab}") - 1)
+                srow = Text("  ▌ ", style=f"bold {color('accent')} reverse")
+                srow.append_text(_styled_option(lab, base=f"bold {color('accent')} reverse"))
+                srow.append(" " * pad, style=f"bold {color('accent')} reverse")
+                lines.append(srow)
             else:
-                lines.append(Text(f"    {lab}", style="white"))
+                urow = Text("    ")
+                urow.append_text(_styled_option(lab, base="white"))
+                lines.append(urow)
         if end < len(vis):
             lines.append(Text("  ↓ …", style=color("dim")))
         if not vis:

@@ -320,27 +320,12 @@ def _show_stats():
 
 
 def _progress_bar_text(pct: int, width: int = 14):
-    """A smooth themed progress bar with 8× sub-cell resolution.
-
-    Uses the partial-block glyphs (▏▎▍▌▋▊▉█) so the fill edge lands on an
-    eighth of a cell instead of snapping to a whole block — the bar reads as a
-    continuous line rather than a coarse staircase. Thin rails frame it.
-    """
-    from rich.text import Text
+    """Home-dashboard progress bar — delegates to the house ``▰▱`` style
+    (progress.bar) so every bar in the app looks identical."""
+    from .progress import bar as _house_bar
     from .themes import color
-    _EIGHTHS = " ▏▎▍▌▋▊▉█"  # 0/8 … 8/8
     pct = max(0, min(100, int(pct)))
-    eighths = int(round(pct / 100 * width * 8))
-    full, rem = divmod(eighths, 8)
-    t = Text()
-    t.append("▏", style=color("dim"))
-    t.append("█" * full, style=color("success"))
-    if rem:
-        t.append(_EIGHTHS[rem], style=color("success"))
-    empty = width - full - (1 if rem else 0)
-    if empty > 0:
-        t.append(" " * empty, style=color("dim"))
-    t.append("▏", style=color("dim"))
+    t = _house_bar(pct / 100, width)
     t.append(f" {pct}%", style=color("info"))
     return t
 
@@ -424,7 +409,11 @@ def _home_dashboard():
 
 
 def _theme_preview_panel(theme: dict, title: str):
-    """A small sample panel rendered in a given theme dict (for live preview)."""
+    """A small sample panel rendered in a given theme dict (for live preview).
+
+    Shows every house element — menu cursor, message colours, the ▰▱ bar and
+    the language/quality badges — so the preview matches the real UI.
+    """
     from rich.panel import Panel
     from rich.text import Text
     body = Text()
@@ -434,6 +423,13 @@ def _theme_preview_panel(theme: dict, title: str):
     body.append("warning  ", style=theme["warning"])
     body.append("error  ", style=theme["error"])
     body.append("info\n", style=theme["info"])
+    body.append("  ", style="")
+    body.append("▰" * 6, style=f"bold {theme['accent']}")
+    body.append("▱" * 4, style=theme["dim"])
+    body.append("  62%\n", style=theme["info"])
+    body.append("  [VF] ", style=f"bold {theme['success']}")
+    body.append("[VOSTFR] ", style=f"bold {theme['info']}")
+    body.append("1080p", style=f"bold {theme['accent']}")
     return Panel(body, border_style=theme["accent"],
                  title=f"[{theme['header']}]{title}[/]", title_align="left")
 

@@ -106,6 +106,9 @@ _FR = {
     "Resume download": "Reprendre le téléchargement",
     "Delete partial": "Supprimer le partiel",
     "Download completed.": "Téléchargement terminé.",
+    "Batch complete": "Téléchargement terminé",
+    "Episode": "Épisode",
+    "Status": "Statut",
     "Could not resume — the stream link may have expired; "
     "re-download it from the source.":
         "Reprise impossible — le lien a peut-être expiré ; "

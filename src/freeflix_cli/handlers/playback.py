@@ -582,5 +582,26 @@ def download_episodes_batch(
     succeeded = sum(1 for v in ok_by_label.values() if v)
     for n, (_i, ep) in enumerate(sel):
         results[ep.title] = ok_by_label[labels[n]]
-    print_info(f"Batch complete: {succeeded}/{total} episodes downloaded.")
+    _print_batch_summary(ok_by_label, succeeded, total)
     return results
+
+
+def _print_batch_summary(ok_by_label: dict, succeeded: int, total: int):
+    """Batch download recap as a themed table (✓/✗ per episode)."""
+    from rich.table import Table
+    from rich.text import Text
+    from ..cli_utils import console
+    from ..themes import color
+    table = Table(
+        title=f"{icon('download')} {t('Batch complete')}: {succeeded}/{total}",
+        border_style=color("border"),
+        show_header=True,
+        header_style=f"bold {color('header')}",
+    )
+    table.add_column(t("Episode"), overflow="fold")
+    table.add_column(t("Status"), justify="center", width=8)
+    for label, ok in ok_by_label.items():
+        mark = (Text("✓", style=f"bold {color('success')}")
+                if ok else Text("✗", style=f"bold {color('error')}"))
+        table.add_row(label, mark)
+    console.print(table)
