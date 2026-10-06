@@ -70,6 +70,32 @@ def test_decode_new_algorithm_real_sample():
     assert player._fsvid_decode(code, "wronghost.example") is None
 
 
+def _encode_new(url: str, offset: int, mult: int, host: str, bc: int) -> str:
+    """Inverse of the NEW algorithm — build a payload for a synthetic sample."""
+    H = sum(map(ord, host)) & 255
+    body = "".join(
+        chr(ord(ch) ^ ((offset + i * mult + H + bc) & 255))
+        for i, ch in enumerate(url)
+    )[::-1]
+    return base64.b64encode(body.encode("latin-1")).decode()
+
+
+def test_decode_new_algorithm_with_bc():
+    """2026 fsvid rotation: key is ``(OFFSET + i*MULT + H + BC) & 255`` where
+    BC = offsetWidth of a hidden 1in div (96 at 100% zoom)."""
+    url = "https://r1.fsvid.lol/hls2/02/00009/uxqd73s5fd60_n/master.m3u8?t=TOKEN&e=86400"
+    payload = _encode_new(url, 0x3D, 89, "fsvid.lol", 96)
+    code = (
+        'var b = atob(s), a = b.split("").reverse().join(""), r = "";'
+        'for (var i = 0; i < a.length; i++) {'
+        'var kk = (0x3d + i * 89 + H + BC) & 255;'
+        'r += String.fromCharCode(a.charCodeAt(i) ^ kk)}'
+        'return /^https?:/.test(r) ? r : "https://s1.fsvid.lol/troll/master.m3u8"'
+        '})("' + payload + '")'
+    )
+    assert player._fsvid_decode(code, "fsvid.lol") == url
+
+
 def test_decode_missing_returns_none():
     assert player._fsvid_decode("no key here") is None
     assert player._fsvid_decode("") is None

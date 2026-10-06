@@ -879,18 +879,23 @@ def _fsvid_decode(code: str, hostname: str = "fsvid.lol"):
 
     NEW (2026) — the video.js `sources.src` IIFE :
         H = (sum of location.hostname char codes) & 255
+        BC = offsetWidth of a hidden 1in div (96 CSS px at 100% zoom)
         b = atob(payload) ; a = reverse(b)
-        for each i: kk = (OFFSET + i*MULT + H) & 255 ; r += chr(a[i] ^ kk)
+        for each i: kk = (OFFSET + i*MULT + H [+ BC]) & 255 ; r += chr(a[i] ^ kk)
       OFFSET/MULT are read straight out of the JS so a constant tweak can't
-      break us, and `hostname` MUST be the embed host (fsvid.lol / vidzy.org).
+      break us, and `hostname` MUST be the embed host (fsvid.lol / vidzy.cc…).
+      BC defaults to 96 (standard zoom) with a brute-force fallback over the
+      plausible zoom range — the decode is client-side, so a wrong BC just
+      yields garbage that fails validation.
 
     OLD — a fixed 8-byte XOR key `var k=[…]` (kept as a fallback).
     """
     code = code or ""
 
-    # ── NEW algorithm : (OFFSET + i*MULT + H) with a reversed base64 body ──
+    # ── NEW algorithm : (OFFSET + i*MULT + H [+ BC]) + reversed base64 ──
     km = re.search(
-        r"\(\s*(0x[0-9a-fA-F]+|\d+)\s*\+\s*i\s*\*\s*(\d+)\s*\+\s*H\s*\)", code
+        r"\(\s*(0x[0-9a-fA-F]+|\d+)\s*\+\s*i\s*\*\s*(\d+)\s*\+\s*H\s*(?:\+\s*BC\s*)?\)",
+        code,
     )
     if km:
         try:
@@ -898,6 +903,7 @@ def _fsvid_decode(code: str, hostname: str = "fsvid.lol"):
             mult = int(km.group(2))
         except ValueError:
             offset = mult = None
+        uses_bc = "BC" in km.group(0)
         # Payload = the base64 argument of the IIFE that contains this key.
         payload = None
         m2 = re.search(r'\}\)\(\s*"([A-Za-z0-9+/=]{40,})"\s*\)', code[km.start():])
@@ -910,17 +916,32 @@ def _fsvid_decode(code: str, hostname: str = "fsvid.lol"):
             H = 0
             for ch in (hostname or ""):
                 H = (H + ord(ch)) & 255
-            try:
-                raw = base64.b64decode(payload)
+
+            def _try(bc: int):
+                try:
+                    raw = base64.b64decode(payload)
+                except Exception:
+                    return None
                 if reverse:
                     raw = raw[::-1]
                 out = "".join(
-                    chr(raw[i] ^ ((offset + i * mult + H) & 255)) for i in range(len(raw))
+                    chr(raw[i] ^ ((offset + i * mult + H + bc) & 255))
+                    for i in range(len(raw))
                 )
-                if out.startswith("http") and ".m3u8" in out:
-                    return out
-            except Exception:
-                pass  # fall through to the legacy path
+                return out if out.startswith("http") and ".m3u8" in out else None
+
+            if uses_bc:
+                # 96 = 1 CSS inch at 100% zoom ; fall back to a scan over the
+                # plausible zoom range (a wrong BC fails validation safely).
+                for bc in [96] + [b for b in range(24, 201) if b != 96]:
+                    hit = _try(bc)
+                    if hit:
+                        return hit
+            else:
+                hit = _try(0)
+                if hit:
+                    return hit
+            # fall through to the legacy path
 
     # ── OLD algorithm : fixed 8-byte XOR key ──
     km = re.search(r"var\s+k\s*=\s*\[([0-9,\s]+)\]", code)
