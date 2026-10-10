@@ -559,7 +559,11 @@ def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> 
         # was access-blocked (e.g. vidmoly's CDN 403 anti-leech) — ffprobe
         # would 403 too, so don't burn the timeout.
         if not out["qualities"] and not blocked:
-            q = _ffprobe_quality(stream_url, probe_headers, timeout=12)
+            # Direct MP4s have no HLS fast path — ffprobe must read the file
+            # header, and throttled hosts (sendvid serves at ~250 kbit/s with
+            # moov-at-end) routinely need 12-18 s. Give it room ; the menu's
+            # TOTAL wait stays capped by ANALYSIS_BUDGET in playback.py.
+            q = _ffprobe_quality(stream_url, probe_headers, timeout=20)
             if q:
                 out["qualities"] = [q]
         # Keep what's needed to estimate episode duration later (one media

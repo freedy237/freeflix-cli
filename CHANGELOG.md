@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.11.7
+
+- **Sendvid réparé (Anime-Sama)** : l'extracteur renvoyait le meta `og:video`
+  (une page HTML → « Failed to recognize file format », 0 Mo). Il lit
+  désormais le vrai fichier signé `<source src>` (`videosN.sendvid.com`).
+- **Qualité sendvid affichée** : le repli ffprobe (12 s) tuait les MP4
+  throttlés (~15 s) → timeout 20 s + budget d'analyse 14 → 26 s, le menu
+  montre `720p ~1.4 Mbps`.
+- **Doublons dédupliqués** dans le menu des lecteurs (ex. ansembed ×2).
+- **Posters Windows réparés** : `WT_SESSION` ne prouve pas que le Sixel
+  expérimental est actif → plus de sixel aveugle (panneau vide) ; repli
+  blocs + hint d'activation, section POSTERS dans `--doctor`.
+
 ## 1.11.4
 
 Parité Windows = Linux.

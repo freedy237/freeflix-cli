@@ -138,7 +138,9 @@ def play_episode_flow(
         print_warning(t("No players found for this episode."))
         return False
 
-    supported_players = [p for p in episode.players if player.is_supported(p.url)]
+    supported_players = _dedup_players(
+        [p for p in episode.players if player.is_supported(p.url)]
+    )
     if not supported_players:
         print_warning(t("No supported players found."))
         return False
@@ -162,7 +164,8 @@ def play_episode_flow(
         # 25 s+) must not stall the whole menu. Collect what's done within
         # the budget ; stragglers just get no annotation, and we DON'T wait
         # for them on exit (shutdown(wait=False)).
-        ANALYSIS_BUDGET = 14
+        # 26 s: resolve (~5 s) + throttled ffprobe (sendvid ≈ 15-18 s) + margin.
+        ANALYSIS_BUDGET = 26
         ex = ThreadPoolExecutor(max_workers=8)
         futs = {
             ex.submit(analyze_stream_quality, p.url, headers): p
@@ -278,6 +281,20 @@ def play_episode_flow(
             # Loop continues to select list
 
 
+def _dedup_players(players_list):
+    """Drop duplicate player URLs (some Anime-Sama episodes list the same
+    embed twice, e.g. ansembed as Lecteur 1 AND 2). Order preserved."""
+    seen = set()
+    out = []
+    for p in players_list:
+        u = getattr(p, "url", "")
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append(p)
+    return out
+
+
 def _pick_player_for_batch(
     episodes: list,
     headers: dict,
@@ -293,7 +310,9 @@ def _pick_player_for_batch(
     """
     if not episodes or not getattr(episodes[0], "players", None):
         return None
-    supported = [p for p in episodes[0].players if player.is_supported(p.url)]
+    supported = _dedup_players(
+        [p for p in episodes[0].players if player.is_supported(p.url)]
+    )
     if not supported:
         return None
 
@@ -301,7 +320,7 @@ def _pick_player_for_batch(
     from concurrent.futures import (
         ThreadPoolExecutor, as_completed, TimeoutError as _FTimeout,
     )
-    ANALYSIS_BUDGET = 14
+    ANALYSIS_BUDGET = 26  # resolve + throttled ffprobe (sendvid ≈ 15-18 s) + margin
     infos: dict[str, dict] = {}
     ex = ThreadPoolExecutor(max_workers=8)
     futs = {ex.submit(analyze_stream_quality, p.url, headers): p for p in supported}
@@ -393,7 +412,9 @@ def _download_one_episode(
         print_warning(f"{label} — no players, skipping.")
         return False
 
-    supported_players = [p for p in episode.players if player.is_supported(p.url)]
+    supported_players = _dedup_players(
+        [p for p in episode.players if player.is_supported(p.url)]
+    )
     if not supported_players:
         print_warning(f"{label} — no supported players, skipping.")
         return False

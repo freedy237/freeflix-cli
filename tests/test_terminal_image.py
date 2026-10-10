@@ -130,3 +130,18 @@ def test_sixel_hint_only_when_off(monkeypatch):
     assert ti.sixel_hint() and "Sixel" in ti.sixel_hint()
     _sixel(monkeypatch, True)          # sixel on → no hint
     assert ti.sixel_hint() is None
+
+
+# Captured at import (before the autouse fixture mocks it) : the REAL DA1/nt
+# probe, to pin the Windows behaviour without touching a tty.
+_real_sixel_probe = ti._terminal_supports_sixel
+
+
+def test_windows_never_trusts_wt_session_for_sixel(monkeypatch):
+    """Windows Terminal sets WT_SESSION even when its opt-in Sixel flag is
+    OFF — trusting it painted sixels that never render (blank preview).
+    The nt branch must fail closed so posters fall back to blocks."""
+    monkeypatch.setattr(ti.os, "name", "nt")
+    monkeypatch.setenv("WT_SESSION", "abc")
+    monkeypatch.setattr(ti, "_SIXEL_OK", None)
+    assert _real_sixel_probe() is False

@@ -170,7 +170,13 @@ def _terminal_supports_sixel() -> bool:
     try:
         import sys
         if os.name == "nt":
-            _SIXEL_OK = bool(os.environ.get("WT_SESSION"))
+            # Windows has no termios, so DA1 can't be queried — and WT_SESSION
+            # only proves the terminal IS Windows Terminal, NOT that its
+            # opt-in "Experimental: Sixel" flag is enabled (off by default).
+            # Trusting it painted sixels that never render → blank preview
+            # pane and blank full-screen posters. Fail closed (blocks) ;
+            # users who really enabled Sixel can force poster mode "sixel".
+            _SIXEL_OK = False
             return _SIXEL_OK
         import termios
         import tty

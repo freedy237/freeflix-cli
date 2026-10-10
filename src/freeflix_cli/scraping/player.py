@@ -302,7 +302,12 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
 
 def get_hls_link_sendvid(url: str) -> str:
     """
-    Extract video link from sendvid using Open Graph meta tag.
+    Extract video link from sendvid using the <source> tag's direct file URL.
+
+    NOTE: the ``og:video`` meta tag only holds a generic ``/xxx.mp4`` page URL
+    that answers ``text/html`` (mpv: "Failed to recognize file format") — the
+    REAL file is the signed ``videosN.sendvid.com/…mp4?…`` URL in
+    ``<source src=…>``. Prefer it, keep og:video as a last resort.
 
     Args:
         url: Player URL
@@ -314,6 +319,10 @@ def get_hls_link_sendvid(url: str) -> str:
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
+
+    source = soup.find("source")
+    if source and source.attrs.get("src"):
+        return source.attrs["src"]
 
     og = soup.find("meta", {"property": "og:video"})
     if og and og.attrs.get("content"):

@@ -283,6 +283,25 @@ def run(upload: bool = False) -> str:
         L(f"  {label:20s}  {status:<12s}  {host}:{port}")
     L(sep)
 
+    # ── Posters ──────────────────────────────────────────────────
+    L("POSTERS")
+    L()
+    try:
+        from . import terminal_image as _ti
+        from .tracker import tracker as _trk
+        _pmode = (_trk.get_poster_mode() or "auto")
+        _has_chafa = _ti.chafa_available()
+        _proto = _ti.detect_image_protocol()
+        _chafa_v = ".".join(map(str, _ti._chafa_version())) if _has_chafa else "(missing)"
+        L(f"  Mode     : {_pmode}")
+        L(f"  Protocol : {_proto}  (chafa {_chafa_v})")
+        _hint = _ti.sixel_hint()
+        if _hint:
+            L(f"  Hint     : {_hint}")
+    except Exception as _e:
+        L(f"  (poster check failed: {_e})")
+    L(sep)
+
     # ── Config paths ───────────────────────────────────────────────
     L("CONFIG")
     L()
