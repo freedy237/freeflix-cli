@@ -99,7 +99,7 @@ def _ui_chunks():
     for fp in glob.glob("src/freeflix_cli/**/*.py", recursive=True):
         if fp.endswith("i18n.py"):
             continue
-        tree = ast.parse(open(fp).read())
+        tree = ast.parse(open(fp, encoding="utf-8").read())
         for node in ast.walk(tree):
             fn = None
             if (
@@ -143,7 +143,7 @@ def _used_keys():
     for fp in glob.glob("src/freeflix_cli/**/*.py", recursive=True):
         if fp.endswith("i18n.py"):
             continue
-        for node in ast.walk(ast.parse(open(fp).read())):
+        for node in ast.walk(ast.parse(open(fp, encoding="utf-8").read())):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
