@@ -409,14 +409,14 @@ def _download_one_episode(
 ) -> bool:
     """Worker: download a single episode, trying each supported player URL."""
     if not getattr(episode, "players", None):
-        print_warning(f"{label} — no players, skipping.")
+        print_warning(f"{label} — {t('no players, skipping.')}")
         return False
 
     supported_players = _dedup_players(
         [p for p in episode.players if player.is_supported(p.url)]
     )
     if not supported_players:
-        print_warning(f"{label} — no supported players, skipping.")
+        print_warning(f"{label} — {t('no supported players, skipping.')}")
         return False
 
     # Move preferred player to the front so it is tried first.
@@ -455,11 +455,11 @@ def _download_one_episode(
                 episode_url=episode.url if hasattr(episode, "url") else "",
                 logo_url=logo_url,
             )
-            print_success(f"✓ {label} done")
+            print_success(f"✓ {label} {t('done')}")
             return True
-        print_warning(f"   server {sp.name} failed, trying next…")
+        print_warning(f"   {t('server')} {sp.name} {t('failed, trying next…')}")
 
-    print_error(f"✗ {label} all servers failed")
+    print_error(f"✗ {label} {t('all servers failed')}")
     return False
 
 

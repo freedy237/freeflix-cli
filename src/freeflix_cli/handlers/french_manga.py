@@ -40,7 +40,7 @@ def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx, co
     headers = {"Referer": french_manga.website_origin + "/"}
     while True:
         ep_num = ep_nums[ep_idx]
-        ep_obj = _Ep(f"Episode {ep_num}", episodes[ep_num], series_url)
+        ep_obj = _Ep(f"{t('Episode')} {ep_num}", episodes[ep_num], series_url)
 
         success = play_episode_flow(
             provider_name="French-Manga",
@@ -58,7 +58,7 @@ def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx, co
         if ep_idx + 1 < len(ep_nums):
             nxt = ep_nums[ep_idx + 1]
             if select_from_list(
-                [t("Yes"), t("No")], f"{t('Play next episode:')} Episode {nxt}?"
+                [t("Yes"), t("No")], f"{t('Play next episode:')} {t('Episode')} {nxt}?"
             ) == 0:
                 ep_idx += 1
                 continue
@@ -132,10 +132,10 @@ def handle_french_manga():
         episodes = data[selected_lang]
         ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
 
-        ep_options = [f"Episode {n}" for n in ep_nums] + [f"{icon('download')} {t('Download')}", t("← Back")]
+        ep_options = [f"{t('Episode')} {n}" for n in ep_nums] + [f"{icon('download')} {t('Download')}", t("← Back")]
         ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
         if ep_idx == len(ep_nums):  # Download ALL
-            ep_objects = [_Ep(f"Episode {n}", episodes[n], selection.url) for n in ep_nums]
+            ep_objects = [_Ep(f"{t('Episode')} {n}", episodes[n], selection.url) for n in ep_nums]
             preferred = _pick_player_for_batch(ep_objects, {"Referer": french_manga.website_origin + "/"})
             if preferred is None:
                 continue
@@ -172,7 +172,7 @@ def resume_french_manga(data):
     lang = (data.get("season_title") or "vf").lower()
     if lang not in ("vf", "vostfr"):
         lang = "vf"
-    ep_str = (data.get("episode_title") or "").replace("Episode", "").strip()
+    ep_str = (data.get("episode_title") or "").replace("Épisode", "").replace("Episode", "").strip()
 
     if not series_url:
         print_warning(t("Cannot resume this entry (missing link)."))
@@ -204,8 +204,8 @@ def resume_french_manga(data):
 
     options = []
     if has_next:
-        options.append(f"▶ {t('Continue')} (Episode {ep_nums[cur_idx + 1]})")
-    options.append(f"🔁 {t('Watch again')} (Episode {cur_ep})")
+        options.append(f"▶ {t('Continue')} ({t('Episode')} {ep_nums[cur_idx + 1]})")
+    options.append(f"🔁 {t('Watch again')} ({t('Episode')} {cur_ep})")
     options.append(t("← Cancel"))
 
     choice = select_from_list(options, t("What would you like to do?"))

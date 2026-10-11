@@ -33,6 +33,7 @@ _HTML_OG_ONLY = """<html><head>
 
 def test_prefers_source_tag_over_og_video(monkeypatch):
     monkeypatch.setattr(player, "_get", lambda *a, **k: _Resp(_HTML))
+    monkeypatch.setattr(player, "_is_sendvid_placeholder", lambda *a, **k: False)
     out = player.get_hls_link_sendvid("https://sendvid.com/embed/oxhyare2")
     assert out.startswith("https://videos4.sendvid.com/")
     assert out.endswith(".mp4?validfrom=1&validto=2&rate=250k&hash=ABC")
@@ -47,6 +48,33 @@ def test_falls_back_to_og_video_when_no_source(monkeypatch):
 def test_returns_none_when_nothing_found(monkeypatch):
     monkeypatch.setattr(player, "_get", lambda *a, **k: _Resp("<html></html>"))
     assert player.get_hls_link_sendvid("https://sendvid.com/embed/zzz") is None
+
+
+class _HeadResp:
+    def __init__(self, length):
+        self.headers = {"Content-Length": str(length)} if length is not None else {}
+
+
+def _fake_head_factory(length):
+    class _S:
+        def head(self, *a, **k):
+            return _HeadResp(length)
+    return _S()
+
+
+def test_placeholder_guard_rejects_tiny_file(monkeypatch):
+    monkeypatch.setattr(player, "_scraper", lambda: _fake_head_factory(36789))
+    assert player._is_sendvid_placeholder("https://videos4.sendvid.com/x.mp4?t=1") is True
+
+
+def test_placeholder_guard_keeps_real_episode(monkeypatch):
+    monkeypatch.setattr(player, "_scraper", lambda: _fake_head_factory(276616053))
+    assert player._is_sendvid_placeholder("https://videos4.sendvid.com/x.mp4?t=1") is False
+
+
+def test_placeholder_guard_fail_open_without_length(monkeypatch):
+    monkeypatch.setattr(player, "_scraper", lambda: _fake_head_factory(None))
+    assert player._is_sendvid_placeholder("https://videos4.sendvid.com/x.mp4?t=1") is False
 
 
 def test_dedup_players_drops_duplicate_urls():

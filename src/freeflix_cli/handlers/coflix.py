@@ -41,11 +41,11 @@ def handle_coflix():
             except Exception as e:
                 if "429" in str(e):
                     print_warning(
-                        "Coflix is rate-limiting / blocking searches right now "
-                        "(HTTP 429). Wait a few minutes, or use another source."
+                        t("Coflix is rate-limiting / blocking searches right now "
+                          "(HTTP 429). Wait a few minutes, or use another source.")
                     )
                 else:
-                    print_warning(f"Search error: {e}")
+                    print_warning(f"{t('Search error:')} {e}")
                 pause()
                 continue
 
@@ -74,10 +74,10 @@ def handle_coflix():
         selection = results[choice_idx]
 
         try:
-            with spinner(f"Loading {selection.title}…"):
+            with spinner(f"{t('Loading')} {selection.title}…"):
                 content = coflix.get_content(selection.url)
         except Exception as e:
-            print_error(f"Error loading content: {e}")
+            print_error(f"{t('Error loading content:')} {e}")
             pause()
             continue
 
@@ -89,7 +89,7 @@ def handle_coflix():
         )
 
         if isinstance(content, CoflixMovie):
-            console.print(f"\n[bold]{icon('movie')} Movie:[/bold] [cyan]{content.title}[/cyan]\n")
+            console.print(f"\n[bold]{icon('movie')} {t('Movie')}:[/bold] [cyan]{content.title}[/cyan]\n")
 
             # Check for saved progress (Movie Resume Fix)
             saved_progress = tracker.get_series_progress("Coflix", content.title)
@@ -127,7 +127,7 @@ def handle_coflix():
             )
 
         elif isinstance(content, CoflixSeries):
-            console.print(f"\n[bold]{icon('tv')} Series:[/bold] [cyan]{content.title}[/cyan]\n")
+            console.print(f"\n[bold]{icon('tv')} {t('Series')}:[/bold] [cyan]{content.title}[/cyan]\n")
 
             if not content.seasons:
                 print_warning(t("No seasons found."))
@@ -158,11 +158,11 @@ def handle_coflix():
                     break  # back to the search prompt
 
                 selected_season_access = content.seasons[season_idx]
-                print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
+                print_info(f"{t('Loading')} [cyan]{selected_season_access.title}[/cyan]...")
                 try:
                     season = coflix.get_season(selected_season_access.url)
                 except Exception as e:
-                    print_error(f"Error loading season: {e}")
+                    print_error(f"{t('Error loading season:')} {e}")
                     pause()
                     continue  # back to the season picker
                 if not season.episodes:
@@ -214,7 +214,7 @@ def handle_coflix():
                         try:
                             ep_details = coflix.get_episode(selected_episode.url)
                         except Exception as e:
-                            print_error(f"Error loading episode: {e}")
+                            print_error(f"{t('Error loading episode:')} {e}")
                             pause()
                             break
                         success = play_episode_flow(
@@ -255,15 +255,15 @@ def resume_coflix(data):
     data["series_url"] = resolve_url(data["series_url"])
     data["season_url"] = resolve_url(data["season_url"])
 
-    print_info(f"Resuming [cyan]{data['series_title']}[/cyan]...")
+    print_info(f"{t('Resuming')} [cyan]{data['series_title']}[/cyan]...")
 
     # Handle Movie
     if data["season_title"] == "Movie":
-        print_info(f"Loading Movie: {data['series_url']}")
+        print_info(f"{t('Loading Movie:')} {data['series_url']}")
         try:
             content = coflix.get_content(data["series_url"])
         except Exception as e:
-            print_error(f"Could not load movie: {e}")
+            print_error(f"{t('Could not load movie:')} {e}")
             pause()
             return
 
@@ -272,8 +272,8 @@ def resume_coflix(data):
             pause()
             return
 
-        options = ["Watch again", "Cancel"]
-        choice = select_from_list(options, "What would you like to do?")
+        options = [t("Watch again"), t("Cancel")]
+        choice = select_from_list(options, t("What would you like to do?"))
 
         if choice == 1:
             return
@@ -293,11 +293,11 @@ def resume_coflix(data):
         return
 
     # Handle Series (Existing Logic)
-    print_info(f"Loading Season: {data['season_url']}")
+    print_info(f"{t('Loading Season:')} {data['season_url']}")
     try:
         season = coflix.get_season(data["season_url"])
     except Exception as e:
-        print_error(f"Could not load season: {e}")
+        print_error(f"{t('Could not load season:')} {e}")
         pause()
         return
 
@@ -317,14 +317,14 @@ def resume_coflix(data):
 
     options = [
         (
-            f"Continue (Next: {season.episodes[start_ep_idx+1].title})"
+            f"{t('Continue')} ({t('Next:')} {season.episodes[start_ep_idx+1].title})"
             if start_ep_idx + 1 < len(season.episodes)
-            else "No next episode"
+            else t("No next episode")
         ),
-        f"Watch again ({saved_ep_title})",
-        "Cancel",
+        f"{t('Watch again')} ({saved_ep_title})",
+        t("Cancel"),
     ]
-    choice = select_from_list(options, "What would you like to do?")
+    choice = select_from_list(options, t("What would you like to do?"))
 
     if choice == 2:
         return
@@ -343,7 +343,7 @@ def resume_coflix(data):
         try:
             ep_details = coflix.get_episode(selected_episode.url)
         except Exception as e:
-            print_error(f"Error loading episode: {e}")
+            print_error(f"{t('Error loading episode:')} {e}")
             pause()
             break
 
@@ -367,8 +367,8 @@ def resume_coflix(data):
             if ep_idx + 1 < len(season.episodes):
                 if (
                     select_from_list(
-                        ["Yes", "No"],
-                        f"Play next: {season.episodes[ep_idx+1].title}?",
+                        [t("Yes"), t("No")],
+                        f"{t('Play next:')} {season.episodes[ep_idx+1].title}?",
                     )
                     == 0
                 ):

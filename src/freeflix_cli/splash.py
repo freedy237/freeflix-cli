@@ -7,6 +7,7 @@ from rich.text import Text
 
 from .cli_utils import console
 from .themes import color
+from .i18n import t
 
 # FreeFlix wordmark (ANSI Shadow style).
 _LOGO = r"""
@@ -40,8 +41,8 @@ def tagline_text(width: int = None) -> Text:
         w = width if width is not None else console.size.width
     except Exception:
         w = 80
-    tag = ("Movies · Series · Anime — straight from your terminal"
-           if w >= 56 else "Movies · Series · Anime")
+    tag = (t("Movies · Series · Anime — straight from your terminal")
+           if w >= 56 else t("Movies · Series · Anime"))
     return Text(tag, style=color("info"))
 
 

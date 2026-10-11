@@ -66,7 +66,7 @@ def handle_french_stream():
         return
     selection = results[choice_idx]
 
-    with spinner(f"Loading {selection.title}…"):
+    with spinner(f"{t('Loading')} {selection.title}…"):
         content = french_stream.get_content(selection.url)
 
     # Poster at selection (movie thumbnail, or the search-result image).
@@ -78,7 +78,7 @@ def handle_french_stream():
     )
 
     if isinstance(content, FrenchStreamMovie):
-        console.print(f"\n[bold]{icon('movie')} Movie:[/bold] [cyan]{content.title}[/cyan]")
+        console.print(f"\n[bold]{icon('movie')} {t('Movie')}:[/bold] [cyan]{content.title}[/cyan]")
         if not content.players:
             print_warning(t("No players found."))
             pause()
@@ -101,7 +101,7 @@ def handle_french_stream():
         )
 
     elif isinstance(content, FrenchStreamSeason):
-        console.print(f"\n[bold]{icon('tv')} Series:[/bold] [cyan]{content.title}[/cyan]")
+        console.print(f"\n[bold]{icon('tv')} {t('Series')}:[/bold] [cyan]{content.title}[/cyan]")
 
         # Check for saved progress
         saved_progress = tracker.get_series_progress("French-Stream", content.title)
@@ -206,7 +206,7 @@ def handle_french_stream():
 
 def resume_french_stream(data):
     """Resume French-Stream playback."""
-    print_info(f"Resuming [cyan]{data['series_title']}[/cyan]...")
+    print_info(f"{t('Resuming')} [cyan]{data['series_title']}[/cyan]...")
 
     data["series_url"] = resolve_url(data["series_url"], french_stream.website_origin)
     data["season_url"] = resolve_url(data["season_url"], french_stream.website_origin)
@@ -246,7 +246,7 @@ def resume_french_stream(data):
         if len(langs) == 1:
             lang = langs[0]
         else:
-            lang = langs[select_from_list(langs, "🌍 Select Language:")]
+            lang = langs[select_from_list(langs, t("🌍 Select Language:"))]
 
         episodes = content.episodes[lang]
 
@@ -258,12 +258,12 @@ def resume_french_stream(data):
 
         options = [
             (
-                f"Continue (Next: {episodes[start_ep_idx+1].title})"
+                f"{t('Continue')} ({t('Next:')} {episodes[start_ep_idx+1].title})"
                 if start_ep_idx + 1 < len(episodes)
-                else "No next episode"
+                else t("No next episode")
             ),
-            f"Watch again ({data['episode_title']})",
-            "Cancel",
+            f"{t('Watch again')} ({data['episode_title']})",
+            t("Cancel"),
         ]
         choice = select_from_list(options, t("What would you like to do?"))
         if choice == 2:

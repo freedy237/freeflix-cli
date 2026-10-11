@@ -56,14 +56,14 @@ def _update_anilist_progress(series, season, selected_episode):
                         "Anime-Sama", series.title, media_id, season.title
                     )
                     print_success(
-                        f"Linked to {results[m_idx]['title']['english'] or results[m_idx]['title']['romaji']}!"
+                        f"{t('Linked to')} {results[m_idx]['title']['english'] or results[m_idx]['title']['romaji']}!"
                     )
             else:
                 print_warning(t("No matches found on AniList."))
 
     if media_id:
         # Update progress with overflow detection
-        print_info(f"Updating AniList to episode {episode_num}...")
+        print_info(f"{t('Updating AniList to episode')} {episode_num}...")
         anilist_client.set_token(anilist_token)
 
         # Fetch media details to check total episodes
@@ -76,7 +76,7 @@ def _update_anilist_progress(series, season, selected_episode):
         ):
             total_eps = media_details["episodes"]
             print_warning(
-                f"Episode {episode_num} exceeds max episodes ({total_eps}) for this AniList entry."
+                f"{t('Episode')} {episode_num} {t('exceeds max episodes')} ({total_eps}) {t('for this AniList entry.')}"
             )
 
             # Check for SEQUEL relation
@@ -93,7 +93,7 @@ def _update_anilist_progress(series, season, selected_episode):
 
             if sequel:
                 sequel_title = sequel["title"]["english"] or sequel["title"]["romaji"]
-                print_info(f"Found sequel: [cyan]{sequel_title}[/cyan]")
+                print_info(f"{t('Found sequel:')} [cyan]{sequel_title}[/cyan]")
 
                 if (
                     select_from_list(
@@ -108,7 +108,7 @@ def _update_anilist_progress(series, season, selected_episode):
                         new_ep_num = episode_num - total_eps
 
                     print_info(
-                        f"Updating mapping to use Episode {new_ep_num} on new entry..."
+                        f"{t('Updating mapping to use episode')} {new_ep_num} {t('on new entry...')}"
                     )
                     tracker.set_anilist_mapping(
                         "Anime-Sama", series.title, sequel["id"], season.title
@@ -140,7 +140,7 @@ def handle_anime_sama():
         with spinner(f"{t('Searching for')} {query}…"):
             results = anime_sama.search(query)
     except Exception as e:
-        print_error(f"Search failed (network/source issue): {type(e).__name__}")
+        print_error(f"{t('Search failed (network/source issue):')} {type(e).__name__}")
         print_info(t("The source may be down or rate-limiting — try again in a moment."))
         pause()
         return
@@ -172,7 +172,7 @@ def handle_anime_sama():
         with spinner(f"{t('Loading')} {selection.title}…"):
             series = anime_sama.get_series(selection.url)
     except Exception as e:
-        print_error(f"Failed to load (network/source issue): {type(e).__name__}")
+        print_error(f"{t('Failed to load (network/source issue):')} {type(e).__name__}")
         print_info(t("The source may be down or rate-limiting — try again in a moment."))
         pause()
         return
@@ -224,7 +224,7 @@ def handle_anime_sama():
         try:
             season = anime_sama.get_season(selected_season_access.url)
         except Exception as e:
-            print_error(f"Failed to load season (network/source issue): {type(e).__name__}")
+            print_error(f"{t('Failed to load season (network/source issue):')} {type(e).__name__}")
             print_info(t("The source may be down or rate-limiting — try again in a moment."))
             pause()
             continue  # back to season picker
@@ -325,7 +325,7 @@ def handle_anime_sama():
 
 def resume_anime_sama(data):
     """Resume Anime-Sama playback."""
-    print_info(f"Resuming [cyan]{data['series_title']}[/cyan]...")
+    print_info(f"{t('Resuming')} [cyan]{data['series_title']}[/cyan]...")
 
     # We need to reload just the season to find the episode link/player
     # We have season_url saved.
@@ -336,11 +336,11 @@ def resume_anime_sama(data):
     if season_url.startswith("/") or not season_url.startswith("http"):
         season_url = anime_sama.website_origin.rstrip("/") + season_url
 
-    print_info(f"Loading Season: {season_url}")
+    print_info(f"{t('Loading Season:')} {season_url}")
     try:
         season = anime_sama.get_season(season_url)
     except Exception as e:
-        print_error(f"Could not load season: {e}")
+        print_error(f"{t('Could not load season:')} {e}")
         return
 
     langs = list(season.episodes.keys())
@@ -351,7 +351,7 @@ def resume_anime_sama(data):
     if len(langs) == 1:
         selected_lang = langs[0]
     else:
-        lang_idx = select_from_list(langs, "🌍 Select Language:")
+        lang_idx = select_from_list(langs, t("🌍 Select Language:"))
         selected_lang = langs[lang_idx]
 
     episodes = season.episodes[selected_lang]
@@ -368,14 +368,14 @@ def resume_anime_sama(data):
     # Propose to continue (next episode) or watch again
     options = [
         (
-            f"Continue (Next: {episodes[start_ep_idx+1].title})"
+            f"{t('Continue')} ({t('Next:')} {episodes[start_ep_idx+1].title})"
             if start_ep_idx + 1 < len(episodes)
-            else "No next episode"
+            else t("No next episode")
         ),
-        f"Watch again ({saved_ep_title})",
-        "Cancel",
+        f"{t('Watch again')} ({saved_ep_title})",
+        t("Cancel"),
     ]
-    choice = select_from_list(options, "What would you like to do?")
+    choice = select_from_list(options, t("What would you like to do?"))
 
     if choice == 2:  # Cancel
         return
@@ -417,7 +417,7 @@ def resume_anime_sama(data):
             if ep_idx + 1 < len(episodes):
                 next_ep = episodes[ep_idx + 1]
                 choice = select_from_list(
-                    ["Yes", "No"], f"Play next episode: {next_ep.title}?"
+                    [t("Yes"), t("No")], f"{t('Play next episode:')} {next_ep.title}?"
                 )
                 if choice == 0:
                     ep_idx += 1

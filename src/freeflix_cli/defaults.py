@@ -125,6 +125,12 @@ DEFAULT_PLAYERS = {
     # JWPlayer setup. French-Anime's "luluvid" player rotates between them.
     "luluvdo": {"type": "voe"},
     "lulust": {"type": "voe"},
+    # voe.sx : same Voe software on its own domain (served by Coflix).
+    "voe": {"type": "voe"},
+    # lulustream.com : alias that 302-redirects to luluvdo.com (same player).
+    "lulustream": {"type": "voe"},
+    # d0000d.com : DoodStream mirror (redirects to playmogo.com).
+    "d0000d": {"type": "dood", "ext": "mp4"},
 
 }
 

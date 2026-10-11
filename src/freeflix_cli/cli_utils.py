@@ -130,7 +130,8 @@ def _input_fullscreen(prompt: str, default: str, header: str,
 
 def pause():
     """Wait for user input before continuing."""
-    console.input(f"\n[{color('dim')}]Press Enter to continue...[/{color('dim')}]")
+    from .i18n import t as _t
+    console.input(f"\n[{color('dim')}]{_t('Press Enter to continue...')}[/{color('dim')}]")
 
 
 def confirm_or_timeout(message: str, seconds: int = 6, default: bool = True) -> bool:
@@ -173,8 +174,60 @@ def confirm_or_timeout(message: str, seconds: int = 6, default: bool = True) -> 
                     ch = msvcrt.getwch()
                     if ch in ("\r", "\n", " ", "y", "Y"):
                         decided = True
-                    elif ch in ("\x1b", "n", "N", "q", "Q"):
+                    elif ch in ("n", "N", "q", "Q"):
                         decided = False
+                    elif ch == "\x1b":
+                        # Drain a possible escape sequence (arrow / focus
+                        # event) : only a truly LONE Esc declines. A bare
+                        # first byte used to decline on any arrow press. A
+                        # bracketed paste is swallowed whole too.
+                        seq = ch
+                        pasted_blob = False
+                        idle = 0
+                        while True:
+                            if msvcrt.kbhit():
+                                idle = 0
+                                seq += msvcrt.getwch()
+                                if seq.startswith(_PASTE_START_S):
+                                    _tx, _ = _split_paste(
+                                        seq.encode("utf-8", "ignore"))
+                                    if _tx is not None:
+                                        pasted_blob = True
+                                        break
+                                    if len(seq) >= _PASTE_MAX:
+                                        pasted_blob = True
+                                        break
+                                    continue
+                                if seq.startswith("\x1b]"):
+                                    _done, _rest = _split_reply(
+                                        seq.encode("utf-8", "ignore"))
+                                    if _done:
+                                        seq = _rest.decode("utf-8", "ignore")
+                                        if not seq:
+                                            pasted_blob = True
+                                            break
+                                    elif len(seq) >= _PASTE_MAX:
+                                        pasted_blob = True
+                                        break
+                                    else:
+                                        continue
+                                if _CSI_REPLY.match(seq.encode("utf-8", "ignore")):
+                                    pasted_blob = True
+                                    break
+                                if len(seq) >= 3:
+                                    break
+                            else:
+                                idle += 1
+                                if idle >= 20:
+                                    break
+                                _time.sleep(0.008)
+                        if pasted_blob:
+                            pass  # swallowed — keep waiting
+                        elif seq == "\x1b":
+                            decided = False
+                        elif seq[:2] == "\x1b\x1b":
+                            decided = False  # two presses
+                        # else : sequence (arrow/focus) → ignore, keep waiting
                 else:
                     _time.sleep(0.05)
                 live.update(_render(max(0, int(end - _time.time()) + 1)))
@@ -194,8 +247,51 @@ def confirm_or_timeout(message: str, seconds: int = 6, default: bool = True) -> 
                         ch = os.read(fd, 1)
                         if ch in (b"\r", b"\n", b" ", b"y", b"Y"):
                             decided = True
-                        elif ch in (b"\x1b", b"n", b"N", b"q", b"Q"):
+                        elif ch in (b"n", b"N", b"q", b"Q"):
                             decided = False
+                        elif ch == b"\x1b":
+                            # Same drain : a lone Esc declines, an escape
+                            # sequence (user navigating, focus event) is
+                            # swallowed, NOT treated as "no". A bracketed
+                            # paste is swallowed whole too.
+                            seq = ch
+                            pasted_blob = False
+                            while True:
+                                r2, _, _ = _sel.select([fd], [], [], 0.15)
+                                if not r2:
+                                    break
+                                seq += os.read(fd, 8)
+                                if seq.startswith(_PASTE_START):
+                                    _tx, _ = _split_paste(seq)
+                                    if _tx is not None:
+                                        pasted_blob = True
+                                        break
+                                    if len(seq) >= _PASTE_MAX:
+                                        pasted_blob = True
+                                        break
+                                    continue
+                                if seq.startswith(b"\x1b]"):
+                                    _done, seq = _split_reply(seq)
+                                    if _done:
+                                        if not seq:
+                                            pasted_blob = True
+                                            break
+                                    elif len(seq) >= _PASTE_MAX:
+                                        pasted_blob = True
+                                        break
+                                    else:
+                                        continue
+                                if _CSI_REPLY.match(seq):
+                                    pasted_blob = True
+                                    break
+                                if len(seq) >= 3:
+                                    break
+                            if pasted_blob:
+                                pass  # swallowed — keep waiting
+                            elif seq == b"\x1b":
+                                decided = False
+                            elif seq[:2] == b"\x1b\x1b":
+                                decided = False  # two presses
                     live.update(_render(max(0, int(end - _time.time()) + 1)))
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -255,7 +351,8 @@ def flush_input_settled(settle: float = 0.03):
 
 def disable_terminal_reports():
     """
-    Turn OFF terminal focus-reporting / mouse tracking / bracketed paste.
+    Turn OFF terminal focus-reporting / mouse tracking — but turn ON bracketed
+    paste.
 
     Some terminals (and mpv) enable focus reporting (``\\x1b[?1004h``): the
     terminal then sends ``\\x1b[I`` / ``\\x1b[O`` whenever the window gains/loses
@@ -263,6 +360,13 @@ def disable_terminal_reports():
     can mistake the leading ``\\x1b`` for a stray Esc — which looked like
     "FreeFlix closing by itself". Killing the reports at the source removes it.
     Called at startup and after every player exit (mpv may re-enable them).
+
+    Bracketed paste (``\\x1b[?2004h``) is the opposite case : we WANT it. It
+    wraps pastes as ``\\x1b[200~ … \\x1b[201~`` so a middle-click paste of
+    terminal output (full of ANSI escapes) arrives as ONE blob the menus can
+    swallow whole — instead of leaking bare ``\\x1b`` bytes that each look
+    like an Esc press and walk the user back to Home untouched. All readers
+    below consume the blob (menus ignore it, the search box inserts the text).
     """
     try:
         import sys
@@ -270,11 +374,70 @@ def disable_terminal_reports():
             sys.stdout.write(
                 "\x1b[?1004l"                                   # focus off
                 "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"  # mouse off
-                "\x1b[?2004l"                                   # bracketed paste off
+                "\x1b[?2004h"                                   # bracketed paste ON
             )
             sys.stdout.flush()
     except Exception:
         pass
+
+
+# ─── Bracketed-paste blobs ────────────────────────────────────────────
+# With ?2004h on, a paste arrives as ESC[200~ + text + ESC[201~. Readers must
+# swallow the whole blob : menus ignore it, the search box inserts the text,
+# the binge prompt ignores it, the download cancel-counter skips it. A bare
+# \x1b leaking out of a paste used to count as an Esc press (double-Esc
+# walked straight to Home on one middle-click).
+_PASTE_START = b"\x1b[200~"
+_PASTE_END = b"\x1b[201~"
+_PASTE_START_S = "\x1b[200~"
+_PASTE_END_S = "\x1b[201~"
+_PASTE_MAX = 8192  # never buffer more than 8 KB of pasted text
+
+
+def _split_paste(data: bytes):
+    """Split a buffer starting with a paste marker.
+
+    Returns (text, rest) once the closing marker is present, where `text` is
+    the pasted bytes (no markers) and `rest` anything after the blob (usually
+    empty — dropped by callers in the freak overlap case). Returns (None,
+    data) while unterminated (callers keep reading) or when data doesn't
+    start with a marker.
+    """
+    if not data.startswith(_PASTE_START):
+        return None, data
+    i = data.find(_PASTE_END, len(_PASTE_START))
+    if i < 0:
+        return None, data
+    return data[len(_PASTE_START):i], data[i + len(_PASTE_END):]
+
+
+# Terminal replies must NEVER become keys : OSC (… ST/BEL), DA/XTWINOPS and
+# friends arrive late/fragmented and their leading \x1b alone looks exactly
+# like an Esc press (phantom back, even through the double-Esc gate when a
+# reply carries several \x1b bytes). Swallow them whole, wherever they land.
+_OSC_ENDS = (b"\x1b\\", b"\x07")
+# Complete CSI replies (size/color reports…) : digits + final letter, longer
+# than any arrow/focus sequence. Arrows (\x1b[A, len 3) and focus (\x1b[I/O)
+# never match because of the length guard.
+_CSI_REPLY = re.compile(rb"\x1b\[[0-9;?]+[a-zA-Z~]$")
+
+
+def _split_reply(data: bytes):
+    """Split a buffer starting with a terminal-reply introducer.
+
+    Returns (True, rest) once the reply is complete (reply dropped, `rest`
+    kept for normal decoding), (False, data) while unterminated. Replies
+    covered : OSC `ESC ] … (ST|BEL)` (color queries, titles…) and anything
+    starting with a lone ESC that isn't yet classifiable (callers keep
+    waiting for more before deciding Esc-vs-sequence).
+    """
+    if data.startswith(b"\x1b]"):
+        for end in _OSC_ENDS:
+            i = data.find(end, 2)
+            if i >= 0:
+                return True, data[i + len(end):]
+        return False, data
+    return False, data
 
 
 # ─── Breadcrumb trail (1.8) ────────────────────────────────────────────
@@ -341,17 +504,29 @@ def _status_bar(filtering: bool = False) -> Text:
     """Bottom hint line shown under every menu (consistent across screens)."""
     from .i18n import t as _t
     if filtering:
-        hint = f"  {_t('type to filter')} · {_t('Enter: select')} · {_t('Esc: clear')}"
-    else:
-        hint = (f"  ↑/↓ · {_t('Enter: select')} · {_t('Esc: back')} · "
-                f"{_t('/: filter')} · {_t('?: help')}")
-    return Text(hint, style=color("dim"))
+        bar = Text.assemble(
+            Text("  ", style=color("dim")),
+            _kbd(_t("type to filter")), Text(" · ", style=color("dim")),
+            _kbd(_t("Enter: select")), Text(" · ", style=color("dim")),
+            _kbd(_t("Esc: clear")),
+        )
+        return bar
+    bar = Text.assemble(
+        Text("  ↑/↓ · ", style=color("dim")),
+        _kbd(_t("Enter: select")), Text(" · ", style=color("dim")),
+        _kbd(_t("Esc: back")), Text(" · ", style=color("dim")),
+        _kbd(_t("/: filter")), Text(" · ", style=color("dim")),
+        _kbd(_t("?: help")),
+    )
+    return bar
 
 
 def _help_overlay() -> Panel:
-    """The '?' help overlay : every keyboard shortcut in one panel."""
+    """The '?' help overlay : every keyboard shortcut in one panel, split in
+    two columns (Menus | mpv player) so it stays compact."""
     from .i18n import t as _t
-    rows = [
+    from rich.table import Table
+    menu_rows = [
         ("↑ / ↓",      _t("navigate")),
         ("Enter",      _t("select")),
         ("Esc",        _t("go back / cancel")),
@@ -361,20 +536,29 @@ def _help_overlay() -> Panel:
         ("Ctrl+C",     _t("quit FreeFlix")),
         ("? ",         _t("show / hide this help")),
     ]
-    body = Text()
-    body.append(f"\n  {_t('Keyboard shortcuts')}\n\n", style=f"bold {color('accent')}")
-    for key_label, desc in rows:
-        body.append(f"   {key_label:<9}", style=f"bold {color('info')}")
-        body.append(f" {desc}\n", style="white")
-    body.append(f"\n  {_t('In the player (mpv)')}\n\n", style=f"bold {color('accent')}")
-    for key_label, desc in [
+    player_rows = [
         ("CTRL+1/2", _t("Anime4K quality (max / light)")),
         ("CTRL+0",   _t("Anime4K off")),
         ("q",        _t("close the player")),
-    ]:
-        body.append(f"   {key_label:<9}", style=f"bold {color('info')}")
-        body.append(f" {desc}\n", style="white")
-    return Panel(body, border_style=color("accent"),
+    ]
+
+    def _col(title, rows):
+        tb = Table.grid(padding=(0, 1))
+        tb.add_column()
+        tb.add_column()
+        tb.add_row(Text(f"{title}", style=f"bold {color('accent')}"), Text(""))
+        for key_label, desc in rows:
+            tb.add_row(
+                Text(f"   {key_label:<9}", style=f"bold {color('info')}"),
+                Text(f" {desc}", style="white"),
+            )
+        return tb
+
+    grid = Table.grid(padding=(0, 4))
+    grid.add_column()
+    grid.add_column()
+    grid.add_row(_col(_t("Menus"), menu_rows), _col(_t("In the player (mpv)"), player_rows))
+    return Panel(grid, border_style=color("accent"),
                  title=f"[bold]{_t('Help')}[/bold]", expand=False)
 
 
@@ -399,7 +583,32 @@ def toast(message: str, kind: str = "success", seconds: float = 1.1):
         console.print(text)
 
 
-def _read_menu_key():
+# ─── Single-Esc Back navigation ─────────────────────────────────────
+# One Esc press goes back immediately. Stray bytes are handled upstream :
+# bracketed pastes are swallowed whole, terminal replies are swallowed,
+# escape sequences are drained with a 200 ms idle budget, and chafa runs
+# with --probe off + stdin closed so it emits no late replies. (A double-Esc
+# gate existed briefly in 1.12-dev and was reverted per user request.)
+# A fast double-Esc can arrive in ONE read (`\x1b\x1b`) : the drains below
+# stash the second press here so the next _read_menu_key() call replays it
+# instead of swallowing the pair.
+_esc_carry = False
+
+
+def _stash_esc_carry() -> None:
+    global _esc_carry
+    _esc_carry = True
+
+
+def _take_esc_carry() -> bool:
+    global _esc_carry
+    if _esc_carry:
+        _esc_carry = False
+        return True
+    return False
+
+
+def _read_menu_key_raw():
     """
     Read one keypress for the arrow menus, returning readchar key constants.
 
@@ -407,8 +616,8 @@ def _read_menu_key():
     then BLOCKS on a 2nd byte to tell a lone Esc from an arrow sequence
     (``\\x1b[A``) — so a lone Esc never fires until another key is pressed (that's
     why "Esc did nothing" on Linux but worked on Windows). Here we peek with a
-    50 ms timeout: no follow-up byte ⇒ a real Esc. Windows / non-tty fall back
-    to readchar (where Esc already returns immediately).
+    200 ms idle timeout: no follow-up byte ⇒ a real Esc. Windows / non-tty
+    fall back to readchar (where Esc already returns immediately).
     """
     import sys
 
@@ -438,22 +647,68 @@ def _read_menu_key():
         # mistaken for a lone Esc; only a truly isolated \x1b is Esc.
         if ch == "\x1b":
             seq = ch
-            for _ in range(12):
+            # Drain loop with an idle budget (~200 ms of silence) instead of
+            # a fixed iteration count : arrows resolve instantly, a slow
+            # terminal still gets its tail, and a long bracketed paste is
+            # consumed whole no matter its size.
+            idle = 0
+            paste_text = None
+            spins = 0
+            while True:
+                spins += 1
+                if spins > 2000:
+                    return ""
                 if msvcrt.kbhit():
+                    idle = 0
                     seq += msvcrt.getwch()
+                    if seq.startswith(_PASTE_START_S):
+                        _text, _rest = _split_paste(seq.encode("utf-8", "ignore"))
+                        if _text is not None:
+                            paste_text = _text.decode("utf-8", "ignore")
+                            break
+                        if len(seq) >= _PASTE_MAX:
+                            return ""
+                        continue
+                    if seq.startswith("\x1b]"):
+                        _done, _rest = _split_reply(
+                            seq.encode("utf-8", "ignore"))
+                        if _done:
+                            seq = _rest.decode("utf-8", "ignore") or ""
+                            if not seq:
+                                continue
+                        elif len(seq) >= _PASTE_MAX:
+                            return ""
+                        else:
+                            continue
+                    if _CSI_REPLY.match(seq.encode("utf-8", "ignore")):
+                        seq = ""
+                        continue
                     if len(seq) >= 3:
                         break
                 else:
+                    idle += 1
+                    if idle >= 25:
+                        break
                     _t.sleep(0.008)
+            if paste_text is not None:
+                # Bracketed paste : menus ignore the blob (a multi-char str
+                # falls through every branch), the search box inserts it.
+                return paste_text
             if seq == "\x1b":
+                return readchar.key.ESC
+            # Fast double-Esc in one read (`\x1b\x1b…`) : replay the second
+            # press on the next call instead of swallowing the pair.
+            if seq[:2] == "\x1b\x1b":
+                _stash_esc_carry()
                 return readchar.key.ESC
             # Explicitly ignore focus events (\x1b[I / \x1b[O)
             if seq in ("\x1b[I", "\x1b[O"):
                 return ""          # focus in/out → ignore
-            return {"\x1b[A": readchar.key.UP, "\x1bOA": readchar.key.UP,
+            _known = {"\x1b[A": readchar.key.UP, "\x1bOA": readchar.key.UP,
                     "\x1b[B": readchar.key.DOWN, "\x1bOB": readchar.key.DOWN,
                     "\x1b[C": readchar.key.RIGHT, "\x1b[D": readchar.key.LEFT,
-                    }.get(seq, "")          # focus/mouse/unknown → ignore
+                    }
+            return _known.get(seq, "")          # focus/mouse/unknown → ignore
         if ch in ("\r", "\n"):
             return readchar.key.ENTER
         if ch == "\x03":
@@ -480,25 +735,73 @@ def _read_menu_key():
         if ch == b"\x1b":
             # Drain the WHOLE escape sequence (arrows, but also focus events
             # \x1b[I / \x1b[O and mouse reports) before deciding. Only a truly
-            # isolated \x1b — nothing follows within 100 ms — is a real Esc.
+            # isolated \x1b — ~200 ms of silence — is a real Esc (a shorter
+            # window misread split sequences under poster-load contention as
+            # a lone Esc → phantom "back"). A bracketed paste is consumed
+            # whole and returned as text (menus ignore it, search inserts it).
             seq = ch
+            idle = 0
+            paste_text = None
+            spins = 0
             while True:
-                r, _, _ = _sel.select([fd], [], [], 0.10)
-                if not r:
-                    break
-                seq += os.read(fd, 8)
-                if len(seq) >= 3:  # enough for a CSI/SS3 arrow
-                    break
+                spins += 1
+                if spins > 500:
+                    return ""  # garbage flood — give up, stay in menu
+                r, _, _ = _sel.select([fd], [], [], 0.008)
+                if r:
+                    idle = 0
+                    seq += os.read(fd, 64)
+                    if seq.startswith(_PASTE_START):
+                        _text, _rest = _split_paste(seq)
+                        if _text is not None:
+                            paste_text = _text
+                            break
+                        if len(seq) >= _PASTE_MAX:
+                            return ""
+                        continue
+                    if seq.startswith(b"\x1b]"):
+                        # Terminal reply (OSC color query, title…) : swallow
+                        # it whole so its fragments never read as Esc.
+                        _done, seq = _split_reply(seq)
+                        if _done:
+                            if not seq:
+                                continue  # reply only — wait for real input
+                        elif len(seq) >= _PASTE_MAX:
+                            return ""
+                        else:
+                            continue  # partial reply — keep waiting
+                    if _CSI_REPLY.match(seq):
+                        # Complete CSI reply (size/color report…) : drop it
+                        # and keep waiting for a real key.
+                        seq = b""
+                        continue
+                    if len(seq) >= 3:  # enough for a CSI/SS3 arrow
+                        break
+                else:
+                    idle += 1
+                    if idle >= 25:
+                        break
+            if paste_text is not None:
+                try:
+                    return paste_text.decode("utf-8", "ignore")
+                except Exception:
+                    return ""
             if seq == b"\x1b":
                 return readchar.key.ESC          # lone Esc → go back
+            # Fast double-Esc in one read (`\x1b\x1b…`) : replay the second
+            # press on the next call instead of swallowing the pair.
+            if seq[:2] == b"\x1b\x1b":
+                _stash_esc_carry()
+                return readchar.key.ESC
             # Explicitly ignore focus events (\x1b[I / \x1b[O) and other non-arrow CSI
             if seq in (b"\x1b[I", b"\x1b[O"):
                 return ""          # focus in/out → ignore, don't trigger Esc
-            return {
+            _known = {
                 b"\x1b[A": readchar.key.UP,   b"\x1bOA": readchar.key.UP,
                 b"\x1b[B": readchar.key.DOWN,  b"\x1bOB": readchar.key.DOWN,
                 b"\x1b[C": readchar.key.RIGHT, b"\x1b[D": readchar.key.LEFT,
-            }.get(seq, "")          # other CSI/mouse → ignore
+            }
+            return _known.get(seq, "")          # other CSI/mouse → ignore
         if ch in (b"\r", b"\n"):
             return readchar.key.ENTER
         if ch == b"\x03":
@@ -511,6 +814,13 @@ def _read_menu_key():
             return ""
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _read_menu_key():
+    """Single entry point for menu key reads (carry replay + raw decode)."""
+    if _take_esc_carry():
+        return readchar.key.ESC
+    return _read_menu_key_raw()
 
 
 # Language / quality badges + status glyphs get their own colours in every
@@ -526,6 +836,60 @@ _LANG_BADGE_ROLES = {
 }
 _OPT_TOKEN_PAT = re.compile(r"\[VFQ\]|\[VOSTFR\]|\[VF\]|\[VO\]|\b\d{3,4}p\b|✗|🔒|✓")
 _THEME_DOT_PAT = re.compile(r"^\[([#\w]+)\]●\[/\] ")
+
+
+def _kbd(label: str) -> Text:
+    """A key hint as a theme-coloured rounded pill.
+
+    Nerd-Font terminals get real rounded ends (E0B6 + E0B4) with the label
+    on an accent background ; other terminals get ‹label› in accent — no
+    tofu boxes, readable on dark AND light themes.
+    """
+    acc = color("accent")
+    try:
+        from .tracker import tracker as _trk
+        nerd = (_trk.get_icon_style() or "").lower() == "nerd"
+    except Exception:
+        nerd = False
+    out = Text()
+    if nerd:
+        # U+E0B6 left half circle + U+E0B4 right half circle (verified in
+        # CaskaydiaCove Nerd Font ; E0B7 is ALSO a left half circle).
+        out.append("\ue0b6", style=acc)
+        out.append(f" {label} ", style=f"black on {acc}")
+        out.append("\ue0b4", style=acc)
+    else:
+        out.append(f"‹{label}›", style=f"bold {acc}")
+    return out
+
+
+def _hl_match(text: str, q: str, base: str = "") -> Text:
+    """Render `text` with the type-to-filter query `q` highlighted (bold
+    accent, first case-insensitive match) so the user sees WHY a row matched.
+    Badge colours are preserved around the highlight."""
+    out = Text()
+    if not q:
+        out.append_text(_styled_option(text, base=base))
+        return out
+    i = text.lower().find(q.lower())
+    if i < 0:
+        out.append_text(_styled_option(text, base=base))
+        return out
+    out.append_text(_styled_option(text[:i], base=base))
+    out.append(text[i:i + len(q)], style=f"bold {color('accent')}")
+    out.append_text(_styled_option(text[i + len(q):], base=base))
+    return out
+
+
+def _scrollbar(pos: int, total: int, width: int = 5) -> Text:
+    """Tiny viewport-position bar (▰▱) for long lists."""
+    if total <= 1:
+        return Text("▰" * width, style=color("dim"))
+    n = min(width, max(1, round((pos + 1) / total * width)))
+    t = Text()
+    t.append("▰" * n, style=color("accent"))
+    t.append("▱" * (width - n), style=color("dim"))
+    return t
 
 
 def _styled_option(text: str, base: str = "") -> Text:
@@ -557,8 +921,14 @@ def _styled_option(text: str, base: str = "") -> Text:
             out.append(tok, style=color("warning"))
         elif tok == "✓":
             out.append(tok, style=f"bold {color('success')}")
-        else:  # 1080p …
-            out.append(tok, style=f"bold {color('accent')}")
+        else:  # 480p / 720p / 1080p / 2160p : resolution colour scale
+            try:
+                _h = int(tok.rstrip("p"))
+            except ValueError:
+                _h = 0
+            _role = ("dim" if _h <= 480 else "success" if _h <= 720
+                     else "warning" if _h <= 1080 else "accent")
+            out.append(tok, style=f"bold {color(_role)}")
         pos = mo.end()
     if pos < len(text):
         out.append(text[pos:], style=base_style)
@@ -624,6 +994,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
 
         view = _view()  # original indices currently shown (filter-aware)
         grouped = bool(group_headers) and not flt["on"]
+        fq = flt["q"] if flt["on"] else ""  # highlight the filter match
 
         # Calculate dynamic window size based on terminal height
         term_height = console.size.height
@@ -665,7 +1036,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             lines.append(empty)
 
         if start_index > 0:
-            lines.append(Text("  ↑ ...", style=color("dim")))
+            lines.append(Text(f"  ↑ … {start_index + 1}/{len(view)}",
+                              style=color("dim")))
 
         for pos in range(start_index, end_index):
             idx = view[pos]
@@ -683,17 +1055,21 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 row = Text()
                 row.append("❯ ", style=f"bold {color('accent')}")
                 row.append("▌ ", style=color("accent"))
-                row.append_text(_styled_option(option, base=f"bold {color('accent')}"))
+                row.append_text(_hl_match(option, fq,
+                                          base=f"bold {color('accent')}"))
                 lines.append(row)
             else:
-                # No hardcoded colour → adopts the terminal's default fg, so it
-                # stays readable on BOTH dark and light themes.
+                # Watched rows (✓ badge) render dim so the eye lands on what's
+                # left to watch ; the cursor row always stays bright. Badges
+                # keep their own colours either way.
+                base = color("dim") if "✓" in option else ""
                 un = Text("    ")
-                un.append_text(_styled_option(option))
+                un.append_text(_hl_match(option, fq, base=base))
                 lines.append(un)
 
         if end_index < len(view):
-            lines.append(Text("  ↓ ...", style=color("dim")))
+            lines.append(Text(f"  ↓ … {end_index}/{len(view)}",
+                              style=color("dim")))
 
         # Status bar : consistent bottom hints on every menu.
         lines.append(Text(""))
@@ -775,9 +1151,6 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             elif key == readchar.key.ESC:
                 # Esc = go back : select the LAST option (the Back / Cancel /
                 # Exit entry every menu appends), which callers treat as "go up".
-                # At the TOP menu (home) esc_selects_last is False, so a stray /
-                # phantom Esc can't quit the app "the moment you enter" — the
-                # user leaves via the explicit Exit entry instead.
                 if esc_selects_last:
                     result = len(options) - 1
             elif key == readchar.key.CTRL_C:
@@ -846,10 +1219,13 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
         lines.append(Text(""))
         lines.append(Text(f"  {len(checked)} {_t('selected')}", style=color("info")))
         # Bottom hint — highlight Space, which toggles the current line.
-        lines.append(Text(
-            f"  ↑/↓ · {_t('Space: select')} · {_t('a: all')} · "
-            f"{_t('Enter: confirm')} · {_t('Esc: back')}",
-            style=f"bold {color('accent')}"))
+        lines.append(Text.assemble(
+            Text("  ↑/↓ · ", style=f"bold {color('accent')}"),
+            _kbd(_t("Space: select")), Text(" · ", style=f"bold {color('accent')}"),
+            _kbd(_t("a: all")), Text(" · ", style=f"bold {color('accent')}"),
+            _kbd(_t("Enter: confirm")), Text(" · ", style=f"bold {color('accent')}"),
+            _kbd(_t("Esc: back")),
+        ))
         return Group(*lines)
 
     with Live(render(), refresh_per_second=20, transient=True) as live:
@@ -917,6 +1293,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     Returns the selected index into `labels`, or len(labels) for Back.
     """
     from . import terminal_image
+    from .i18n import t as _t
     from concurrent.futures import ThreadPoolExecutor
     from rich.align import Align
     from rich.spinner import Spinner
@@ -946,7 +1323,10 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     # works), so more render workers just means posters appear sooner — the old
     # 2-worker cap was over-cautious. Downloads stay wide-open.
     dl_pool = ThreadPoolExecutor(max_workers=6)
-    rndr_pool = ThreadPoolExecutor(max_workers=4)
+    # 2 render workers : 4 concurrent max-quality chafa processes thrashed
+    # the CPU during big searches and starved the input loop (arrow keys felt
+    # stuck). Previews are small — 2 workers keep up without jank.
+    rndr_pool = ThreadPoolExecutor(max_workers=2)
     # key -> last submit time. Time-based (not a plain set) so a render/download
     # that FAILED (transient host throttle) is retried after a short cooldown
     # instead of being blocked forever ("sometimes the poster never shows").
@@ -1066,8 +1446,12 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     def _list_lines(vis, sel, s, end, lw):
         """Build the scrollable result list (left column), truncated to `lw`."""
         head = f"/{query}" if query else iconify(prompt)
-        counter = f"  [{sel + 1}/{len(vis)}]" if vis else ""
-        lines = [Text(f"\n {head}{counter}\n", style=f"bold {color('accent')}")]
+        # Counter + viewport bar so long lists show where you are.
+        counter = Text.assemble(
+            Text(f"  [{sel + 1}/{len(vis)}] " if vis else "", style=color("dim")),
+            _scrollbar(sel, len(vis)) if vis else Text(""),
+        )
+        lines = [Text(f"\n {head}", style=f"bold {color('accent')}"), counter]
         if s > 0:
             lines.append(Text("  ↑ …", style=color("dim")))
         for pos in range(s, end):
@@ -1086,7 +1470,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         if end < len(vis):
             lines.append(Text("  ↓ …", style=color("dim")))
         if not vis:
-            lines.append(Text("    (no match)", style=color("dim")))
+            lines.append(Text(f"    ({_t('no match')})", style=color("dim")))
         return lines
 
     # ── Live SIXEL overlay (photo-sharp preview) ─────────────────────────
@@ -1128,7 +1512,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         lw = left_w if show_preview else max(10, console.size.width - 2)
         left = Group(*_list_lines(vis, sel, s, end, lw))
 
-        hint = Text("↑/↓ naviguer · taper pour filtrer · Entrée · Échap",
+        hint = Text(_t("↑/↓ navigate · type to filter · Enter · Esc"),
                     style=color("dim"), justify="center")
 
         if not show_preview:
@@ -1220,6 +1604,10 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         if data[:1] == b"\x1b":
             if len(data) == 1:
                 return "ESC"  # a true, standalone Escape press
+            if data[:2] == b"\x1b\x1b":
+                # Fast double-Esc in one read : replay the second press.
+                _stash_esc_carry()
+                return "ESC"
             if data[1:2] in (b"[", b"O"):
                 return {b"A": "UP", b"B": "DOWN", b"C": "RIGHT",
                         b"D": "LEFT"}.get(data[2:3], "IGN")
@@ -1325,50 +1713,130 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                           auto_refresh=False) as live:
                     live.refresh()
                     _paint_sixel()   # first paint (once the sixel is ready)
+                    import time as _ltime
+                    last_anim_tick = [0.0]
                     while chosen["idx"] is None:
                         anim = _is_loading()
                         r, _, _ = _sel.select([fd], [], [], 0.06 if anim else 0.25)
                         dirty = False
                         if r:
                             data = _os.read(fd, 16)
-                            if data == b"\x1b":
+                            if data == b"\x1b" or (
+                                data and _PASTE_START.startswith(data)
+                            ):
                                 # Lone ESC may be a split escape sequence
                                 # (arrow / focus event) - wait briefly for more.
-                                # Aligned with _read_menu_key (100 ms): under
-                                # poster-load contention the tail can lag.
-                                r2, _, _ = _sel.select([fd], [], [], 0.10)
+                                # 200 ms idle budget: under poster-load
+                                # contention the tail can lag, and a truncated
+                                # read decoded as ESC = phantom "back".
+                                r2, _, _ = _sel.select([fd], [], [], 0.20)
                                 if r2:
                                     data += _os.read(fd, 16)
-                            key = _decode_key(data) if data else None
-                            if key == "CTRLC":
-                                raise KeyboardInterrupt("cancelled")
-                            res = _handle(key) if key else None
-                            if res:
-                                act, idx = res
-                                chosen["idx"] = n if act == "back" else idx
-                            dirty = True
+                            pasted = False
+                            if data.startswith(_PASTE_START):
+                                # Bracketed paste (middle-click of terminal
+                                # output) : swallow the whole blob and type
+                                # its text into the filter instead of leaking
+                                # bare \x1b bytes that each look like Esc.
+                                _buf = data
+                                while True:
+                                    _tx, _ = _split_paste(_buf)
+                                    if _tx is not None:
+                                        break
+                                    if len(_buf) >= _PASTE_MAX:
+                                        _buf = b""
+                                        break
+                                    _r2, _, _ = _sel.select([fd], [], [], 0.20)
+                                    if not _r2:
+                                        break
+                                    _buf += _os.read(fd, 64)
+                                _tx, _ = _split_paste(_buf)
+                                if _tx is not None:
+                                    for _c in _tx.decode("utf-8", "ignore"):
+                                        if _c.isprintable():
+                                            query += _c
+                                    _apply_filter()
+                                    pasted = True
+                                dirty = True
+                            elif data.startswith(b"\x1b]"):
+                                # Terminal reply (OSC color query, title…) :
+                                # swallow to its terminator so fragments never
+                                # read as Esc. Rest (often empty) decoded below.
+                                _buf = data
+                                while True:
+                                    _done, _rest = _split_reply(_buf)
+                                    if _done:
+                                        _buf = _rest
+                                        break
+                                    if len(_buf) >= _PASTE_MAX:
+                                        _buf = b""
+                                        break
+                                    _r2, _, _ = _sel.select([fd], [], [], 0.20)
+                                    if not _r2:
+                                        _buf = b""
+                                        break
+                                    _buf += _os.read(fd, 64)
+                                data = _buf
+                                dirty = True
+                            if not pasted:
+                                key = _decode_key(data) if data else None
+                                if key == "CTRLC":
+                                    raise KeyboardInterrupt("cancelled")
+                                res = _handle(key) if key else None
+                                if res:
+                                    act, idx = res
+                                    chosen["idx"] = n if act == "back" else idx
+                                dirty = True
                         cur = (console.size.width, console.size.height)
                         if cur != last_size:
                             last_size = cur
                             dirty = True
+                        # Repaint policy (input stays snappy while loading) :
+                        # a key/resize repaints IMMEDIATELY ; background
+                        # loading only ticks the spinner at 4 fps. Repainting
+                        # the full frame + a synchronous chafa sixel on every
+                        # 60 ms iteration starved the input loop (arrows felt
+                        # stuck, users over-pressed and jumped rows).
                         if dirty or anim:
-                            live.update(render(), refresh=True)
-                            # Rich just repainted the (blank) region → paint the
-                            # real pixels back over it. Only mark it painted when
-                            # a real image was written (else the ready-transition
-                            # below still fires once the sixel finishes).
-                            if _paint_sixel():
-                                painted[0] = (ov_region.get("cover"),
-                                              ov_region.get("cols"),
-                                              ov_region.get("rows"))
+                            now = _ltime.monotonic()
+                            tick_due = (
+                                anim and not dirty
+                                and now - last_anim_tick[0] >= 0.25
+                            )
+                            if dirty or tick_due:
+                                if tick_due:
+                                    last_anim_tick[0] = now
+                                live.update(render(), refresh=True)
+                                # Rich just repainted the (blank) region → paint
+                                # the real pixels back over it, but ONLY when
+                                # the target changed (same cover/size/position
+                                # needs no new chafa process). Only mark it
+                                # painted when a real image was written (else
+                                # the ready-transition below still fires once
+                                # the sixel finishes).
+                                if overlay[0] and ov_region:
+                                    skey = (
+                                        ov_region.get("cover"),
+                                        ov_region.get("cols"),
+                                        ov_region.get("rows"),
+                                        ov_region.get("row"),
+                                        ov_region.get("col"),
+                                    )
+                                    if painted[0] != skey and _paint_sixel():
+                                        painted[0] = skey
+                                elif _paint_sixel():
+                                    painted[0] = (ov_region.get("cover"),
+                                                  ov_region.get("cols"),
+                                                  ov_region.get("rows"))
                         elif overlay[0] and visible:
                             # No key/resize/anim, but the selected poster's sixel
                             # may have JUST finished rendering (spinner → image):
                             # one repaint to drop the spinner and paint pixels.
                             cc = previews[visible[selected]].get("cover", "")
                             _, _, _, pc, pr = _dims()
-                            k = (cc, pc, pr)
-                            if (cc and painted[0] != k
+                            k = (cc, pc, pr, ov_region.get("row"),
+                                 ov_region.get("col")) if ov_region else None
+                            if (cc and k is not None and painted[0] != k
                                     and terminal_image.get_download_path(cc) is not None):
                                 live.update(render(), refresh=True)
                                 _paint_sixel()

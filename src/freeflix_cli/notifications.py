@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 
+from .i18n import t
+
 
 def _extract_max_episode_number(episodes_dict: dict) -> int:
     """Given {lang: [Episode]}, return the highest detected episode number."""
@@ -155,9 +157,9 @@ def main():
     lines = []
     for f in findings:
         lines.append(
-            f"• {f['series']} — {f['season']} : ep {f['current']} → {f['available']}"
+            f"• {f['series']} — {f['season']} : {t('ep')} {f['current']} → {f['available']}"
         )
-    _notify("New FreeFlix episodes available", "\n".join(lines))
+    _notify(t("New FreeFlix episodes available"), "\n".join(lines))
     return 0
 
 
@@ -187,7 +189,7 @@ def install_systemd_timer() -> bool:
 
     service_path.write_text(
         f"""[Unit]
-Description=FreeFlix: scan history for new anime episodes
+Description={t("FreeFlix: scan history for new anime episodes")}
 After=network-online.target
 Wants=network-online.target
 
@@ -204,8 +206,8 @@ ExecStart={_python_path()} -m freeflix_cli.notifications
     # off at the scheduled time. A small randomized delay avoids every
     # install hammering the sites at the exact same second.
     timer_path.write_text(
-        """[Unit]
-Description=Run FreeFlix episode scan once a day
+        f"""[Unit]
+Description={t("Run FreeFlix episode scan once a day")}
 
 [Timer]
 OnCalendar=daily

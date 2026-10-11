@@ -774,7 +774,7 @@ def _resolve_or_install(player_name: str):
         return exe
 
     if player_name in ("mpv", "vlc"):
-        print_warning(f"{player_name} is not installed.")
+        print_warning(f"{player_name} {t('is not installed.')}")
         try:
             from . import setup_assistant
             if setup_assistant.install_media_player(player_name):
@@ -826,9 +826,13 @@ def handle_player_error(context: str = "player") -> int:
     Returns:
         User's choice index: 0 = try another, 1 = back
     """
+    if context == "player":
+        _msg = t("The player failed. What would you like to do?")
+    else:
+        _msg = f"{t('The')} {context} {t('failed. What would you like to do?')}"
     return select_from_list(
-        ["Try another player", "← Back"],
-        f"The {context} failed. What would you like to do?",
+        [t("Try another player"), t("← Back")],
+        _msg,
     )
 
 
@@ -1055,13 +1059,16 @@ def _episode_window_title(series_title, season_title, episode_title) -> str:
 def episode_badges(series_title, season_title, episode_title) -> str:
     """
     Trailing badges for an episode row in the lists:
-      ⬇ downloaded · ▸NN% resume · ✓ watched
+      24min duration (when known) · ⬇ downloaded · ▸NNm resume · ✓ watched
     Returns "" when there's nothing to show. Cheap (a hash + a couple lookups).
     """
     import hashlib
     wt = _episode_window_title(series_title, season_title, episode_title)
     key = hashlib.md5(wt.encode("utf-8")).hexdigest()
     tags = []
+    dur = tracker.get_episode_duration(key)
+    if dur and dur > 0:
+        tags.append(f"{int(dur // 60)}min")
     if is_already_downloaded(wt) or is_already_downloaded(
         clean_episode_title(series_title, season_title or "", episode_title or ""),
         f"{series_title} - {clean_season_title(series_title, season_title or '')}",
@@ -1109,7 +1116,7 @@ def _mpv_position_args(title: str):
     saved = tracker.get_episode_position(key)
     if saved and saved > 30:
         args.append(f"--start={saved:.2f}")
-        print_info(f"Resuming at {int(saved // 60)}m{int(saved % 60):02d}s")
+        print_info(f"{t('Resuming at')} {int(saved // 60)}m{int(saved % 60):02d}s")
 
     return args, out_path, key
 
@@ -1242,7 +1249,7 @@ def _download_stream(
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError as e:
-        print_error(f"Cannot write to download folder {out_dir}: {e}")
+        print_error(f"{t('Cannot write to download folder')} {out_dir}: {e}")
         return False
     _sweep_download_litter()  # clear any old fragment clutter up front
 
@@ -1269,8 +1276,8 @@ def _download_stream(
         ytdlp = shutil.which("yt-dlp")
         if not ytdlp:
             print_error(
-                "yt-dlp is required for HLS streams but is not installed. "
-                "Install with: sudo dnf install yt-dlp"
+                f"{t('yt-dlp is required for HLS streams but is not installed.')} "
+                f"{t('Install with:')} sudo dnf install yt-dlp"
             )
             return False
         # For HLS we MUST use yt-dlp's NATIVE downloader with parallel fragments,
@@ -1340,8 +1347,8 @@ def _download_stream(
             ytdlp = shutil.which("yt-dlp")
             if not ytdlp:
                 print_error(
-                    "Neither aria2c nor yt-dlp is installed. "
-                    "Install with: sudo dnf install aria2 yt-dlp"
+                    f"{t('Neither aria2c nor yt-dlp is installed.')} "
+                    f"{t('Install with:')} sudo dnf install aria2 yt-dlp"
                 )
                 return False
             backend_name = "yt-dlp"
@@ -1381,10 +1388,10 @@ def _download_stream(
 
     if not output_suppressed:
         print_info(
-            f"Downloading [bold cyan]{safe_title}[/bold cyan] via "
+            f"{t('Downloading')} [bold cyan]{safe_title}[/bold cyan] {t('via')} "
             f"[bold cyan]{backend_name}[/bold cyan]"
         )
-        print_info(f"Output: [cyan]{out_dir}[/cyan]")
+        print_info(f"{t('Output:')} [cyan]{out_dir}[/cyan]")
 
     dl_ok = False
     try:
@@ -1405,13 +1412,13 @@ def _download_stream(
             rc = _sp.run(cmd, env=None).returncode
             dl_ok = rc == 0
         if not dl_ok and not output_suppressed:
-            print_error(f"Download failed (exit code {rc}).")
+            print_error(f"{t('Download failed')} ({t('exit code')} {rc}).")
     except KeyboardInterrupt:
         if not output_suppressed:
-            print_info("\nDownload interrupted by user.")
+            print_info(f"\n{t('Download interrupted by user.')}")
     except Exception as e:
         if not output_suppressed:
-            print_error(f"Download error: {e}")
+            print_error(f"{t('Download error:')} {e}")
     finally:
         _sweep_download_litter()
 
@@ -1427,7 +1434,7 @@ def _download_stream(
                 dl_ok = False  # nothing to move → treat as incomplete
         except Exception as e:
             if not output_suppressed:
-                print_error(f"Could not finalize download: {e}")
+                print_error(f"{t('Could not finalize download:')} {e}")
             dl_ok = False
 
     # Clean the temp dir ONLY on success; keep it on failure/interrupt so the
@@ -1443,9 +1450,9 @@ def _download_stream(
         final_sub = os.path.join(out_dir, f"{safe_title}{sub_ext}")
         try:
             shutil.copy2(local_subtitle_path, final_sub)
-            print_success(f"Subtitle saved: {final_sub}")
+            print_success(f"{t('Subtitle saved:')} {final_sub}")
         except Exception as e:
-            print_info(f"Could not save subtitle next to video: {e}")
+            print_info(f"{t('Could not save subtitle next to video:')} {e}")
         finally:
             # Les sous-titres téléchargés en temp (freeflix_sub_*) ne doivent
             # pas s'accumuler dans /tmp d'une lecture à l'autre.
@@ -1458,7 +1465,7 @@ def _download_stream(
             except OSError:
                 pass
 
-    print_success(f"Download completed in {out_dir}")
+    print_success(f"{t('Download completed in')} {out_dir}")
     _invalidate_download_index()  # new file → refresh badges immediately
     return True
 
@@ -1555,7 +1562,7 @@ def play_video(
 
     headers = headers or {}
     if not output_suppressed:
-        print_info(f"Resolving stream for: [cyan]{url}[/cyan]")
+        print_info(f"{t('Resolving stream for:')} [cyan]{url}[/cyan]")
 
     # Determine player configuration
     player_config = {}
@@ -1576,7 +1583,7 @@ def play_video(
                     TextColumn("[progress.description]{task.description}"),
                     console=console,
                 ) as progress:
-                    progress.add_task(description="Getting stream URL...", total=None)
+                    progress.add_task(description=t("Getting stream URL..."), total=None)
                     stream_url = _cached_resolve(url, headers)
             if stream_url and stream_url.startswith("/"):
                 stream_url = (
@@ -1588,7 +1595,7 @@ def play_video(
                 )
         except Exception as e:
             if not output_suppressed:
-                print_error(f"Error resolving stream URL: {e}")
+                print_error(f"{t('Error resolving stream URL:')} {e}")
             return False
 
     if not stream_url:
@@ -1607,7 +1614,7 @@ def play_video(
             pass
 
     if not output_suppressed:
-        print_success(f"Stream URL: [cyan]{stream_url}[/cyan]")
+        print_success(f"{t('Stream URL:')} [cyan]{stream_url}[/cyan]")
 
     local_subtitle_path = subtitle_url
     if subtitle_url and subtitle_url.startswith("http"):
@@ -1649,7 +1656,7 @@ def play_video(
             local_subtitle_path = temp_sub
             print_success(t("Subtitles downloaded locally."))
         except Exception as e:
-            print_error(f"Failed to download subtitles: {e}")
+            print_error(f"{t('Failed to download subtitles:')} {e}")
 
     # Fallback: if no subtitle and the user has configured an OpenSubtitles key,
     # try to fetch one automatically by title.
@@ -1664,15 +1671,15 @@ def play_video(
                 or tracker.get_language()
                 or "en"
             )
-            print_info(f"No source subtitles; trying OpenSubtitles fallback ({sub_lang})…")
+            print_info(f"{t('No source subtitles; trying OpenSubtitles fallback')} ({sub_lang})…")
             fetched = os_subs.fetch_best_subtitle(title, languages=sub_lang)
             if fetched:
                 local_subtitle_path = fetched
-                print_success(f"OpenSubtitles match downloaded: {fetched}")
+                print_success(f"{t('OpenSubtitles match downloaded:')} {fetched}")
             else:
                 print_info(t("No OpenSubtitles match found."))
         except Exception as e:
-            print_info(f"OpenSubtitles lookup skipped: {e}")
+            print_info(f"{t('OpenSubtitles lookup skipped:')} {e}")
 
     # Quality selection : if the resolved stream is a multi-variant HLS
     # master (e.g. vidmoly 1080p/480p, anizone 1080p…360p), let the user
@@ -1707,7 +1714,7 @@ def play_video(
                 if chosen and chosen.get("bandwidth"):
                     selected_hls_bitrate = chosen["bandwidth"]
                     selected_quality = chosen.get("height")
-                    print_info(f"Quality: [cyan]{chosen['label']}[/cyan]")
+                    print_info(f"{t('Quality:')} [cyan]{chosen['label']}[/cyan]")
         except Exception:
             pass
 
@@ -1727,8 +1734,8 @@ def play_video(
                     player_values = ["android", "browser", "download"]
                     player_labels = [
                         f"android ({t('recommended')})",
-                        "browser",
-                        "download",
+                        t("browser"),
+                        t("download"),
                         t("← Back"),
                     ]
                 else:
@@ -1736,8 +1743,8 @@ def play_video(
                     player_labels = [
                         f"mpv ({t('recommended')})",
                         "vlc",
-                        "browser",
-                        "download",
+                        t("browser"),
+                        t("download"),
                         t("← Back"),
                     ]
                 player_choice = select_from_list(
@@ -1796,7 +1803,7 @@ def play_video(
             # install offer when the binary is missing.
             player_executable = _resolve_or_install(player_name)
             if not player_executable:
-                print_error(f"{player_name} is not installed or not in PATH.")
+                print_error(f"{player_name} {t('is not installed or not in PATH.')}")
                 retry = handle_player_error(player_name)
                 if retry == 1:  # Back
                     return False
@@ -1959,7 +1966,7 @@ def play_video(
 
             webbrowser.open(browser_player_url)
             print_info(
-                "Waiting for playback to finish in browser... (Close the tab to continue)"
+                t("Waiting for playback to finish in browser... (Close the tab to continue)")
             )
 
             try:
@@ -1968,7 +1975,7 @@ def play_video(
                     time.sleep(1)
                     if proxy.player_finished_event.is_set():
                         print_success(
-                            "Playback finished (end of video or manually marked)."
+                            t("Playback finished (end of video or manually marked).")
                         )
                         return True
 
@@ -1977,10 +1984,10 @@ def play_video(
                         print_success(t("Browser tab closed or playback stopped."))
                         return True
             except KeyboardInterrupt:
-                print_info("\nPlayback interrupted by user.")
+                print_info(f"\n{t('Playback interrupted by user.')}")
                 return True
             except Exception as e:
-                print_error(f"Error monitoring browser player: {e}")
+                print_error(f"{t('Error monitoring browser player:')} {e}")
                 return False
 
         # Determine Launch Mode from config
@@ -1988,7 +1995,7 @@ def play_video(
 
         if mode == "proxy":
             print_info(
-                f"Launching [bold cyan]{player_name}[/bold cyan] via Proxy ({player_executable})..."
+                f"{t('Launching')} [bold cyan]{player_name}[/bold cyan] {t('via Proxy')} ({player_executable})..."
             )
 
             # Construct Proxy URL
@@ -2051,7 +2058,7 @@ def play_video(
                         cmd.append(f"--adaptive-maxheight={selected_quality}")
                     if local_subtitle_path:
                         print_warning(
-                            "Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead."
+                            t("Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead.")
                         )
                     cmd.append(f"--meta-title={title}")
                     if local_subtitle_path:
@@ -2090,11 +2097,11 @@ def play_video(
                 print_success(t("Playback completed successfully!"))
                 return True
             except Exception as e:
-                print_error(f"Error running player via proxy: {e}")
+                print_error(f"{t('Error running player via proxy:')} {e}")
 
         elif mode == "direct":
             print_info(
-                f"Launching [bold cyan]{player_name}[/bold cyan] directly ({player_executable})..."
+                f"{t('Launching')} [bold cyan]{player_name}[/bold cyan] {t('directly')} ({player_executable})..."
             )
             try:
                 if player_name == "vlc":
@@ -2111,7 +2118,7 @@ def play_video(
                         cmd.append(f"--adaptive-maxheight={selected_quality}")
                     if local_subtitle_path:
                         print_warning(
-                            "Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead."
+                            t("Note: VLC natively struggles to sync external subtitles on HLS/M3U8 streams (subtitles may flash). Strongly recommend using MPV instead.")
                         )
                         cmd.append(f"--sub-file={local_subtitle_path}")
                     subprocess.run(cmd, check=True,
@@ -2143,7 +2150,7 @@ def play_video(
                     if player_config.get("no-header") is True:
                         headers_mpv = ""
 
-                    print_info(f"Headers: {headers_mpv}")
+                    print_info(f"{t('Headers:')} {headers_mpv}")
 
                     cmd = [
                         player_executable,
@@ -2177,10 +2184,10 @@ def play_video(
                 return True
 
             except subprocess.CalledProcessError as e:
-                print_error(f"Error running player: {e}")
+                print_error(f"{t('Error running player:')} {e}")
                 # Retry logic below
             except Exception as e:
-                print_error(f"An unexpected error occurred: {e}")
+                print_error(f"{t('An unexpected error occurred:')} {e}")
                 # Retry logic below
 
         # Common retry logic

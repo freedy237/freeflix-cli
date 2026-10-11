@@ -145,3 +145,36 @@ def test_windows_never_trusts_wt_session_for_sixel(monkeypatch):
     monkeypatch.setenv("WT_SESSION", "abc")
     monkeypatch.setattr(ti, "_SIXEL_OK", None)
     assert _real_sixel_probe() is False
+
+
+def test_chafa_renders_never_read_tty(monkeypatch):
+    """chafa must run with stdin closed : its terminal queries would
+    otherwise land in our menu reads as phantom Esc presses."""
+    import subprocess as _sp
+    from freeflix_cli import terminal_image as ti
+
+    calls = []
+    real_run = _sp.run
+
+    def _fake_run(cmd, **kw):
+        if "--version" in cmd:
+            class _V:
+                returncode = 0
+                stdout = ""
+            return _V()
+        calls.append((cmd, kw))
+        if kw.get("capture_output"):
+            class _R:
+                stdout = ""
+            return _R()
+        return real_run(["true"])
+
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    monkeypatch.setattr(ti, "_CHAFA_PATH", "/usr/bin/chafa")
+    monkeypatch.setattr(ti, "_download", lambda url: "/tmp/x.jpg")
+    ti.render_url("http://x/y.jpg", width=20, height=10)
+    ti.render_to_text("http://x/y.jpg", cols=20, rows=10)
+    assert calls, "expected chafa invocations"
+    assert all(k.get("stdin") == _sp.DEVNULL for _, k in calls)
+    assert all("--probe" in c for c, _ in calls), (
+        "every chafa render must pass --probe off")

@@ -40,8 +40,8 @@ def _download_torrent(magnet: str, title: str) -> bool:
     aria = _aria2c_path()
     if not aria:
         print_error(
-            "aria2c is not installed (required for torrent downloads). "
-            "Install with: sudo dnf install aria2"
+            f"{t('aria2c is not installed (required for torrent downloads).')} "
+            f"{t('Install with:')} sudo dnf install aria2"
         )
         return False
 
@@ -60,33 +60,33 @@ def _download_torrent(magnet: str, title: str) -> bool:
         magnet,
     ]
 
-    print_info(f"Downloading torrent into [cyan]{TORRENT_DIR}[/cyan]")
-    print_info("(BitTorrent — speed depends on seeders ; press Ctrl-C to abort)")
+    print_info(f"{t('Downloading torrent into')} [cyan]{TORRENT_DIR}[/cyan]")
+    print_info(t("(BitTorrent — speed depends on seeders ; press Ctrl-C to abort)"))
 
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
-        print_error(f"aria2c exited with code {e.returncode}")
+        print_error(f"aria2c {t('exited with code')} {e.returncode}")
         return False
     except KeyboardInterrupt:
-        print_info("\nDownload interrupted by user.")
+        print_info(f"\n{t('Download interrupted by user.')}")
         return False
     except Exception as e:
-        print_error(f"Download error: {e}")
+        print_error(f"{t('Download error:')} {e}")
         return False
 
-    print_success(f"Torrent download finished : {title}")
+    print_success(f"{t('Torrent download finished:')} {title}")
     return True
 
 
 def handle_nyaa():
     """Provider handler — registered from main.py."""
-    print_header("🌊 Nyaa.si Torrents")
+    print_header(t("🌊 Nyaa.si Torrents"))
 
     if not _aria2c_path():
         print_error(
-            "aria2c is required for torrent downloads. "
-            "Install with: sudo dnf install aria2"
+            f"{t('aria2c is not installed (required for torrent downloads).')} "
+            f"{t('Install with:')} sudo dnf install aria2"
         )
         pause()
         return
@@ -95,7 +95,7 @@ def handle_nyaa():
     if not query or query.lower() == "exit":
         return
 
-    print_info(f"Searching nyaa.si for [cyan]{query}[/cyan] ...")
+    print_info(f"{t('Searching nyaa.si for')} [cyan]{query}[/cyan] ...")
     results = nyaa.search(query, max_results=20)
 
     if not results:
@@ -103,7 +103,7 @@ def handle_nyaa():
         pause()
         return
 
-    labels = [_format_row(r) for r in results] + ["← Back"]
+    labels = [_format_row(r) for r in results] + [t("← Back")]
     idx = select_from_list(labels, t("Pick a torrent:"))
     if idx == len(results):
         return

@@ -61,7 +61,7 @@ def handle_history():
         history = tracker.get_history()
         if not history:
             print_warning(t("No history found."))
-            input("\nPress Enter to go back...")
+            input(f"\n{t('Press Enter to go back...')}")
             return
 
         options = []

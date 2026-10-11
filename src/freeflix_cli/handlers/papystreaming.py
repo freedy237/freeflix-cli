@@ -97,7 +97,7 @@ def handle_papystreaming():
             cover=r["poster"],
             title=r["title"],
             lines=[
-                ("Film" if r["media_type"] == "movie" else "Série")
+                (t("Movie") if r["media_type"] == "movie" else t("Series"))
                 + (f" · {r['year']}" if r["year"] else "")
             ],
             panel_title="Papystreaming",

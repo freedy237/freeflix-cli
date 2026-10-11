@@ -360,6 +360,21 @@ def _home_dashboard():
     body.append(f"{stats['streak']}", style=f"bold {color('warning')}")
     body.append(f"    {icon('play')} {t('In progress')}: ", style=color("dim"))
     body.append(f"{in_progress}", style=f"bold {color('success')}")
+    # 7-day activity sparkline from the local watch log (no network).
+    try:
+        from datetime import timedelta, date as _date
+        _today = _date.today()
+        _counts = [
+            stats["by_day"].get((_today - timedelta(days=i)).isoformat(), 0)
+            for i in range(6, -1, -1)
+        ]
+        _mx = max(_counts) or 1
+        _levels = "▁▂▃▄▅▆▇"
+        _spark = "".join(_levels[min(6, int(c / _mx * 6))] for c in _counts)
+        body.append(f"    {t('Week activity')}: ", style=color("dim"))
+        body.append(f"{_spark}", style=color("accent"))
+    except Exception:
+        pass
     from . import recent
     _new = recent.get_items()
     if _new:
@@ -815,17 +830,17 @@ def main():
             print("dev")
         return 0
     if "--help" in sys.argv or "-h" in sys.argv:
-        print("freeflix — terminal streaming for movies / series / anime\n")
-        print("  freeflix           launch the TUI")
-        print("  freeflix --setup   re-run setup : anime + interface language, then deps")
-        print("  freeflix --doctor  run system diagnostic")
-        print("  freeflix --doctor --sources  live-test every source (search + resolve)")
-        print("  freeflix --doctor --upload  diagnostic + upload to Gist")
-        print("  freeflix --verbose print DEBUG to the console (also always logged)")
-        print("  freeflix --version print the installed version")
-        print("  freeflix --help    this message")
+        print(t("freeflix — terminal streaming for movies / series / anime\n"))
+        print(f"  freeflix           {t('launch the TUI')}")
+        print(f"  freeflix --setup   {t('re-run setup : anime + interface language, then deps')}")
+        print(f"  freeflix --doctor  {t('run system diagnostic')}")
+        print(f"  freeflix --doctor --sources  {t('live-test every source (search + resolve)')}")
+        print(f"  freeflix --doctor --upload  {t('diagnostic + upload to Gist')}")
+        print(f"  freeflix --verbose {t('print DEBUG to the console (also always logged)')}")
+        print(f"  freeflix --version {t('print the installed version')}")
+        print(f"  freeflix --help    {t('this message')}")
         from .logsetup import LOG_FILE
-        print(f"\n  log file : {LOG_FILE}")
+        print(f"\n  {t('log file :')} {LOG_FILE}")
         return 0
 
     # Kill terminal focus/mouse/paste reports so their escape sequences can't
@@ -895,16 +910,16 @@ def main():
     from . import progress
     with progress.LoadingScreen(version=_v) as _ls:
         # A short, smooth 0 -> 100% sequence so the splash feels intentional
-        # instead of flashing past.
+        # instead of flashing past (~1.9 s total).
         _ls.status(t("Starting up…"), frac=0.2)
-        time.sleep(0.2)
+        time.sleep(0.45)
         _ls.status(t("Loading providers…"), frac=0.55)
         _register_providers()
-        time.sleep(0.22)
+        time.sleep(0.47)
         _ls.status(t("Preparing the library…"), frac=0.85)
-        time.sleep(0.2)
+        time.sleep(0.45)
         _ls.status(t("Ready"), frac=1.0)
-        time.sleep(0.28)
+        time.sleep(0.53)
 
     # Check for updates
     if check_update():
@@ -958,7 +973,7 @@ def main():
             # Formatting logic similar to history_ui
             if last_watch["provider"] == "Coflix":
                 if season_name == "Movie" or ep_name == "Movie":
-                    resume_text = f"{t('▶ Resume:')}{series_name} (Movie)"
+                    resume_text = f"{t('▶ Resume:')}{series_name} ({t('Movie')})"
                 else:
                     clean_season = season_name.replace(series_name, "").strip(" -")
                     if not clean_season:
@@ -968,14 +983,14 @@ def main():
                     )
             elif last_watch["provider"] == "French-Stream":
                 if season_name == "Movie" or ep_name == "Movie":
-                    resume_text = f"{t('▶ Resume:')}{series_name} (Movie)"
+                    resume_text = f"{t('▶ Resume:')}{series_name} ({t('Movie')})"
                 else:
                     resume_text = f"{t('▶ Resume:')}{series_name} - {ep_name}"
             elif last_watch["provider"] == "GoldenAnime":
                 resume_text = f"{t('▶ Resume:')}{series_name} - {ep_name}"
             elif last_watch["provider"] == "GoldenMS":
                 if season_name == "Movie" or ep_name == "Movie":
-                    resume_text = f"{t('▶ Resume:')}{series_name} (Movie)"
+                    resume_text = f"{t('▶ Resume:')}{series_name} ({t('Movie')})"
                 else:
                     resume_text = f"{t('▶ Resume:')}{series_name} - {season_name} - {ep_name}"
             else:
@@ -1028,7 +1043,9 @@ def main():
             header=f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}",
             top=_home_dashboard(),
             flush_input=True,        # drop the startup terminal-query burst first
-            esc_selects_last=False,  # a phantom Esc must NOT quit the app on entry
+            esc_selects_last=True,   # Esc on Home = Exit (stray bytes are
+                                     # handled upstream : paste/reply swallow,
+                                     # 200 ms sequence drain, chafa --probe off)
         )
 
         if last_watch and choice_idx == resume_idx:
@@ -1075,11 +1092,17 @@ def main():
 
             group_headers = {}
             if anime:
-                group_headers[0] = f"{icon('anime')} {t('Anime / Manga')}"
+                group_headers[0] = (
+                    f"{icon('anime')} {t('Anime / Manga')} ({len(anime)})"
+                )
             if movies:
-                group_headers[len(anime)] = f"{icon('movie')} {t('Movies & Series')}"
+                group_headers[len(anime)] = (
+                    f"{icon('movie')} {t('Movies & Series')} ({len(movies)})"
+                )
             if others:
-                group_headers[len(anime) + len(movies)] = t("Other")
+                group_headers[len(anime) + len(movies)] = (
+                    f"{t('Other')} ({len(others)})"
+                )
 
             # Stay in the source list : when a provider's flow ends (search
             # cancelled with Esc, finished, or backed out), come back HERE —
@@ -1195,7 +1218,7 @@ def main():
                         toast(f"{t('Player updated to:')} {t(ps[c][1])}")
 
                 def _a_quality():
-                    q_opts = ["auto (best available)", "1080p max", "720p max", "480p max"]
+                    q_opts = [t("auto (best available)"), t("1080p max"), t("720p max"), t("480p max")]
                     q_vals = ["auto", "1080", "720", "480"]
                     c = _pick(q_opts, t("Select download quality:"))
                     if c is not None:
@@ -1211,7 +1234,7 @@ def main():
                         toast(t("OpenSubtitles key saved."))
 
                 def _a_parallel():
-                    n_opts = ["1 (sequential)", "2", "3", "4"]
+                    n_opts = [t("1 (sequential)"), "2", "3", "4"]
                     c = _pick(n_opts, t("Max parallel downloads:"))
                     if c is not None:
                         tracker.set_parallel_downloads(c + 1)
@@ -1244,7 +1267,7 @@ def main():
                 def _a_nvidia():
                     print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
                     print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
-                    nv_opts = ["auto (detect nvidia-smi)", "on (force Nvidia)", "off (always iGPU)"]
+                    nv_opts = [t("auto (detect nvidia-smi)"), t("on (force Nvidia)"), t("off (always iGPU)")]
                     nv_vals = ["auto", "on", "off"]
                     c = _pick(nv_opts, t("Nvidia GPU offload:"))
                     if c is not None:
@@ -1253,18 +1276,18 @@ def main():
 
                 def _a_posters():
                     from . import terminal_image
-                    p_opts = ["auto (best pixel protocol, else blocks)",
-                              "sixel (force photo quality — needs terminal Sixel)",
-                              "blocks (Unicode blocks everywhere)",
-                              "off (no posters)"]
+                    p_opts = [t("auto (best pixel protocol, else blocks)"),
+                              t("sixel (force photo quality — needs terminal Sixel)"),
+                              t("blocks (Unicode blocks everywhere)"),
+                              t("off (no posters)")]
                     p_vals = ["auto", "sixel", "blocks", "off"]
                     if not terminal_image.chafa_available():
                         print_warning(t("chafa is not installed — posters won't show until you "
                                         "install it (e.g. sudo dnf install chafa)."))
                     else:
                         proto = terminal_image.detect_image_protocol()
-                        nice = {"kitty": "kitty graphics (sharp)", "iterm": "iTerm2 (sharp)",
-                                "sixel": "sixel (sharp)"}.get(proto, "Unicode blocks")
+                        nice = {"kitty": t("kitty graphics (sharp)"), "iterm": t("iTerm2 (sharp)"),
+                                "sixel": t("sixel (sharp)")}.get(proto, t("Unicode blocks"))
                         print_info(f"{t('Detected image protocol')}: [cyan]{nice}[/cyan]")
                         hint = terminal_image.sixel_hint()
                         if hint:
@@ -1276,7 +1299,7 @@ def main():
                         toast(f"{t('Show Posters')}: {p_vals[c]}")
 
                 def _a_icons():
-                    i_opts = ["emoji (works everywhere)", "nerd (crisp icons, needs a Nerd Font)"]
+                    i_opts = [t("emoji (works everywhere)"), t("nerd (crisp icons, needs a Nerd Font)")]
                     i_vals = ["emoji", "nerd"]
                     c = _pick(i_opts, t("Icon Style:"))
                     if c is None:
@@ -1284,7 +1307,7 @@ def main():
                     picked = i_vals[c]
                     if picked == "nerd" and not setup_assistant.detect_nerd_font():
                         print_info(t("CaskaydiaCove Nerd Font not found on this system."))
-                        if input("Install it now? [Y/n] ").strip().lower() not in ("n", "no"):
+                        if input(t("Install it now? [Y/n] ")).strip().lower() not in ("n", "no"):
                             setup_assistant.install_nerd_font()
                     tracker.set_icon_style(picked)
                     print_success(f"{t('Icon Style')}: {picked}")
@@ -1323,7 +1346,7 @@ def main():
                 # header only (below), so the list stays clean.
                 entries = [
                     (PLY, f"{t('Choose default Player')} ({player_display})", _a_player),
-                    (PLY, f"Nvidia GPU offload ({nv_mode})", _a_nvidia),
+                    (PLY, f"{t('Nvidia GPU offload')} ({nv_mode})", _a_nvidia),
                     (PLY, f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})", _a_analyze),
                     (PLY, f"{t('Buffer far ahead (disk cache)')} ({'ON' if tracker.get_disk_cache() else 'OFF'})", _a_disk_cache),
                     (DL, f"{t('Download Quality')} ({quality})", _a_quality),
@@ -1335,8 +1358,8 @@ def main():
                     (APP, f"{t('Update Language')} ({lang_display})", _a_lang),
                     (APP, f"{t('Update Anime Language')} ({anime_lang_display})", _a_anime_lang),
                     (APP, f"{t('Clear HTTP cache')} ({_cache_label()})", _a_clear_cache),
-                    (ACC, f"{t('Update AniList Token')} ({'Set' if token else 'Not Set'})", _a_token),
-                    (ACC, f"{t('OpenSubtitles API Key')} ({'Set' if os_key else 'Not Set'})", _a_ossub),
+                    (ACC, f"{t('Update AniList Token')} ({t('Set') if token else t('Not Set')})", _a_token),
+                    (ACC, f"{t('OpenSubtitles API Key')} ({t('Set') if os_key else t('Not Set')})", _a_ossub),
                     (ACC, f"{t('Cloudflare token')}", _set_cloudflare_token),
                     (ACC, f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})", _a_notif),
                     (AB, f"{t('About')}", lambda: (_show_about(_VERSION), pause())),
@@ -1375,6 +1398,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nGoodbye!")
+        print(f"\n{t('Goodbye!')}")
         _stop_proxy_if_running()
         os._exit(0)

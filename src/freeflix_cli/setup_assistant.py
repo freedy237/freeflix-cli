@@ -329,8 +329,8 @@ def _verify_archive(arc_path: Path, info: dict, label: str) -> bool:
     min_bytes = info.get("min_bytes")
     if min_bytes and size < min_bytes:
         print_warning(
-            f"{label}: download looks truncated/invalid "
-            f"({size} B < expected ≥ {min_bytes} B) — refusing to install."
+            f"{label}: {t('download looks truncated/invalid')} "
+            f"({size} B < {t('expected')} ≥ {min_bytes} B) — {t('refusing to install.')}"
         )
         return False
 
@@ -347,8 +347,7 @@ def _verify_archive(arc_path: Path, info: dict, label: str) -> bool:
         got = h.hexdigest()
         if got.lower() != expected.lower():
             print_warning(
-                f"{label}: checksum MISMATCH — refusing to install a possibly "
-                f"tampered binary.\n    expected {expected}\n    got      {got}"
+                f"{label}: {t('checksum MISMATCH — refusing to install a possibly tampered binary.')}\n    {t('expected')} {expected}\n    {t('got')}      {got}"
             )
             return False
     return True
@@ -449,12 +448,12 @@ def _auto_install_managed(os_name: str) -> None:
         info = sources[src_key]
         if _have_managed(bins):
             continue
-        print_info(f"  Installing {label} …")
+        print_info(f"  {t('Installing')} {label} …")
         ok = _download_and_install_binary(src_key, info)
         if ok:
             print_success(f"  ✓ {label}")
         else:
-            print_warning(f"  ✗ {label} (download failed)")
+            print_warning(f"  ✗ {label} ({t('download failed')})")
 
 
 # ─── Version helper for cache invalidation ────────────────────────────
@@ -502,10 +501,10 @@ def _android_install_pkgs(pkgs: list) -> bool:
         is_root = getattr(os, "geteuid", lambda: 0)() == 0
         cmd = base if is_root else (["sudo", *base] if shutil.which("sudo") else base)
     else:
-        print_warning("No package manager found (pkg/apt). Install ffmpeg/aria2 manually.")
+        print_warning(t("No package manager found (pkg/apt). Install ffmpeg/aria2 manually."))
         return False
     try:
-        print_info(f"  Installing: {', '.join(pkgs)} …")
+        print_info(f"  {t('Installing:')} {', '.join(pkgs)} …")
         subprocess.run(cmd, check=False)
         return True
     except Exception:
@@ -623,17 +622,17 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
         todo = missing_tools()
         if todo:
             from . import progress as _progress
-            with _progress.LoadingScreen(status="Installing dependencies…") as _ls:
+            with _progress.LoadingScreen(status=t("Installing dependencies…")) as _ls:
                 total = len(todo)
                 for i, (label, pkg_id, bins) in enumerate(todo):
                     # Target the NEXT milestone so the bar keeps CLIMBING
                     # smoothly toward it while this tool installs (winget gives
                     # no real %), instead of sitting then jumping.
-                    _ls.status(f"Installing {label}… ({i + 1}/{total})",
+                    _ls.status(f"{t('Installing')} {label}… ({i + 1}/{total})",
                                frac=(i + 1) / total)
                     if not _have(bins):
                         _winget_install(pkg_id)
-                _ls.status("Finishing up…", frac=1.0)
+                _ls.status(t("Finishing up…"), frac=1.0)
                 time.sleep(0.5)
 
     if runtime_ready():
@@ -675,7 +674,7 @@ def _download(url: str, dest: Path) -> bool:
             shutil.copyfileobj(r, f)
         return True
     except Exception as e:
-        print_warning(f"Could not download {url} ({type(e).__name__}: {e})")
+        print_warning(f"{t('Could not download')} {url} ({type(e).__name__}: {e})")
         return False
 
 
@@ -743,7 +742,7 @@ def _download_verified(url: str, dest: Path, label: str = None) -> bool:
         os.replace(part, dest)
         return True
     except Exception as e:
-        print_warning(f"Could not download {url} ({type(e).__name__}: {e})")
+        print_warning(f"{t('Could not download')} {url} ({type(e).__name__}: {e})")
         return False
 
 
@@ -860,7 +859,7 @@ def _linux_install_missing(missing_ess: list) -> bool:
         return False
     try:
         ans = input(
-            f"Install missing tools ({', '.join(pkgs)}) now via "
+            f"{t('Install missing tools')} ({', '.join(pkgs)}) {t('now via')} "
             f"{chosen[0]}? [Y/n] "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -868,11 +867,11 @@ def _linux_install_missing(missing_ess: list) -> bool:
     if ans in ("n", "no"):
         return False
 
-    print_info(f"Installing {', '.join(pkgs)} (sudo may ask your password)…")
+    print_info(f"{t('Installing')} {', '.join(pkgs)} ({t('sudo may ask your password')})…")
     try:
         return subprocess.run(chosen[1]).returncode == 0
     except Exception as e:
-        print_warning(f"Auto-install failed: {e}")
+        print_warning(f"{t('Auto-install failed:')} {e}")
         return False
 
 
@@ -891,7 +890,7 @@ def _show_linux_commands(missing_ess: list[str]):
     pm_found = False
     for binname, cmd_str in candidates:
         if shutil.which(binname):
-            print_info(f"Install via {binname}:")
+            print_info(f"{t('Install via')} {binname}:")
             print_info(f"  {cmd_str}")
             pm_found = True
             break
@@ -934,33 +933,33 @@ def install_media_player(name: str) -> bool:
 
     if not cmd:
         print_warning(
-            f"No package manager found to install {name}. Install it manually, "
-            "then try again."
+            f"{t('No package manager found to install')} {name}. "
+            + t("Install it manually, then try again.")
         )
         return False
 
     try:
-        ans = input(f"Install {name} now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
+        ans = input(f"{t('Install')} {name} {t('now?')} ({' '.join(cmd)}) [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return False
     if ans in ("n", "no"):
         return False
 
-    print_info(f"Installing {name}…")
+    print_info(f"{t('Installing')} {name}…")
     try:
         subprocess.run(cmd, check=False)
     except Exception as e:
-        print_warning(f"{name} install failed ({type(e).__name__}: {e})")
+        print_warning(f"{name} {t('install failed')} ({type(e).__name__}: {e})")
         return False
 
     # Windows winget often needs a fresh shell for PATH ; mpv.net is mpvnet.exe.
     ok = bool(shutil.which(name) or (name == "mpv" and shutil.which("mpvnet")))
     if ok:
-        print_success(f"  ✓ {name} installed")
+        print_success(f"  ✓ {name} {t('installed')}")
     else:
         print_warning(
-            f"  ! {name} installed but not yet on PATH — open a NEW terminal "
-            "and relaunch freeflix."
+            f"  ! {name} "
+            + t("installed but not yet on PATH — open a NEW terminal and relaunch freeflix.")
         )
     return ok
 
@@ -991,14 +990,13 @@ def install_chafa() -> bool:
 
     if not cmd:
         print_warning(
-            "Could not find a package manager for chafa. Install it manually "
-            "to enable anime posters (https://hpjansson.org/chafa/)."
+            f"{t('Could not find a package manager for chafa. Install it manually to enable anime posters')} (https://hpjansson.org/chafa/)."
         )
         return False
 
     print_info(t("chafa draws anime cover art inside the terminal (optional)."))
     try:
-        ans = input(f"Install chafa now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
+        ans = input(f"{t('Install chafa now?')} ({' '.join(cmd)}) [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return False
     if ans in ("n", "no"):
@@ -1007,13 +1005,13 @@ def install_chafa() -> bool:
     try:
         subprocess.run(cmd, check=False)
     except Exception as e:
-        print_warning(f"chafa install failed ({type(e).__name__}: {e})")
+        print_warning(f"chafa {t('install failed')} ({type(e).__name__}: {e})")
         return False
 
     if shutil.which("chafa"):
-        print_success("  ✓ chafa installed — anime posters enabled")
+        print_success(f"  ✓ chafa {t('installed — anime posters enabled')}")
         return True
-    print_warning("  ! chafa still not found — posters will stay off for now")
+    print_warning(f"  ! chafa {t('still not found — posters will stay off for now')}")
     return False
 
 
@@ -1146,8 +1144,8 @@ def ensure_nerd_terminal_font() -> None:
                 tracker.data["wt_nerd_font_set"] = True
                 tracker._save_data()
                 print_info(
-                    "Windows Terminal font set to the Nerd Font — reopen the "
-                    "terminal to see the icons."
+                    t("Windows Terminal font set to the Nerd Font — reopen the "
+                    "terminal to see the icons.")
                 )
     except Exception:
         pass
@@ -1159,16 +1157,16 @@ def install_nerd_font() -> bool:
     Interactive (Y/n). Returns True if font ends up available.
     """
     if detect_nerd_font():
-        print_success(f"{NERD_FONT_NAME} already installed")
+        print_success(f"{NERD_FONT_NAME} {t('already installed')}")
         # Already installed, but the terminal may still not USE it (older
         # installs registered the font without setting Windows Terminal's font).
         if detect_os() == "windows":
             if _set_windows_terminal_font(NERD_FONT_NAME):
-                print_success("  ✓ Windows Terminal font set to the Nerd Font")
+                print_success(f"  ✓ {t('Windows Terminal font set to the Nerd Font')}")
                 print_warning(t("Close ALL Windows Terminal windows and reopen one."))
             else:
                 print_info(
-                    f"Set your terminal font to '{NERD_FONT_NAME}' manually."
+                    f"{t('Set your terminal font to')} '{NERD_FONT_NAME}' {t('manually.')}"
                 )
         return True
 
@@ -1197,7 +1195,7 @@ def install_nerd_font() -> bool:
             shutil.rmtree(tmp, ignore_errors=True)
             os.unlink(zip_path)
         except Exception as e:
-            print_warning(f"Nerd Font install failed: {e}")
+            print_warning(f"{t('Nerd Font install failed:')} {e}")
             shutil.rmtree(tmp, ignore_errors=True)
             return False
 
@@ -1210,7 +1208,7 @@ def install_nerd_font() -> bool:
         try:
             subprocess.run(cmd, check=False, timeout=120)
         except Exception as e:
-            print_warning(f"Nerd Font install via brew failed: {e}")
+            print_warning(f"{t('Nerd Font install via brew failed:')} {e}")
             return False
 
     elif os_name == "windows":
@@ -1244,33 +1242,31 @@ def install_nerd_font() -> bool:
             shutil.rmtree(extract_dir, ignore_errors=True)
             os.unlink(zip_path)
         except Exception as e:
-            print_warning(f"Nerd Font install failed: {e}")
+            print_warning(f"{t('Nerd Font install failed:')} {e}")
             return False
 
     else:
-        print_warning(f"Unsupported OS ({os_name}) — install Nerd Font manually")
+        print_warning(f"{t('Unsupported OS')} ({os_name}) — {t('install Nerd Font manually')}")
         return False
 
     if detect_nerd_font():
-        print_success(f"  ✓ {NERD_FONT_NAME} installed")
+        print_success(f"  ✓ {NERD_FONT_NAME} {t('installed')}")
         if os_name == "windows":
             # Installing the font isn't enough — Windows Terminal must USE it.
             if _set_windows_terminal_font(NERD_FONT_NAME):
-                print_success("  ✓ Windows Terminal font set to the Nerd Font")
+                print_success(f"  ✓ {t('Windows Terminal font set to the Nerd Font')}")
                 print_warning(
-                    "Close ALL Windows Terminal windows and reopen one for the "
-                    "new font to take effect, then the icons will render."
+                    t("Close ALL Windows Terminal windows and reopen one for the "
+                    "new font to take effect, then the icons will render.")
                 )
             else:
                 print_info(
-                    f"Set your terminal font to '{NERD_FONT_NAME}' manually "
-                    "(Windows Terminal > Settings > Defaults > Appearance > "
-                    "Font face), then reopen the terminal."
+                    f"{t('Set your terminal font to')} '{NERD_FONT_NAME}' {t('manually (Windows Terminal > Settings > Defaults > Appearance > Font face), then reopen the terminal.')}"
                 )
         else:
-            print_info(f"Select '{NERD_FONT_NAME}' in your terminal settings")
+            print_info(f"{t('Select')} '{NERD_FONT_NAME}' {t('in your terminal settings')}")
         return True
-    print_warning(f"  ! {NERD_FONT_NAME} still not found — install manually")
+    print_warning(f"  ! {NERD_FONT_NAME} {t('still not found — install manually')}")
     return False
 
 
@@ -1314,7 +1310,7 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
     # Warn if ~/.local/bin isn't in PATH
     if str(bindir) not in os.environ.get("PATH", "").split(":"):
         print_warning(
-            f"  ! {bindir} is not in your PATH — add this to ~/.bashrc / ~/.zshrc :\n"
+            f"  ! {bindir} {t('is not in your PATH — add this to ~/.bashrc / ~/.zshrc :')}\n"
             f'      export PATH="$HOME/.local/bin:$PATH"'
         )
     return True
@@ -1377,7 +1373,7 @@ def _flaresolverr_make_persistent(runtime: str):
             subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
             subprocess.run(["systemctl", "--user", "enable", "--now",
                             "flaresolverr.service"], capture_output=True, timeout=30)
-            print_success("  ✓ FlareSolverr set to auto-start on boot")
+            print_success(f"  ✓ {t('FlareSolverr set to auto-start on boot')}")
     except Exception:
         pass
 
@@ -1410,7 +1406,7 @@ def install_flaresolverr() -> bool:
             if cmd:
                 print_info(t("No Docker/Podman found. Podman is the easiest (rootless)."))
                 try:
-                    ans = input(f"Install Podman now? ({' '.join(cmd)}) [Y/n] ").strip().lower()
+                    ans = input(f"{t('Install Podman now?')} ({' '.join(cmd)}) [Y/n] ").strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     return False
                 if ans not in ("n", "no"):
@@ -1418,16 +1414,16 @@ def install_flaresolverr() -> bool:
                     runtime = _container_runtime()
         elif os_name == "macos":
             print_warning(
-                "Install a container runtime to enable FlareSolverr, e.g.:\n"
+                f"{t('Install a container runtime to enable FlareSolverr, e.g.:')}\n"
                 "  brew install podman && podman machine init && podman machine start\n"
-                "  (or Docker Desktop), then re-run `freeflix --setup`."
+                f"  {t('(or Docker Desktop), then re-run `freeflix --setup`.')}"
             )
             return False
         elif os_name == "windows":
             print_warning(
-                "Install Docker Desktop to enable FlareSolverr:\n"
+                f"{t('Install Docker Desktop to enable FlareSolverr:')}\n"
                 "  winget install Docker.DockerDesktop\n"
-                "  then re-run `freeflix --setup`."
+                f"  {t('then re-run `freeflix --setup`.')}"
             )
             return False
 
@@ -1436,7 +1432,7 @@ def install_flaresolverr() -> bool:
         return False
 
     try:
-        ans = input(f"Set up FlareSolverr via {runtime} now? [Y/n] ").strip().lower()
+        ans = input(f"{t('Set up FlareSolverr via')} {runtime} {t('now?')} [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return False
     if ans in ("n", "no"):
@@ -1445,8 +1441,10 @@ def install_flaresolverr() -> bool:
     # Reuse an existing container, else pull & create it.
     subprocess.run([runtime, "start", "flaresolverr"], capture_output=True)
     if not _flaresolverr_running():
-        print_info(f"Pulling & starting FlareSolverr via {runtime} (first run "
-                   "downloads ~Chromium)…")
+        print_info(
+            f"{t('Pulling & starting FlareSolverr via')} {runtime} "
+            + f"({t('first run downloads ~Chromium')})…"
+        )
         try:
             subprocess.run(
                 [runtime, "run", "-d", "--name", "flaresolverr",
@@ -1454,7 +1452,7 @@ def install_flaresolverr() -> bool:
                 check=False,
             )
         except Exception as e:
-            print_warning(f"Could not start FlareSolverr ({type(e).__name__}: {e})")
+            print_warning(f"{t('Could not start FlareSolverr')} ({type(e).__name__}: {e})")
             return False
 
     # Make it survive reboots (Linux + podman).
@@ -1485,9 +1483,9 @@ def install_windows_players() -> bool:
         return True
     if not shutil.which("winget"):
         print_warning(
-            "winget not found. Install 'App Installer' from the Microsoft "
+            t("winget not found. Install 'App Installer' from the Microsoft "
             "Store, or install mpv.net and VLC manually, so FreeFlix can "
-            "launch them."
+            "launch them.")
         )
         return False
 
@@ -1497,9 +1495,9 @@ def install_windows_players() -> bool:
     ]
     for pkg_id, label, bins in wanted:
         if any(shutil.which(b) for b in bins):
-            print_success(f"  ✓ {label} already installed")
+            print_success(f"  ✓ {label} {t('already installed')}")
             continue
-        print_info(f"Installing {label} via winget…")
+        print_info(f"{t('Installing')} {label} {t('via winget…')}")
         try:
             subprocess.run(
                 ["winget", "install", "--silent",
@@ -1508,11 +1506,11 @@ def install_windows_players() -> bool:
                 check=False,
             )
         except Exception as e:
-            print_warning(f"  ! {label} install failed ({type(e).__name__}: {e})")
+            print_warning(f"  ! {label} {t('install failed')} ({type(e).__name__}: {e})")
 
     print_info(
-        "If mpv/VLC aren't found immediately, open a NEW terminal so the "
-        "PATH refreshes, then run `freeflix` again."
+        t("If mpv/VLC aren't found immediately, open a NEW terminal so the "
+        "PATH refreshes, then run `freeflix` again.")
     )
     return True
 
@@ -1529,34 +1527,34 @@ def print_platform_guidance_windows(gpus: Dict[str, bool]):
     print_info("─" * 60)
     print_info(t("Icons not showing as crisp glyphs on Windows?"))
     print_info("─" * 60)
-    print_info("  1. Use 'Windows Terminal' (Store / winget), NOT the old")
-    print_info("     cmd.exe window — legacy console can't draw the glyphs.")
-    print_info("  2. scripts/install.ps1 installs 'CaskaydiaCove Nerd Font'.")
-    print_info("     In Windows Terminal: Settings > Defaults > Appearance >")
-    print_info("     Font face -> CaskaydiaCove Nerd Font.")
-    print_info("  3. Then in FreeFlix: Settings > Icon Style -> nerd.")
-    print_info("     (Emoji icons are the default and work out of the box.)")
+    print_info(t("  1. Use 'Windows Terminal' (Store / winget), NOT the old"))
+    print_info(t("     cmd.exe window — legacy console can't draw the glyphs."))
+    print_info(f"  2. scripts/install.ps1 {t('installs')} 'CaskaydiaCove Nerd Font'.")
+    print_info(f"     {t('In Windows Terminal: Settings > Defaults > Appearance >')}")
+    print_info(f"     {t('Font face -> CaskaydiaCove Nerd Font.')}")
+    print_info(f"  3. {t('Then in FreeFlix: Settings > Icon Style -> nerd.')}")
+    print_info(f"     {t('(Emoji icons are the default and work out of the box.)')}")
     print_info("")
 
     if not (gpus.get("nvidia") or gpus.get("amd_discrete")):
         return
     gpu = "Nvidia" if gpus.get("nvidia") else "AMD"
     print_info("─" * 60)
-    print_info(f"Windows GPU offload : {gpu} dGPU detected")
+    print_info(f"{t('Windows GPU offload :')} {gpu} {t('dGPU detected')}")
     print_info("─" * 60)
     print_info(t("Windows handles GPU selection natively — no PRIME wrappers"))
     print_info(t("needed. To force mpv to use the dGPU, do this ONCE :"))
     print_info("")
-    print_info("  Option A — Windows Graphics Settings (easiest)")
-    print_info("    Settings → System → Display → Graphics")
-    print_info("    Browse → C:\\Program Files\\mpv\\mpv.exe (or mpv.net)")
-    print_info("    Options → High performance → Save")
+    print_info(f"  {t('Option A — Windows Graphics Settings (easiest)')}")
+    print_info(f"    {t('Settings → System → Display → Graphics')}")
+    print_info(f"    {t('Browse')} → C:\\Program Files\\mpv\\mpv.exe (or mpv.net)")
+    print_info(f"    {t('Options → High performance → Save')}")
     print_info("")
     if gpus.get("nvidia"):
-        print_info("  Option B — Nvidia Control Panel (per-app profile)")
-        print_info("    Nvidia Control Panel → Manage 3D settings")
-        print_info("    Program Settings tab → Add → pick mpv.exe")
-        print_info("    'Preferred graphics processor' → High-performance Nvidia")
+        print_info(f"  {t('Option B — Nvidia Control Panel (per-app profile)')}")
+        print_info(f"    {t('Nvidia Control Panel → Manage 3D settings')}")
+        print_info(f"    {t('Program Settings tab → Add → pick mpv.exe')}")
+        print_info(f"    '{t('Preferred graphics processor')}' → High-performance Nvidia")
         print_info("")
 
 
@@ -1580,14 +1578,14 @@ def _run_android_setup() -> bool:
     from the device package manager and guides the mpv-android + storage setup.
     No mpv.conf / Anime4K / PRIME (playback is delegated to mpv-android)."""
     print_info("─" * 60)
-    print_info("FreeFlix CLI — Android setup (Termux / proot)")
+    print_info(t("FreeFlix CLI — Android setup (Termux / proot)"))
     print_info("─" * 60)
     print_info(t("This will :"))
     print_info(f"  1. {t('Install yt-dlp + ffmpeg + aria2 + chafa (package manager)')}")
     print_info(f"  2. {t('Guide you to install mpv-android for playback')}")
     print_info("")
     try:
-        ans = input("Proceed? [Y/n] ").strip().lower()
+        ans = input(f"{t('Proceed?')} [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print_info(t("Aborted."))
         return False
@@ -1598,7 +1596,7 @@ def _run_android_setup() -> bool:
 
     # yt-dlp is REQUIRED to download HLS streams (aria2c only handles direct
     # mp4). It was missing from the list before — every HLS download failed.
-    print_info("\n• Installing yt-dlp + ffmpeg + aria2 + chafa…")
+    print_info(f"\n• {t('Installing yt-dlp + ffmpeg + aria2 + chafa…')}")
     _android_install_pkgs(["yt-dlp", "ffmpeg", "aria2", "chafa"])
 
     print_info("")
@@ -1623,7 +1621,7 @@ def _run_android_setup() -> bool:
     tracker.data["setup_done"] = True
     tracker.data.pop("setup_declined", None)
     tracker._save_data()
-    print_success("\n✓ Android setup complete. Launching FreeFlix…\n")
+    print_success(f"\n✓ {t('Android setup complete. Launching FreeFlix…')}\n")
     return True
 
 
@@ -1642,22 +1640,22 @@ def run_setup(force: bool = False) -> bool:
     gpus = detect_gpus()
 
     print_info("─" * 60)
-    print_info(f"FreeFlix CLI — first-run setup ({os_name})")
+    print_info(f"FreeFlix CLI — {t('first-run setup')} ({os_name})")
     print_info("─" * 60)
-    print_info(f"GPUs detected : {[k for k,v in gpus.items() if v] or ['none']}")
+    print_info(f"{t('GPUs detected :')} {[k for k,v in gpus.items() if v] or ['none']}")
     print_info("")
     print_info(t("This will :"))
-    print_info("  1. Install tuned mpv.conf + input.conf + position-resume hook")
-    print_info("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)")
-    print_info("  3. Install the Nerd Font + chafa (crisp icons & posters)")
-    print_info("  4. Offer to set up FlareSolverr (auto-solve Cloudflare, optional)")
+    print_info(t("  1. Install tuned mpv.conf + input.conf + position-resume hook"))
+    print_info(t("  2. Download Anime4K shaders (Mode A_S + A_VL, ~290 KB)"))
+    print_info(t("  3. Install the Nerd Font + chafa (crisp icons & posters)"))
+    print_info(t("  4. Offer to set up FlareSolverr (auto-solve Cloudflare, optional)"))
     if os_name == "linux" and (gpus["nvidia"] or gpus["amd_discrete"]):
         gpu = "Nvidia" if gpus["nvidia"] else "AMD"
-        print_info(f"  5. Install a PRIME wrapper so standalone mpv uses the {gpu} dGPU")
+        print_info(f"  5. {t('Install a PRIME wrapper so standalone mpv uses the')} {gpu} {t('dGPU')}")
     print_info("")
 
     try:
-        ans = input("Proceed? [Y/n] ").strip().lower()
+        ans = input(f"{t('Proceed?')} [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print_info(t("Aborted."))
         return False
@@ -1667,24 +1665,24 @@ def run_setup(force: bool = False) -> bool:
         tracker._save_data()
         return False
 
-    print_info("\n• Installing mpv configuration…")
+    print_info(f"\n• {t('Installing mpv configuration…')}")
     install_config_files()
-    print_info("\n• Downloading Anime4K shaders…")
+    print_info(f"\n• {t('Downloading Anime4K shaders…')}")
     install_anime4k_shaders()
-    print_info("\n• Anime posters (chafa)…")
+    print_info(f"\n• {t('Anime posters (chafa)…')}")
     install_chafa()
     # Nerd Font is a required dependency for crisp icons — install it on every
     # OS and make 'nerd' the default icon style once it's present.
-    print_info("\n• Installing Nerd Font (crisp icons)…")
+    print_info(f"\n• {t('Installing Nerd Font (crisp icons)…')}")
     if install_nerd_font():
         tracker.set_icon_style("nerd")
-    print_info("\n• Cloudflare auto-solver (FlareSolverr, optional)…")
+    print_info(f"\n• {t('Cloudflare auto-solver (FlareSolverr, optional)…')}")
     install_flaresolverr()
     if os_name == "linux":
-        print_info("\n• Installing PRIME wrapper…")
+        print_info(f"\n• {t('Installing PRIME wrapper…')}")
         install_prime_wrappers(gpus)
     elif os_name == "windows":
-        print_info("\n• Installing media players (mpv + VLC)…")
+        print_info(f"\n• {t('Installing media players (mpv + VLC)…')}")
         install_windows_players()
         print_platform_guidance_windows(gpus)
     elif os_name == "macos":
@@ -1694,7 +1692,7 @@ def run_setup(force: bool = False) -> bool:
     tracker.data.pop("setup_declined", None)
     tracker._save_data()
 
-    print_success("\n✓ Setup complete. Launching FreeFlix…\n")
+    print_success(f"\n✓ {t('Setup complete. Launching FreeFlix…')}\n")
     return True
 
 
@@ -1811,13 +1809,13 @@ def run_pending_migrations(current_version: str) -> None:
         if _ver_tuple(last) < _ver_tuple(ver) <= _ver_tuple(current_version)
     ]
     if pending:
-        print_info(f"Finalizing upgrade {last} → {current_version}…")
+        print_info(f"{t('Finalizing upgrade')} {last} → {current_version}…")
         for _ver, desc, action in pending:
-            print_info(f"  • {desc}")
+            print_info(f"  • {t(desc)}")
             try:
                 action()
             except Exception as e:
-                print_warning(f"    (skipped: {type(e).__name__})")
+                print_warning(f"    ({t('skipped:')} {type(e).__name__})")
 
     tracker.set_last_setup_version(current_version)
 

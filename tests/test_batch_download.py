@@ -112,13 +112,12 @@ class TestRealDownload:
     def setup_class(cls):
         cls.test_content = b"Hello FreeFlix test " * 1000   # ~19 KB
         cls.server = None
-        cls.port = 18999
+        cls.port = 18999  # overwritten below (ephemeral if taken)
         cls._start_server()
 
     @classmethod
     def _start_server(cls):
         import http.server
-        import socketserver
 
         class Handler(http.server.BaseHTTPRequestHandler):
             content = cls.test_content
@@ -133,7 +132,18 @@ class TestRealDownload:
             def log_message(self, fmt, *args):
                 pass  # suppress server logs
 
-        cls.server = socketserver.TCPServer(("127.0.0.1", cls.port), Handler)
+        # Fixed port 18999 when free, else an ephemeral one : something else
+        # on a dev machine may already hold it (then every run errors with
+        # EADDRINUSE and nothing about our code is actually broken).
+        for _port in (18999, 0):
+            try:
+                cls.server = http.server.HTTPServer(("127.0.0.1", _port), Handler)
+                break
+            except OSError:
+                cls.server = None
+        if cls.server is None:
+            raise RuntimeError("could not bind test HTTP server")
+        cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         time.sleep(0.2)
@@ -142,6 +152,7 @@ class TestRealDownload:
     def teardown_class(cls):
         if cls.server:
             cls.server.shutdown()
+            cls.server.server_close()
 
     def test_run_download_with_bar_sequential(self):
         """Single download via run_download_with_bar — expected to succeed."""
@@ -194,3 +205,14 @@ class TestRealDownload:
 
         # Should have no print_info calls during suppressed mode
         assert len(captured) == 0, f"Got unexpected prints: {captured}"
+
+
+def test_esccancel_ignores_bracketed_paste():
+    from freeflix_cli.progress import _EscCancel
+    esc = _EscCancel()
+    esc.active = True
+    # 3 bare Esc bytes inside a paste blob must NOT arm, let alone cancel.
+    blob = "\x1b[200~\x1b[0m\x1b[36m\x1b[31m\x1b[201~"
+    assert esc._clean(blob) == ""
+    assert esc._register_escs(0) is False
+    assert esc.armed is False

@@ -76,7 +76,13 @@ def test_series_seasons_and_cover(monkeypatch):
     s = coflix.get_series("https://coflix.esq/serie/game-of-thrones/")
     assert s.title == "Game of Thrones"
     assert "image.tmdb.org/t/p/w500/" in s.img
-    assert [sa.title for sa in s.seasons] == ["Saison 1", "Saison 2"]
+    # Season labels now carry their episode counts (no extra fetch).
+    assert [t.split("·")[0].strip() for t in [sa.title for sa in s.seasons]] == [
+        "Saison 1",
+        "Saison 2",
+    ]
+    assert s.seasons[0].title.startswith("Saison 1 · 2")
+    assert s.seasons[1].title.startswith("Saison 2 · 1")
     assert s.seasons[0].url.endswith("#panel=0")
 
 

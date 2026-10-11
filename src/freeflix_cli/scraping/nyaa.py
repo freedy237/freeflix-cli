@@ -7,6 +7,7 @@ for the top results of a search query.
 """
 
 from typing import List, Dict
+import re
 from urllib.parse import quote_plus, urljoin
 from curl_cffi import requests as cffi_requests
 from ..net_config import shared_session
@@ -98,6 +99,15 @@ def search(query: str, max_results: int = 25) -> List[Dict]:
             continue
 
         size = tds[col_idx["size"]].get_text(strip=True)
+        # The header row uses colspans, so the header-text mapping can land
+        # one column off (size ← date). Detect by content instead : a real
+        # size looks like "9.7 GiB", a date like "2025-03-26 06:54".
+        if not re.match(r"^[\d.]+\s*(GiB|MiB|KiB|B)$", size):
+            for _td in tds[2:6]:
+                _txt = _td.get_text(strip=True)
+                if re.match(r"^[\d.]+\s*(GiB|MiB|KiB|B)$", _txt):
+                    size = _txt
+                    break
         seeders = tds[col_idx["seeders"]].get_text(strip=True)
         leechers = tds[col_idx["leechers"]].get_text(strip=True)
 

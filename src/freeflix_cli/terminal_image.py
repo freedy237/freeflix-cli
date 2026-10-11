@@ -60,10 +60,11 @@ def chafa_available() -> bool:
 def reset_cache():
     """Forget cached probes (call after installing chafa or toggling the
     terminal's Sixel setting) so protocol detection re-runs fresh."""
-    global _CHAFA_PATH, _CHAFA_VER, _SIXEL_OK
+    global _CHAFA_PATH, _CHAFA_VER, _SIXEL_OK, _PROBE_OK
     _CHAFA_PATH = None
     _CHAFA_VER = None
     _SIXEL_OK = None
+    _PROBE_OK = None
 
 
 _CHAFA_VER = None
@@ -84,6 +85,33 @@ def _chafa_version() -> tuple:
         except Exception:
             pass
     return _CHAFA_VER
+
+
+_PROBE_OK = None
+
+
+def _probe_args() -> list:
+    """`--probe off` when chafa supports it (probed once per session).
+
+    chafa probes the terminal (colors, size…) even in our renders, and the
+    late/fragmented replies used to land in our menu reads — each stray
+    ``\\x1b`` decoding as an Esc press (phantom backs straight through the
+    double-Esc gate). Disabling probing removes the replies at the source ;
+    geometry still comes from ioctl, output is unchanged.
+    """
+    global _PROBE_OK
+    if _PROBE_OK is None:
+        _PROBE_OK = False
+        try:
+            if not chafa_available():
+                return []
+            r = subprocess.run(
+                [_CHAFA_PATH, "--probe", "off", "--version"],
+                capture_output=True, timeout=5)
+            _PROBE_OK = (r.returncode == 0)
+        except Exception:
+            pass
+    return ["--probe", "off"] if _PROBE_OK else []
 
 
 def _int(s) -> int:
@@ -275,10 +303,11 @@ def _color_args() -> list:
     return []
 
 
-def _quality_args() -> list:
+def _quality_args(work: int = 9) -> list:
     """Max chafa work factor : better symbol/color matching → noticeably sharper
-    output (posters are small, so the extra CPU is negligible)."""
-    return ["--work", "9"]
+    output (posters are small, so the extra CPU is negligible for ONE render,
+    but background preview pools pass a lower level to avoid jank)."""
+    return ["--work", str(work)]
 
 
 def _poster_size():
@@ -461,6 +490,7 @@ def render_url(url: str, width: int = None, height: int = None) -> bool:
 
     try:
         cmd = [_CHAFA_PATH, "--size", f"{width}x{height}"]
+        cmd += _probe_args()        # no terminal queries → no late replies
         cmd += _color_args()      # crisp truecolor when the terminal supports it
         cmd += _quality_args()    # max work factor → sharper
         # Prefer a real graphics protocol (kitty/iterm = photo quality) when we
@@ -470,7 +500,13 @@ def render_url(url: str, width: int = None, height: int = None) -> bool:
         if fmt:
             cmd += ["--format", fmt]
         cmd.append(path)
-        subprocess.run(cmd, check=False)
+        # stdin=CLOSED : chafa queries the terminal (colors, cell geometry)
+        # when it can read replies — sharing OUR stdin meant its replies
+        # landed in our menu reads, fragmented, each \x1b alone reading as
+        # an Esc press (phantom backs, even paired through double-Esc).
+        # With stdin closed there are no replies at all ; geometry still
+        # comes from ioctl, output is unchanged.
+        subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
         return True
     except Exception:
         return False
@@ -504,10 +540,12 @@ def render_to_text(url: str, cols: int = 30, rows: int = 16):
                 # UnicodeDecodeError, so posters silently never rendered during
                 # search on Windows (only the direct full-screen render worked).
                 out = subprocess.run(
-                    [_CHAFA_PATH, "--format", "symbols", *_color_args(),
-                     *_quality_args(), "--size", f"{cols}x{rows}", path],
+                    [_CHAFA_PATH, "--format", "symbols", *_probe_args(),
+                     *_color_args(),
+                     *_quality_args(5), "--size", f"{cols}x{rows}", path],
                     capture_output=True, text=True, timeout=8,
                     encoding="utf-8", errors="replace",
+                    stdin=subprocess.DEVNULL,  # never let chafa read our tty
                 ).stdout
                 if out:
                     result = Text.from_ansi(out)
@@ -559,8 +597,9 @@ def render_sixel_positioned(url: str, cols: int, rows: int,
     try:
         os.write(out_fd, b"\x1b7" + ("\x1b[%d;%dH" % (row, col)).encode())
         subprocess.run(
-            [_CHAFA_PATH, "--format", "sixels", *_color_args(), *_quality_args(),
-             "--size", f"{cols}x{rows}", path],
+            [_CHAFA_PATH, "--format", "sixels", *_probe_args(),
+             *_color_args(), *_quality_args(),
+              "--size", f"{cols}x{rows}", path],
             stdin=subprocess.DEVNULL, stdout=out_fd, stderr=subprocess.DEVNULL,
             timeout=8,
         )

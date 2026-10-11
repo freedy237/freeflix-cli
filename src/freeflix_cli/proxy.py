@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from curl_cffi import requests, CurlOpt
 from .net_config import DNS_OPTIONS
+from .i18n import t
 import m3u8
 
 # Global Configuration
@@ -881,10 +882,10 @@ def stop_proxy_server():
 
 if __name__ == "__main__":
     my_port = start_proxy_server(0)
-    print(f"Proxy on http://{PROXY_HOST}:{my_port} — Ctrl+C to quit.")
+    print(f"{t('Proxy on')} http://{PROXY_HOST}:{my_port} — {t('Ctrl+C to quit.')}")
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("Stopping.")
+        print(t("Stopping."))
         stop_proxy_server()

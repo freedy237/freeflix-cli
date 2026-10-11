@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from platformdirs import user_data_dir
 from urllib.parse import urlparse
+from .i18n import t
 
 
 class ProgressTracker:
@@ -50,7 +51,7 @@ class ProgressTracker:
                     pass
                 raise
         except OSError as e:
-            print(f"Warning: Could not save progress: {e}")
+            print(f"{t('Warning: Could not save progress:')} {e}")
 
     def _to_relative(self, url: str) -> str:
         """Convert an absolute URL to a relative path."""

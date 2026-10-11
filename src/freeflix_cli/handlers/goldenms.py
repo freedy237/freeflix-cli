@@ -46,7 +46,7 @@ def search_cinemeta(title: str, is_movie: bool):
     try:
         return _cinemeta_json(url, ttl=1800).get("metas", [])
     except Exception as e:
-        print_warning(f"Error fetching Cinemeta search data: {e}")
+        print_warning(f"{t('Error fetching Cinemeta search data:')} {e}")
         return []
 
 
@@ -57,7 +57,7 @@ def get_cinemeta_details(imdb_id: str, is_movie: bool):
     try:
         return _cinemeta_json(url, ttl=86400).get("meta", {})
     except Exception as e:
-        print_warning(f"Error fetching Cinemeta details: {e}")
+        print_warning(f"{t('Error fetching Cinemeta details:')} {e}")
         return {}
 
 
@@ -94,7 +94,7 @@ def handle_goldenms():
         return
     tracker.add_search_query(title)
 
-    print_info(f"Searching Cinemeta for '{title}'...")
+    print_info(f"{t('Searching Cinemeta for')} '{title}'...")
     metas = search_cinemeta(title, is_movie)
 
     if not metas:
@@ -179,8 +179,9 @@ def handle_goldenms():
             sorted_seasons = sorted(season_map.keys())
 
             season_options = (
-                [f"Season {s}" for s in sorted_seasons]
-                + ["Manual Input", t("← Back")]
+                [f"{t('Season')} {s} · {len(season_map[s])} {t('ep')}"
+                 for s in sorted_seasons]
+                + [t("Manual Input"), t("← Back")]
             )
             s_idx = select_from_list(
                 season_options, f"{icon('tv')} {t('Select Season:')}"
@@ -253,7 +254,7 @@ def _flow_goldenms_stream(
 
     if len(valid_results) < len(results):
         skipped = len(results) - len(valid_results)
-        print_info(f"[dim]Skipped {skipped} unsupported stream(s).[/dim]")
+        print_info(f"[dim]{t('Skipped')} {skipped} {t('unsupported stream(s).')}[/dim]")
 
     choice_idx = select_from_list(
         [f"{r['source']} - {r['quality']} ({r['type']})" for r in valid_results]
@@ -283,7 +284,7 @@ def _flow_goldenms_stream(
             sub_season = season if not is_movie else None
             sub_ep = episode if not is_movie else None
 
-            print_info(f"Searching for {lang_name} subtitles...")
+            print_info(f"{t('Searching for')} {lang_name} {t('subtitles...')}")
             subs = subtitle_extractor.search(
                 imdb_id=current_imdb_id,
                 season=sub_season,
@@ -298,9 +299,9 @@ def _flow_goldenms_stream(
                 sub_choice = select_from_list(sub_opts, t("Select Subtitle:"))
                 if sub_choice < len(subs):
                     subtitle_url = subs[sub_choice]["url"]
-                    print_info(f"Selected subtitle: {subtitle_url}")
+                    print_info(f"{t('Selected subtitle:')} {subtitle_url}")
             else:
-                print_warning(f"No {lang_name} subtitles found.")
+                print_warning(f"{t('No')} {lang_name} {t('subtitles found.')}")
                 pause()
 
     final_url = selection["url"]
@@ -315,26 +316,26 @@ def _flow_goldenms_stream(
 
     # Player Support
     if player_scraper.is_supported(final_url) and not is_direct:
-        print_info(f"Resolving player link: [cyan]{final_url}[/cyan]")
+        print_info(f"{t('Resolving player link:')} [cyan]{final_url}[/cyan]")
         try:
             resolved_url = player_scraper.get_hls_link(final_url)
             if resolved_url:
                 final_url = resolved_url
-                print_info(f"Resolved to: [cyan]{final_url}[/cyan]")
+                print_info(f"{t('Resolved to:')} [cyan]{final_url}[/cyan]")
             else:
                 print_warning(t("Failed to extract raw stream from player."))
                 if select_from_list([t("Try to play anyway"), t("Cancel")], t("Action:")) == 1:
                     return
         except Exception as e:
-            print_warning(f"Error resolving player: {e}")
+            print_warning(f"{t('Error resolving player:')} {e}")
 
     # Display Title
     if is_movie:
-        display_title = f"{title} (Movie)"
+        display_title = f"{title} ({t('Movie')})"
     else:
         display_title = f"{title} - S{season:02d}E{episode:02d}"
 
-    print_info(f"Starting playback: [cyan]{display_title}[/cyan]")
+    print_info(f"{t('Starting playback:')} [cyan]{display_title}[/cyan]")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -385,7 +386,7 @@ def _flow_goldenms_stream(
         if not is_movie:
             if (
                 select_from_list(
-                    [t("Yes"), t("No")], f"{t('Play Next Episode')} (Episode {episode + 1}) ?"
+                    [t("Yes"), t("No")], f"{t('Play Next Episode')} ({t('Episode')} {episode + 1}) ?"
                 )
                 == 0
             ):
@@ -428,17 +429,17 @@ def resume_goldenms(data):
             imdb_id = match.group(1)
 
     if is_movie:
-        display_title = f"{title} (Movie)"
-        options = ["▶ Watch again", "← Cancel"]
+        display_title = f"{title} ({t('Movie')})"
+        options = [f"▶ {t('Watch again')}", t("← Cancel")]
     else:
         display_title = f"{title} - S{season:02d}E{episode:02d}"
         options = [
-            f"▶ Continue (Episode {episode + 1})",
-            f"🔁 Watch again (Episode {episode})",
-            "← Cancel",
+            f"▶ {t('Continue')} ({t('Episode')} {episode + 1})",
+            f"🔁 {t('Watch again')} ({t('Episode')} {episode})",
+            t("← Cancel"),
         ]
 
-    print_info(f"Found progress: [cyan]{display_title}[/cyan]")
+    print_info(f"{t('Found progress:')} [cyan]{display_title}[/cyan]")
     choice_idx = select_from_list(options, t("What would you like to do?"))
 
     if choice_idx == len(options) - 1:

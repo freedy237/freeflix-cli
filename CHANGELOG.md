@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.12
+
+- **Tous les providers vérifiés et réparés** : Coflix (nouveau layout
+  `cfServers`, 0→7 lecteurs + comptes d'épisodes), sendvid (vrai flux
+  `<source>`, placeholder 5 s rejeté), vidlink (qualités 360→1080p + subs),
+  sibnet (Referer), nyaa (tailles), nouvelles clés `voe`/`lulustream`/`d0000d`,
+  `waaw.to` filtré (JS requis).
+- **Bilingue complet** : 669 clés FR, test-garde anti-régression qui échoue
+  sur toute chaîne UI non traduite.
+- **Fini les retours fantômes** : collage entre crochets (les collages
+  molette ne naviguent plus), chafa ne lit plus le tty et n'interroge plus
+  le terminal (`--probe off`), réponses du terminal avalées dans tous les
+  lecteurs de touches, drain allongé à 200 ms. Retour en un seul Échap,
+  Échap à l'accueil = quitter.
+- **Posters Windows** : plus de sixel aveugle, repli blocs + section POSTERS
+  dans `--doctor`.
+- **Visuel** : match surligné, position/scrollbar, vus estompés, pastilles
+  clavier couleur thème, sparkline 7j, tip du jour, durées, download stylé,
+  aide 2 colonnes, compteurs, échelle couleur résolutions, splash +1 s.
+- **Qualité sendvid affichée** (ffprobe 20 s, budget 26 s), doublons dédupliqués.
+
 ## 1.11.7
 
 - **Sendvid réparé (Anime-Sama)** : l'extracteur renvoyait le meta `og:video`

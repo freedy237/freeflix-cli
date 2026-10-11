@@ -1,6 +1,7 @@
 import json
 import re
 from curl_cffi import requests
+from .i18n import t
 
 
 def strip_json_comments(json_str: str) -> str:
@@ -46,7 +47,7 @@ def load_remote_jsonc(url: str, default: dict) -> dict:
             label = "/".join(short[-2:]) if len(short) >= 2 else url
         except Exception:
             label = url
-        print(f"  · offline-mode : remote {label} unavailable, using local defaults")
+        print(f"  · {t('offline-mode : remote')} {label} {t('unavailable, using local defaults')}")
         return default
 
 
@@ -69,5 +70,5 @@ def load_local_jsonc(file_path: str, default: dict = None) -> dict:
 
         return json.loads(clean_json)
     except Exception as e:
-        print(f"Warning: Failed to load local config from {file_path}: {e}")
+        print(f"{t('Warning: Failed to load local config from')} {file_path}: {e}")
         return default or {}

@@ -11,6 +11,7 @@ from .objects import (
 )
 from .utils import parse_html
 import base64
+import json
 import re
 import urllib.parse
 from ..net_config import DNS_OPTIONS
@@ -50,6 +51,8 @@ def _get(url, **kw):
 
 
 from .config import portals  # noqa: E402 (deliberate late import — order matters)
+
+from ..i18n import t  # noqa: E402 (late import like cloudflare — order matters)
 
 
 def get_website_url(portal=portals["coflix"]):
@@ -216,6 +219,38 @@ def get_players(players_url: str) -> list[Player]:
     return players
 
 
+def _cfservers_url(html: str) -> str:
+    """New Coflix player layout (no <iframe>) : ``var cfServers =
+    [{"nombre":…,"embed_url":"https:\\/\\/lecteurvideo.com\\/embed.php?id=…"}]``.
+    Return the first embed URL (the Lecteurvideo aggregator, parsed by
+    get_players), or "" — pure, testable."""
+    m = re.search(r"var\s+cfServers\s*=\s*(\[.*?\])\s*;", html or "", re.DOTALL)
+    if not m:
+        return ""
+    try:
+        data = json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(data, list):
+        return ""
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("embed_url"):
+            return str(entry["embed_url"])
+    return ""
+
+
+def _players_url_from_page(soup, html: str) -> str:
+    """Player aggregator URL from a Coflix movie/episode page : legacy
+    <iframe src>, else the new cfServers embed URL. Absolute URL or ""."""
+    iframe = soup.find("iframe")
+    players_url = (iframe.attrs.get("src") or "") if iframe else ""
+    if not players_url:
+        players_url = _cfservers_url(html)
+    if players_url and not players_url.startswith("http"):
+        players_url = website_origin.rstrip("/") + "/" + players_url.lstrip("/")
+    return players_url
+
+
 def get_episode(url: str) -> Episode:
     """
     Get episode details including players. On the WordPress theme the episode
@@ -230,10 +265,7 @@ def get_episode(url: str) -> Episode:
     h1 = soup.find("h1")
     title: str = h1.get_text(strip=True) if h1 else ""
 
-    iframe = soup.find("iframe")
-    players_url = (iframe.attrs.get("src") or "") if iframe else ""
-    if players_url and not players_url.startswith("http"):
-        players_url = website_origin.rstrip("/") + "/" + players_url.lstrip("/")
+    players_url = _players_url_from_page(soup, response.text)
 
     players = get_players(players_url) if players_url else []
 
@@ -353,10 +385,7 @@ def get_movie(url: str) -> CoflixMovie:
     year_elem = soup.find("span", {"class": "fwb fz20 e-fz25 dib"})
     year = year_elem.text.strip() if year_elem else "Unknown"
 
-    iframe = soup.find("iframe")
-    players_url = (iframe.attrs.get("src") or "") if iframe else ""
-    if players_url and not players_url.startswith("http"):
-        players_url = website_origin.rstrip("/") + "/" + players_url.lstrip("/")
+    players_url = _players_url_from_page(soup, response.text)
     players = get_players(players_url) if players_url else []
 
     return CoflixMovie(title, url, img, genres, year, players)
@@ -395,6 +424,14 @@ def get_series(url: str) -> CoflixSeries:
         if lang:
             lang.extract()
         label = btn.get_text(strip=True) or f"Saison {k}"
+        # Episode count from the matching panel (same page, no extra fetch).
+        try:
+            _n = len(soup.select(
+                f".cf-episodes-panel[data-panel='{k}'] .cf-episode-item"))
+        except Exception:
+            _n = 0
+        if _n:
+            label = f"{label} · {_n} {t('ep')}"
         seasons.append(SeasonAccess(label, f"{base_url}#panel={k}"))
 
     # Fallback : no tabs but episodes present (single-season) → one pseudo-season.

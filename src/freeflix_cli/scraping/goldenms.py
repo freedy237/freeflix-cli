@@ -150,7 +150,9 @@ class MediaExtractor:
 
             r = _get(url, headers=headers, timeout=10)
             data = r.json()
-            m3u8_url = (data.get("stream") or {}).get("playlist")
+            stream = data.get("stream") or {}
+            # Legacy shape : a single HLS playlist.
+            m3u8_url = stream.get("playlist")
 
             if m3u8_url:
                 return [
@@ -162,6 +164,32 @@ class MediaExtractor:
                         "headers": headers,
                     }
                 ]
+            # Current shape : direct per-quality MP4 files (+ captions).
+            qualities = stream.get("qualities") or {}
+            if isinstance(qualities, dict) and qualities:
+                subs = [
+                    {"lang": c.get("language"), "url": c.get("url")}
+                    for c in (stream.get("captions") or [])
+                    if isinstance(c, dict) and c.get("url")
+                ]
+                out = []
+                for q in sorted(qualities, key=lambda h: int(h) if str(h).isdigit() else 0):
+                    qd = qualities[q] or {}
+                    qurl = qd.get("url") if isinstance(qd, dict) else None
+                    if not qurl:
+                        continue
+                    out.append(
+                        {
+                            "source": "Vidlink",
+                            "quality": f"{q}p",
+                            "url": qurl,
+                            "type": "VIDEO",
+                            "headers": headers,
+                            "subtitles": subs or None,
+                        }
+                    )
+                if out:
+                    return out
         except Exception:
             pass
         return []

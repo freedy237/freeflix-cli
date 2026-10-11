@@ -147,7 +147,10 @@ def _abs_img(src: str) -> str:
 #     no static stream to extract — same for the kokoflix chamber_go.php
 #     endpoint, which always lands on that SPA (tokyo_go→dood and
 #     rosewood_go→voe are both supported, chamber_go never is)
-_DEAD_PLAYER_HOSTS = ("trakx.lol", "multiup.us", "multiup.io", "bysesayeveum.com")
+# waaw.to (Netu clone) : the stream is resolved client-side via
+# DNS-over-HTTPS + websocket handshake (needs JS) — never extractable
+# server-side, so listing it only offers a dead player.
+_DEAD_PLAYER_HOSTS = ("trakx.lol", "multiup.us", "multiup.io", "bysesayeveum.com", "waaw.to")
 _DEAD_PLAYER_PATHS = ("chamber_go.php",)
 
 

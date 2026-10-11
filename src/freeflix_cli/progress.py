@@ -30,9 +30,28 @@ from rich.panel import Panel
 from .cli_utils import console
 from .themes import color
 from .icons import icon
+from .i18n import t
 
 FILLED = "▰"
 EMPTY = "▱"
+
+
+_TIPS = [
+    "Tip: press / to filter any long list",
+    "Tip: press ? anywhere for keyboard shortcuts",
+    "Tip: CTRL+1 toggles Anime4K in mpv",
+    "Tip: Esc Esc cancels a running download",
+    "Tip: your progress can sync to AniList from Settings",
+]
+
+
+def _tip_of_the_day() -> str:
+    """One rotating startup tip (day-of-year), translated via t()."""
+    try:
+        import datetime as _dt
+        return t(_TIPS[_dt.date.today().timetuple().tm_yday % len(_TIPS)])
+    except Exception:
+        return ""
 
 
 # ─── Bars ─────────────────────────────────────────────────────────────
@@ -83,7 +102,7 @@ class LoadingScreen:
 
     def __init__(self, version: str = "", status: str = "Starting up…"):
         self.version = version
-        self._status = status
+        self._status = t(status)
         self._target_frac = None   # None -> indeterminate animation
         self._disp_frac = None     # what's actually drawn (eases toward target)
         self._tick = 0
@@ -95,7 +114,7 @@ class LoadingScreen:
     # public API -------------------------------------------------------
     def status(self, text: str = None, frac: float = None):
         if text is not None:
-            self._status = text
+            self._status = t(text)
         self._target_frac = frac   # the bar slides smoothly toward this
         if not self._active:  # fallback echo when there's no live screen
             return
@@ -169,6 +188,9 @@ class LoadingScreen:
         body.append(Align.center(Text.assemble(b, (pct, color("info")))))
         body.append(Text(""))
         body.append(Align.center(Text(self._status, style=color("dim"))))
+        tip = _tip_of_the_day()
+        if tip:
+            body.append(Align.center(Text(f"💡 {tip}", style=color("dim"))))
 
         inner = Group(*body)
         # Vertically center the whole thing on the screen.
@@ -244,19 +266,22 @@ def _render_download(title: str, info: dict, tick: int,
     det = []
     dl, tot = info.get("downloaded"), info.get("total")
     if dl and tot:
-        det.append(f"{dl} / {tot}")
+        det.append(Text(f"{dl} / {tot}", style=color("dim")))
     elif tot:
-        det.append(f"~{tot}")
+        det.append(Text(f"~{tot}", style=color("dim")))
     elif dl:
         # Unknown total (e.g. sibnet serves the mp4 with no Content-Length, so
         # aria2c reports X/0B and there's no % to show) — still show how much
         # has come down so the user sees real activity, not "starting…".
-        det.append(dl)
+        det.append(Text(dl, style=color("dim")))
     if info.get("speed"):
-        det.append(f"{icon('stats')} {info['speed']}")
+        det.append(Text.assemble(
+            (f"{icon('stats')} ", color("accent")),
+            (info["speed"], f"bold {color('accent')}"),
+        ))
     if info.get("eta"):
-        det.append(f"ETA {info['eta']}")
-    detail = Text("   ".join(det) if det else "starting…", style=color("dim"))
+        det.append(Text(f"ETA {info['eta']}", style=color("info")))
+    detail = Text("   ").join(det) if det else Text(t("starting…"), style=color("dim"))
 
     body = [head, Text(""), barline, Text(""), detail]
     if cancel_hint:
@@ -269,7 +294,7 @@ def _render_download(title: str, info: dict, tick: int,
     return Panel(
         Group(*body),
         border_style=color("border"),
-        title=Text("Download", style=color("info")),
+        title=Text(t("Download"), style=color("info")),
         padding=(0, 2),
         width=box_w,
     )
@@ -295,6 +320,7 @@ class _EscCancel:
         self._old = None
         self._armed = 0.0
         self.active = False
+        self._in_paste = False  # inside an unterminated bracketed-paste blob
 
     def __enter__(self):
         import os
@@ -326,6 +352,45 @@ class _EscCancel:
             self._armed = now
         return False
 
+    @staticmethod
+    def _strip_paste(buf: str) -> str:
+        """Drop bracketed-paste blobs (ESC[200~ … ESC[201~) and terminal-reply
+        spans (OSC … ST/BEL) so pasted garbage and late replies can't
+        contribute stray Esc presses toward a cancel. Returns (clean,
+        in_paste) — `in_paste` when a blob starts but never ends in this
+        window (callers keep swallowing until the closing marker)."""
+        import re as _re
+        clean = _re.sub(r"\x1b\[200~.*?\x1b\[201~", "", buf, flags=_re.DOTALL)
+        clean = _re.sub(r"\x1b\].*?(\x1b\\|\x07)", "", clean, flags=_re.DOTALL)
+        clean = _re.sub(r"\x1b\[[0-9;?]+[a-zA-Z~]", "", clean)
+        i = clean.find("\x1b[200~")
+        if i >= 0:
+            return clean[:i], True
+        return clean, False
+
+    def _clean(self, buf: str) -> str:
+        """Strip paste blobs with cross-poll state (a blob may straddle two
+        32-byte reads)."""
+        if self._in_paste:
+            j = buf.find("\x1b[201~")
+            if j < 0:
+                # Maybe an OSC reply instead (ends with ST/BEL)?
+                import re as _re
+                m = _re.search(r"\x1b\\|\x07", buf)
+                if m is None:
+                    return ""
+                buf = buf[m.end():]
+            else:
+                buf = buf[j + len("\x1b[201~"):]
+            self._in_paste = False
+        clean, in_paste = self._strip_paste(buf)
+        if not in_paste and "\x1b]" in clean:
+            # Unterminated OSC reply — swallow until its ST/BEL too.
+            in_paste = True
+            clean = clean.split("\x1b]")[0]
+        self._in_paste = in_paste
+        return clean
+
     def _poll_win(self) -> bool:
         import msvcrt
         # Draine tout le buffer d'un coup puis parse comme le POSIX : un
@@ -341,6 +406,7 @@ class _EscCancel:
                 buf += ch
         except Exception:
             return False
+        buf = self._clean(buf)
         escs, i = 0, 0
         while i < len(buf):
             if buf[i] == "\x1b":
@@ -365,6 +431,7 @@ class _EscCancel:
             data = os.read(self._fd, 32)
         except Exception:
             return False
+        data = self._clean(data.decode("utf-8", "ignore")).encode()
         escs, i = 0, 0
         while i < len(data):
             if data[i:i + 1] == b"\x1b":
@@ -382,7 +449,7 @@ class _EscCancel:
     def hint(self) -> str:
         if not self.active:
             return ""
-        return "! Esc again to cancel" if self.armed else "Esc Esc : cancel"
+        return "! " + t("Esc again to cancel") if self.armed else t("Esc Esc : cancel")
 
     def __exit__(self, *exc):
         if self._old is not None:
@@ -442,7 +509,7 @@ class BatchView:
                 if not ep.get("downloaded"):
                     ep["downloaded"] = "✓"
                 if not ep.get("speed"):
-                    ep["speed"] = "done"
+                    ep["speed"] = t("done")
 
     @property
     def finished(self) -> bool:
@@ -495,7 +562,7 @@ class BatchView:
         return Panel(
             Group(head, Text(""), *body),
             border_style=color("border"),
-            title=Text("Batch Download", style=color("info")),
+            title=Text(t("Batch Download"), style=color("info")),
             padding=(0, 2),
             width=box_w,
         )
@@ -608,7 +675,7 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
         elif last["frac"] is None:
             last["frac"] = 1.0
             last["downloaded"] = last.get("downloaded") or "✓"
-            last["speed"] = last.get("speed") or "done"
+            last["speed"] = last.get("speed") or t("done")
         batch_callback(title, dict(last))
 
         proc.wait()
@@ -658,7 +725,7 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
                 # completion).  Show as complete.
                 last["frac"] = 1.0
                 last["downloaded"] = last.get("downloaded") or "✓"
-                last["speed"] = last.get("speed") or "done"
+                last["speed"] = last.get("speed") or t("done")
             live.update(_frame(last, tick))
         except KeyboardInterrupt:
             try:

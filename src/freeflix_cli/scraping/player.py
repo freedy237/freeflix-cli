@@ -42,6 +42,13 @@ def _get(url, **kw):
     return cloudflare.cf_get(_scraper(), url, **kw)
 
 
+try:
+    from ..i18n import t
+except ImportError:  # pragma: no cover
+    def t(s: str) -> str:
+        return s
+
+
 def _url_host(url: str) -> str:
     """Hostname minuscule d'une URL, "" si inparsable (jamais d'exception)."""
     try:
@@ -322,7 +329,8 @@ def get_hls_link_sendvid(url: str) -> str:
 
     source = soup.find("source")
     if source and source.attrs.get("src"):
-        return source.attrs["src"]
+        link = source.attrs["src"]
+        return None if _is_sendvid_placeholder(link) else link
 
     og = soup.find("meta", {"property": "og:video"})
     if og and og.attrs.get("content"):
@@ -330,17 +338,40 @@ def get_hls_link_sendvid(url: str) -> str:
     return None
 
 
-def get_hls_link_sibnet(url: str) -> str:
+# Sendvid serves a ~36 KB / 5 s placeholder MP4 for deleted/missing files
+# (same tiny file for every dead embed — e.g. Frieren's sendvid players)
+# instead of 404ing. A real episode is tens/hundreds of MB, so reject a
+# resolved file that advertises < 1 MB and let the caller fall back to a
+# host with the real content. Fail-open : no Content-Length → keep it.
+_SENDVID_MIN_BYTES = 1_000_000
+
+
+def _is_sendvid_placeholder(link: str) -> bool:
+    try:
+        r = _scraper().head(
+            link, headers={"Referer": "https://sendvid.com/"},
+            impersonate="chrome", timeout=10,
+        )
+        cl = r.headers.get("Content-Length") or r.headers.get("content-length")
+        return cl is not None and int(cl) < _SENDVID_MIN_BYTES
+    except Exception:
+        return False
+
+
+def get_hls_link_sibnet(url: str, headers: dict = None) -> str:
     """
     Extract video link from sibnet.
 
     Args:
         url: Player URL
+        headers: HTTP headers for the request (sibnet 403s without Referer)
 
     Returns:
         Video URL
     """
-    response = _get(url, impersonate="chrome")
+    h = dict(headers or {})
+    h.setdefault("Referer", url)
+    response = _get(url, headers=h, impersonate="chrome")
     response.raise_for_status()
 
     try:
@@ -427,7 +458,7 @@ def get_hls_link_filemoon(url: str, headers: dict) -> str:
             if result:
                 return result
 
-        print("Error: No valid decryption found.")
+        print(t("Error: No valid decryption found."))
         return None
 
     code = url.split("/")[-1]
@@ -607,7 +638,7 @@ def get_hls_link_veev(url):
     try:
         html = _get(f"https://veev.to/e/{media_id}", impersonate="chrome").text
     except Exception as e:
-        print(f"Connection error: {e}")
+        print(f"{t('Connection error:')} {e}")
         return None
 
     # 3. Extract encrypted tokens
@@ -1018,7 +1049,7 @@ def get_hls_link(url: str, headers: dict = None) -> str | None:
             elif parse_type == "sendvid":
                 link = get_hls_link_sendvid(url)
             elif parse_type == "sibnet":
-                link = get_hls_link_sibnet(url)
+                link = get_hls_link_sibnet(url, headers)
             elif parse_type == "uqload":
                 link = get_hls_link_uqload(url, headers)
             elif parse_type == "vidoza":

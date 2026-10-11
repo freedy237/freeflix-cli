@@ -114,7 +114,7 @@ def _run_input(keys, history=None, default=None):
     orig_readkey = cu._read_menu_key
     orig_live = cu.Live
     _sys.stdin = _FakeStdin()
-    cu._read_menu_key = lambda: seq["keys"].pop(0) if seq["keys"] else readchar.key.ENTER
+    cu._read_menu_key = lambda *a, **k: seq["keys"].pop(0) if seq["keys"] else readchar.key.ENTER
     cu.Live = _DummyLive
     try:
         return cu._input_fullscreen("Q:", default, "H", history=history)
@@ -220,3 +220,227 @@ def test_esccancel_win_arrows_ignored():
 
 def test_esccancel_win_other_keys_ignored():
     assert _run_esccancel_win([["a", "b", "c"]]) == [False]
+
+
+class _DummyLive2:
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def update(self, *a, **k):
+        pass
+
+
+def _run_confirm_posix(chunks, seconds=1, default=True):
+    """Drive confirm_or_timeout's POSIX branch with scripted stdin bytes.
+
+    `chunks`: list of byte-strings returned by successive os.read calls.
+    """
+    import os as _os
+    import sys as _sys
+    from unittest import mock
+
+    buf = {"data": b"".join(chunks)}
+
+    class _FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 7
+
+    def _select(r, w, x, timeout=0):
+        return ([7], [], []) if buf["data"] else ([], [], [])
+
+    def _read(fd, n):
+        out, buf["data"] = buf["data"][:n], buf["data"][n:]
+        return out
+
+    with mock.patch.object(type(cu.console), "is_terminal",
+                            new_callable=mock.PropertyMock,
+                            return_value=True), \
+         mock.patch.object(_sys, "stdin", _FakeStdin()), \
+         mock.patch("termios.tcgetattr", lambda fd: None), \
+         mock.patch("termios.tcsetattr", lambda *a, **k: None), \
+         mock.patch("tty.setcbreak", lambda fd: None), \
+         mock.patch("select.select", _select), \
+         mock.patch.object(_os, "read", _read), \
+         mock.patch.object(cu, "Live", _DummyLive2):
+        return cu.confirm_or_timeout("Next?", seconds=seconds, default=default)
+
+
+def test_confirm_arrow_does_not_decline():
+    # Regression: a lone first byte (\x1b of \x1b[A) instantly declined the
+    # binge countdown AND left "[A" in stdin for the next menu.
+    assert _run_confirm_posix([b"\x1b[A"]) is True
+
+
+def test_confirm_focus_event_does_not_decline():
+    assert _run_confirm_posix([b"\x1b[I"]) is True
+
+
+def test_confirm_lone_esc_declines():
+    # Single-Esc semantics : one lone Esc declines the countdown.
+    assert _run_confirm_posix([b"\x1b"], default=True) is False
+
+
+def test_confirm_double_esc_declines():
+    assert _run_confirm_posix([b"\x1b", b"\x1b"], default=True) is False
+
+
+def test_confirm_enter_accepts():
+    assert _run_confirm_posix([b"\r"]) is True
+
+
+def test_input_double_esc_cancels():
+    assert _run_input([readchar.key.ESC, readchar.key.ESC],
+                      default="dflt") == "dflt"
+
+
+def test_windows_fast_double_esc_replays():
+    # Both presses arriving in one read must yield two ESCs (carry), not IGN.
+    cu._esc_carry = False
+    import readchar as _rc
+    assert _run_windows(["\x1b", "\x1b"]) == _rc.key.ESC
+    assert cu._esc_carry is True
+    assert _run_windows([]) == _rc.key.ESC  # replayed, no input needed
+    cu._esc_carry = False
+
+
+def test_split_paste_complete():
+    from freeflix_cli.cli_utils import _split_paste
+    text, rest = _split_paste(b"\x1b[200~hello\x1b[201~")
+    assert text == b"hello" and rest == b""
+    text, rest = _split_paste(b"\x1b[200~\x1b[0mX\x1b[201~YZ")
+    assert text == b"\x1b[0mX" and rest == b"YZ"
+
+
+def test_split_paste_unterminated_or_plain():
+    from freeflix_cli.cli_utils import _split_paste
+    assert _split_paste(b"\x1b[200~abc") == (None, b"\x1b[200~abc")
+    assert _split_paste(b"\x1b[A") == (None, b"\x1b[A")
+
+
+def test_read_menu_key_returns_paste_text():
+    # A bracketed paste must come back as TEXT (menus ignore it, the search
+    # box inserts it) — never as Esc presses.
+    import os as _os
+    import sys as _sys
+    from unittest import mock
+    import freeflix_cli.cli_utils as cu
+
+    blob = b"\x1b[200~\x1b[36mhi\x1b[0m\x1b[201~"
+    chunks = [blob[:1], blob[1:]]
+
+    class _FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 7
+
+    def _select(r, w, x, timeout=0):
+        return ([7], [], []) if chunks else ([], [], [])
+
+    def _read(fd, n):
+        return chunks.pop(0) if chunks else b""
+
+    cu._esc_carry = False
+    with mock.patch.object(_sys, "stdin", _FakeStdin()), \
+         mock.patch("termios.tcgetattr", lambda fd: None), \
+         mock.patch("termios.tcsetattr", lambda *a, **k: None), \
+         mock.patch("tty.setcbreak", lambda fd: None), \
+         mock.patch("select.select", _select), \
+         mock.patch.object(_os, "read", _read):
+        out = cu._read_menu_key()
+    assert out == "\x1b[36mhi\x1b[0m"
+
+
+def test_split_reply_complete():
+    from freeflix_cli.cli_utils import _split_reply
+    done, rest = _split_reply(b"\x1b]10;rgb:aaaa/bbbb/cccc\x1b\\XY")
+    assert done is True and rest == b"XY"
+    done, rest = _split_reply(b"\x1b]11;rgb:1/2/3\x07Z")
+    assert done is True and rest == b"Z"
+
+
+def test_split_reply_unterminated_or_plain():
+    from freeflix_cli.cli_utils import _split_reply
+    done, data = _split_reply(b"\x1b]10;rgb:aa")
+    assert done is False and data == b"\x1b]10;rgb:aa"
+    done, data = _split_reply(b"\x1b[A")
+    assert done is False
+
+
+def test_read_menu_key_swallows_osc_reply():
+    # A late OSC reply must be swallowed whole — its fragments must never
+    # decode as Esc (the phantom-back mechanism).
+    import os as _os
+    import sys as _sys
+    from unittest import mock
+    import freeflix_cli.cli_utils as cu
+
+    blob = b"\x1b]10;rgb:fcfc/fcfc/fcfc\x1b\\"
+    chunks = [blob[:1], blob[1:]]
+
+    class _FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 7
+
+    def _select(r, w, x, timeout=0):
+        return ([7], [], []) if chunks else ([], [], [])
+
+    def _read(fd, n):
+        return chunks.pop(0) if chunks else b""
+
+    cu._esc_carry = False
+    with mock.patch.object(_sys, "stdin", _FakeStdin()), \
+         mock.patch("termios.tcgetattr", lambda fd: None), \
+         mock.patch("termios.tcsetattr", lambda *a, **k: None), \
+         mock.patch("tty.setcbreak", lambda fd: None), \
+         mock.patch("select.select", _select), \
+         mock.patch.object(_os, "read", _read):
+        out = cu._read_menu_key()
+    assert out == ""  # swallowed, menu keeps waiting
+
+
+def test_read_menu_key_swallows_csi_reply():
+    # A complete CSI reply (size report…) must be dropped, never decoded.
+    import os as _os
+    import sys as _sys
+    from unittest import mock
+    import freeflix_cli.cli_utils as cu
+
+    blob = b"\x1b[8;31;116t"
+    chunks = [blob[:1], blob[1:]]
+
+    class _FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 7
+
+    def _select(r, w, x, timeout=0):
+        return ([7], [], []) if chunks else ([], [], [])
+
+    def _read(fd, n):
+        return chunks.pop(0) if chunks else b""
+
+    cu._esc_carry = False
+    with mock.patch.object(_sys, "stdin", _FakeStdin()), \
+         mock.patch("termios.tcgetattr", lambda fd: None), \
+         mock.patch("termios.tcsetattr", lambda *a, **k: None), \
+         mock.patch("tty.setcbreak", lambda fd: None), \
+         mock.patch("select.select", _select), \
+         mock.patch.object(_os, "read", _read):
+        out = cu._read_menu_key()
+    assert out == ""

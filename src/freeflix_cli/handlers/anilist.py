@@ -46,9 +46,9 @@ def handle_anilist_continue():
         progress = e["progress"] or 0
         total = e["media"]["episodes"] or "?"
         if isinstance(total, int) and progress >= total:
-            status = f"Finished {progress}/{total}"
+            status = f"{t('Finished')} {progress}/{total}"
         else:
-            status = f"Ep {progress+1}/{total}"
+            status = f"{t('Ep')} {progress+1}/{total}"
         _ci = e["media"].get("coverImage", {}) or {}
         cover = _ci.get("extraLarge") or _ci.get("large") or _ci.get("medium") or ""
         labels.append(f"{title} ({status})")
@@ -71,12 +71,12 @@ def handle_anilist_continue():
 
     if isinstance(total, int) and progress >= total:
         print_info(
-            f"Target: [cyan]{media_title}[/cyan] - [yellow]Completed ({progress}/{total})[/yellow]"
+            f"{t('Target:')} [cyan]{media_title}[/cyan] - [yellow]{t('Completed')} ({progress}/{total})[/yellow]"
         )
         # Reset to last episode for easier replay or just stay at progress
         next_episode_num = progress
     else:
-        print_info(f"Target: [cyan]{media_title}[/cyan] - Episode {next_episode_num}")
+        print_info(f"{t('Target:')} [cyan]{media_title}[/cyan] - {t('Episode')} {next_episode_num}")
 
     # --- Provider Selection ---
     providers = ["Anime-Sama (VF/VOSTFR)", "GoldenAnime (VO)", t("← Back")]
@@ -103,19 +103,19 @@ def handle_anilist_continue():
 
     cleaned_title = clean_title(media_title)
 
-    print_info(f"Searching for '{media_title}' on Anime-Sama...")
+    print_info(f"{t('Searching for')} '{media_title}' {t('on Anime-Sama')}...")
     results = anime_sama.search(media_title)
 
     # Fallback 1: Try Cleaned English Title
     if not results and cleaned_title != media_title:
-        print_info(f"No results for full title. Trying cleaned: '{cleaned_title}'...")
+        print_info(f"{t('No results for full title. Trying cleaned:')} '{cleaned_title}'...")
         results = anime_sama.search(cleaned_title)
 
     # Fallback 2: Try Romaji
     romaji_title = selected_entry["media"]["title"]["romaji"]
     if not results and romaji_title and romaji_title != media_title:
         print_warning(
-            f"No results for English title. Trying Romaji: '{romaji_title}'..."
+            f"{t('No results for English title. Trying Romaji:')} '{romaji_title}'..."
         )
         results = anime_sama.search(romaji_title)
 
@@ -123,7 +123,7 @@ def handle_anilist_continue():
         if not results:
             cleaned_romaji = clean_title(romaji_title)
             if cleaned_romaji != romaji_title:
-                print_info(f"Trying cleaned Romaji: '{cleaned_romaji}'...")
+                print_info(f"{t('Trying cleaned Romaji:')} '{cleaned_romaji}'...")
                 results = anime_sama.search(cleaned_romaji)
 
     # Fallback 3: Manual Search
@@ -153,7 +153,7 @@ def handle_anilist_continue():
     # Now just use the Anime-Sama handler logic but bypass search?
     # Or just jump into getting series...
 
-    print_info(f"Loading [cyan]{selection.title}[/cyan]...")
+    print_info(f"{t('Loading')} [cyan]{selection.title}[/cyan]...")
     series = anime_sama.get_series(selection.url)
 
     if not series.seasons:
@@ -212,11 +212,11 @@ def handle_anilist_continue():
     )
 
     if target_season_num is not None:
-        print_info(f"AniList suggests [bold]Season {target_season_num}[/bold].")
+        print_info(f"AniList {t('suggests')} [bold]{t('Season')} {target_season_num}[/bold].")
 
     selected_season_access = series.seasons[season_idx]
 
-    print_info(f"Loading [cyan]{selected_season_access.title}[/cyan]...")
+    print_info(f"{t('Loading')} [cyan]{selected_season_access.title}[/cyan]...")
     season = anime_sama.get_season(selected_season_access.url)
 
     # Now we have the season and the series, and we know the AniList ID (media_id).
@@ -247,14 +247,14 @@ def handle_anilist_continue():
 
     if not found:
         print_warning(
-            f"Could not automatically find Episode {next_episode_num}. Please select:"
+            f"{t('Could not automatically find Episode')} {next_episode_num}. {t('Please select:')}"
         )
         start_ep_idx = select_from_list(
             [e.title for e in episodes], f"{icon('tv')} {t('Select Episode:')}"
         )
     else:
         print_success(
-            f"Found Episode {next_episode_num}: {episodes[start_ep_idx].title}"
+            f"{t('Found Episode')} {next_episode_num}: {episodes[start_ep_idx].title}"
         )
 
     ep_idx = start_ep_idx

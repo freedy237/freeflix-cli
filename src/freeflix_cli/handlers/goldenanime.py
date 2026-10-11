@@ -48,7 +48,7 @@ def search_imdb_id(title: str):
             valid_metas = []
             for m in metas[:7]:  # Top 7 results
                 name = m.get("name")
-                year = m.get("year", "Unknown")
+                year = m.get("year", t("Unknown"))
                 m_type = m.get("type", "series")
                 imdb = m.get("imdb_id")
                 if imdb:
@@ -56,23 +56,23 @@ def search_imdb_id(title: str):
                     valid_metas.append(m)
 
             if valid_metas:
-                choices.append("Enter manually")
-                choices.append("Skip subtitles")
+                choices.append(t("Enter manually"))
+                choices.append(t("Skip Subtitles"))
 
-                idx = select_from_list(choices, f"Select IMDB match for '{title}':")
+                idx = select_from_list(choices, f"{t('Select IMDB match for')} '{title}':")
                 if idx < len(valid_metas):
                     selected = valid_metas[idx]
                     return selected["imdb_id"], selected["type"] == "movie"
                 elif idx == len(valid_metas):
-                    manual = get_user_input("Enter IMDB ID manually (e.g. tt0388629)")
+                    manual = get_user_input(t("Enter IMDB ID manually (e.g. tt0388629)"))
                     return manual, False
                 else:
                     return None, False
     except Exception as e:
-        print_warning(f"Auto IMDB search failed: {e}")
+        print_warning(f"{t('Auto IMDB search failed:')} {e}")
 
     manual = get_user_input(
-        "Enter IMDB ID manually (e.g. tt0388629, leave blank to skip)"
+        t("Enter IMDB ID manually (e.g. tt0388629, leave blank to skip)")
     )
     return manual, False
 
@@ -80,7 +80,7 @@ def search_imdb_id(title: str):
 def handle_goldenanime():
     """Handle GoldenAnime provider flow."""
     query = get_user_input(
-        "Search query (Title or AniList ID) (or 'exit' to back)",
+        t("Search query (Title or AniList ID) (or 'exit' to back)"),
         header=f"{icon('sparkle')} GoldenAnime (VO)",
         history=tracker.get_search_history(),
     )
@@ -96,7 +96,7 @@ def handle_goldenanime():
 
     if query.isdigit():
         anilist_id = int(query)
-        print_info(f"Fetching AniList data for ID: [cyan]{anilist_id}[/cyan]")
+        print_info(f"{t('Fetching AniList data for ID:')} [cyan]{anilist_id}[/cyan]")
         media = anilist_client.get_media_with_relations(anilist_id)
         if media:
             title = media.get("title", {}).get("english") or media.get("title", {}).get(
@@ -106,7 +106,7 @@ def handle_goldenanime():
             cover_url = _cover(media)
     else:
         title = query
-        print_info(f"Searching AniList by Title: [cyan]{title}[/cyan]")
+        print_info(f"{t('Searching AniList by Title:')} [cyan]{title}[/cyan]")
         results = anilist_client.search_media(title)
         if results:
             # Preview pane : AniList cover + year/format/episodes/genres.
@@ -118,7 +118,7 @@ def handle_goldenanime():
                 if m.get("format"):
                     bits.append(str(m["format"]))
                 if m.get("episodes"):
-                    bits.append(f"{m['episodes']} eps")
+                    bits.append(f"{m['episodes']} {t('eps')}")
                 if bits:
                     out.append(" · ".join(bits))
                 if m.get("genres"):
@@ -136,7 +136,7 @@ def handle_goldenanime():
             ]
             labels = [
                 f"{m['title']['english'] or m['title']['romaji']} "
-                f"({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} eps"
+                f"({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} {t('eps')}"
                 for m in results
             ]
             # Esc / Back falls through to manual input below (skip AniList).
@@ -155,25 +155,25 @@ def handle_goldenanime():
     terminal_image.show_poster(
         cover_url,
         title=title,
-        info_lines=[f"{max_episodes} episode(s)" if max_episodes else ""],
+        info_lines=[f"{max_episodes} {t('episode(s)')}" if max_episodes else ""],
     )
 
     # Episode Selection
     episode = 1
     if max_episodes:
-        ep_options = [f"Episode {i}" for i in range(1, max_episodes + 1)] + [
-            "Manual input", t("← Back")
+        ep_options = [f"{t('Episode')} {i}" for i in range(1, max_episodes + 1)] + [
+            t("Manual Input"), t("← Back")
         ]
         ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
         if ep_idx < max_episodes:
             episode = ep_idx + 1
         elif ep_idx == max_episodes:
-            ep_input = get_user_input("Episode number")
+            ep_input = get_user_input(t("Episode number"))
             episode = int(ep_input) if ep_input and ep_input.isdigit() else 1
         else:
             return  # Back
     else:
-        ep_input = get_user_input("Episode number (default 1)")
+        ep_input = get_user_input(t("Episode number (default 1)"))
         episode = int(ep_input) if ep_input and ep_input.isdigit() else 1
 
     # Proceed to episode loop (handles next episode proposal)
@@ -211,14 +211,14 @@ def _flow_goldenanime_stream(
 
     if not valid_results:
         print_warning(
-            "No supported streams found (no direct M3U8 or recognised players)."
+            t("No supported streams found (no direct M3U8 or recognised players).")
         )
         pause()
         return
 
     if len(valid_results) < len(results):
         skipped = len(results) - len(valid_results)
-        print_info(f"[dim]Skipped {skipped} unsupported stream(s).[/dim]")
+        print_info(f"[dim]{t('Skipped')} {skipped} {t('unsupported stream(s).')}[/dim]")
 
     # Analyse each stream's real resolutions + bitrate (like the other
     # sources), shown next to the source. Direct m3u8/mp4 are probed
@@ -268,7 +268,7 @@ def _flow_goldenanime_stream(
         stream_labels.append(base)
 
     choice_idx = select_from_list(
-        stream_labels + ["← Back"], f"{icon('tv')} Select Stream:"
+        stream_labels + [t("← Back")], f"{icon('tv')} {t('Select Stream:')}"
     )
 
     if choice_idx == len(valid_results):  # Back
@@ -286,7 +286,7 @@ def _flow_goldenanime_stream(
     want_subs = 1  # default: No
     if tracker.get_subtitle_search():
         want_subs = select_from_list(
-            ["Yes", "No"], f"Search for {lang_name} subtitles?"
+            [t("Yes"), t("No")], f"{t('Search subtitles in')} {lang_name} ?"
         )
     if want_subs == 0:
         # Try to resolve title if missing
@@ -304,7 +304,7 @@ def _flow_goldenanime_stream(
             imdb_id, is_movie = search_imdb_id(search_title)
         else:
             imdb_id = get_user_input(
-                "Enter IMDB ID manually (e.g. tt0388629, leave blank to skip)"
+                t("Enter IMDB ID manually (e.g. tt0388629, leave blank to skip)")
             )
 
         if imdb_id:
@@ -320,25 +320,25 @@ def _flow_goldenanime_stream(
                         if 1 <= detected_season <= 10:
                             default_season_idx = detected_season - 1
 
-                season_options = [f"Season {i}" for i in range(1, 11)] + [
-                    "Manual Input"
+                season_options = [f"{t('Season')} {i}" for i in range(1, 11)] + [
+                    t("Manual Input")
                 ]
                 s_idx = select_from_list(
                     season_options,
-                    "Select Season (for subtitles mapping):",
+                    t("Select Season (for subtitles mapping):"),
                     default_index=default_season_idx,
                 )
                 if s_idx < 10:
                     season = s_idx + 1
                 else:
-                    season_input = get_user_input("Season number (default 1)")
+                    season_input = get_user_input(t("Season number (default 1)"))
                     season = (
                         int(season_input)
                         if season_input and season_input.isdigit()
                         else 1
                     )
 
-            print_info(f"Searching for {lang_name} subtitles...")
+            print_info(f"{t('Searching for')} {lang_name} {t('subtitles...')}")
             subs = subtitle_extractor.search(
                 imdb_id=imdb_id, season=season, episode=episode, lang_filter=user_lang
             )
@@ -347,15 +347,15 @@ def _flow_goldenanime_stream(
                 # Show a shortened list to make it faster
                 sub_choices = [
                     f"{s['source']} - {s.get('lang', lang_name)}" for s in subs[:5]
-                ] + ["None"]
-                sub_idx = select_from_list(sub_choices, "📝 Select Subtitle:")
+                ] + [t("None")]
+                sub_idx = select_from_list(sub_choices, f"📝 {t('Select Subtitle:')}")
                 if sub_idx < len(sub_choices) - 1:
                     subtitle_url = subs[sub_idx]["url"]
-                    print_info(f"Selected subtitle from: {subs[sub_idx]['source']}")
+                    print_info(f"{t('Selected subtitle from:')} {subs[sub_idx]['source']}")
             else:
-                print_warning(f"No {lang_name} subtitles found.")
+                print_warning(f"{t('No')} {lang_name} {t('subtitles found.')}")
 
-    print_info(f"Loading stream from [cyan]{selection['source']}[/cyan]...")
+    print_info(f"{t('Loading stream from')} [cyan]{selection['source']}[/cyan]...")
 
     headers = {
         "Referer": goldenanime.sudatchi_base + "/",
@@ -398,7 +398,7 @@ def _flow_goldenanime_stream(
     success = play_video(
         final_url,
         headers=headers,
-        title=f"{display_title} - Episode {episode}",
+        title=f"{display_title} - {t('Episode')} {episode}",
         subtitle_url=subtitle_url,
         is_direct=is_direct,
         is_mp4=selection["type"].lower() == "mp4",
@@ -424,7 +424,7 @@ def _flow_goldenanime_stream(
             if token:
                 anilist_client.set_token(token)
                 if anilist_client.update_progress(anilist_id, episode):
-                    print_success(f"AniList updated to episode {episode}!")
+                    print_success(f"{t('AniList updated to episode')} {episode}!")
                 else:
                     print_warning(t("Could not update AniList."))
 
@@ -448,8 +448,8 @@ def handle_goldenanime_episode(
         if success:
             next_ep = episode + 1
             choice = select_from_list(
-                [f"▶ Play Episode {next_ep}", "← Back"],
-                f"Episode {episode} finished:",
+                [f"▶ {t('Play Episode')} {next_ep}", t("← Back")],
+                f"{t('Episode')} {episode} {t('finished:')}",
             )
             if choice == 0:
                 episode = next_ep
@@ -481,14 +481,14 @@ def resume_goldenanime(data):
             title = None
 
     display_title = title if title else f"AniList ID {anilist_id}"
-    print_info(f"Found progress: [cyan]{display_title}[/cyan] - Episode {episode}")
+    print_info(f"{t('Found progress:')} [cyan]{display_title}[/cyan] - {t('Episode')} {episode}")
 
     options = [
-        f"▶ Continue (Episode {episode + 1})",
-        f"🔁 Watch again (Episode {episode})",
-        "← Cancel",
+        f"▶ {t('Continue')} ({t('Episode')} {episode + 1})",
+        f"🔁 {t('Watch again')} ({t('Episode')} {episode})",
+        t("← Cancel"),
     ]
-    choice = select_from_list(options, "What would you like to do?")
+    choice = select_from_list(options, t("What would you like to do?"))
 
     if choice == 2:  # Cancel
         return
