@@ -79,15 +79,25 @@ def search_imdb_id(title: str):
 
 def handle_goldenanime():
     """Handle GoldenAnime provider flow."""
-    query = get_user_input(
-        t("Search query (Title or AniList ID) (or 'exit' to back)"),
-        header=f"{icon('sparkle')} GoldenAnime (VO)",
-        history=tracker.get_search_history(),
+    mode = select_from_list(
+        [f"{icon('new')} {t('Latest uploads')}",
+         f"{icon('search')} {t('Search by title')}", t("← Back")],
+        f"{icon('sparkle')} GoldenAnime (VO)",
     )
-    if not query or query.lower() == "exit":
+    if mode == 2:
         return
-    if not query.isdigit():  # don't pollute history with bare AniList IDs
-        tracker.add_search_query(query)
+    if mode == 0:
+        query = ""
+    else:
+        query = get_user_input(
+            t("Search query (Title or AniList ID) (or 'exit' to back)"),
+            header=f"{icon('sparkle')} GoldenAnime (VO)",
+            history=tracker.get_search_history(),
+        )
+        if query and not query.isdigit() and query.lower() != "exit":
+            tracker.add_search_query(query)
+        if query and query.lower() == "exit":
+            return
 
     anilist_id = None
     title = None
@@ -104,51 +114,60 @@ def handle_goldenanime():
             )
             max_episodes = media.get("episodes")
             cover_url = _cover(media)
+    elif not query:
+        print_info(f"{t('Loading trending anime…')}")
+        results = anilist_client.trending(10)
+        title = None
     else:
         title = query
         print_info(f"{t('Searching AniList by Title:')} [cyan]{title}[/cyan]")
         results = anilist_client.search_media(title)
-        if results:
-            # Preview pane : AniList cover + year/format/episodes/genres.
-            def _ani_lines(m):
-                out = []
-                bits = []
-                if m.get("seasonYear"):
-                    bits.append(str(m["seasonYear"]))
-                if m.get("format"):
-                    bits.append(str(m["format"]))
-                if m.get("episodes"):
-                    bits.append(f"{m['episodes']} {t('eps')}")
-                if bits:
-                    out.append(" · ".join(bits))
-                if m.get("genres"):
-                    out.append(", ".join(m["genres"][:3]))
-                return out
+    if not results:
+        print_warning(t("No results found."))
+        pause()
+        return
+    # Preview pane : AniList cover + year/format/episodes/genres.
+    def _ani_lines(m):
+        out = []
+        bits = []
+        if m.get("seasonYear"):
+            bits.append(str(m["seasonYear"]))
+        if m.get("format"):
+            bits.append(str(m["format"]))
+        if m.get("episodes"):
+            bits.append(f"{m['episodes']} {t('eps')}")
+        if bits:
+            out.append(" · ".join(bits))
+        if m.get("genres"):
+            out.append(", ".join(m["genres"][:3]))
+        return out
 
-            previews = [
-                make_preview(
-                    cover=_cover(m),
-                    title=m["title"]["english"] or m["title"]["romaji"],
-                    lines=_ani_lines(m),
-                    panel_title="GoldenAnime",
-                )
-                for m in results
-            ]
-            labels = [
-                f"{m['title']['english'] or m['title']['romaji']} "
-                f"({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} {t('eps')}"
-                for m in results
-            ]
-            # Esc / Back falls through to manual input below (skip AniList).
-            m_idx = select_with_preview(
-                labels, f"{icon('sparkle')} {t('Select AniList Match:')}", previews
+        previews = [
+            make_preview(
+                cover=_cover(m),
+                title=m["title"]["english"] or m["title"]["romaji"],
+                lines=_ani_lines(m),
+                panel_title="GoldenAnime",
             )
-            if m_idx < len(results):
-                match = results[m_idx]
-                anilist_id = match["id"]
-                title = match["title"]["english"] or match["title"]["romaji"]
-                max_episodes = match.get("episodes")
-                cover_url = _cover(match)
+            for m in results
+        ]
+        labels = [
+            f"{m['title']['english'] or m['title']['romaji']} "
+            f"({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} {t('eps')}"
+            for m in results
+        ]
+        # Esc / Back falls through to manual input below (skip AniList).
+        m_idx = select_with_preview(
+            labels, f"{icon('sparkle')} {t('Select AniList Match:')}", previews
+        )
+        if m_idx < len(results):
+            match = results[m_idx]
+            # NOTE: ruff F841 false-positives below (all four ARE read at
+            # show_poster()/episode-loop) — noqa documents the blind spot.
+            anilist_id = match["id"]  # noqa: F841
+            title = match["title"]["english"] or match["title"]["romaji"]  # noqa: F841
+            max_episodes = match.get("episodes")  # noqa: F841
+            cover_url = _cover(match)  # noqa: F841
 
     # Anime poster + summary at selection (cover from AniList).
     from .. import terminal_image

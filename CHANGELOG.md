@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.12.5
+
+- **Anime anglais (VO sous-titrée)** : HiAnime ajouté en 1er (recommandé), puis
+  GoldenAnime et Anime-Sama sans badge. Chaîne vérifiée en direct
+  (recherche → épisodes → serveurs → embed `window.__P` → m3u8 + sous-titres).
+- **Films/séries anglais** : YTS (catalogue films à jour, données OV) et EZTV
+  (derniers épisodes de séries) — Stream + Télécharger + Télécharger+Voir,
+  choix de qualité, reprise/historique.
+- **Nyaa modernisé** : scopes/catégories iconifiés et traduits, uploads de
+  confiance, seeders minimum, pagination, taille/qualité/id, badge, `latest()`,
+  historique ↑/↓, sélection multiple, téléchargement via barre + reprise.
+- **« Derniers ajouts » à l'entrée de chaque provider concerné**
+  (HiAnime, GoldenMS, GoldenAnime, Nyaa, YTS, EZTV) : trending AniList réparé
+  (la liste ne s'affichait pas), garde anti-vide. Coflix garde la recherche
+  directe.
+- **Icônes** : table emoji↔Nerd complétée (`new`, `list`, `bulb`, `lock`,
+  `verified`, `arrow_down`, `books`, `package`) ; plus d'emojis en dur dans les
+  menus Nyaa/YTS/progression.
+- **i18n** : nouvelles chaînes FR, test-garde `test_i18n_complete` vert.
+
 ## 1.12
 
 - **Tous les providers vérifiés et réparés** : Coflix (nouveau layout

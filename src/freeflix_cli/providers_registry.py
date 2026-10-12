@@ -5,6 +5,11 @@ class ProviderRegistry:
     def __init__(self):
         self.providers = []
 
+    def clear(self):
+        """Forget all registrations (rebuilt on UI-language change so labels
+        follow the new language instead of staying frozen in the old one)."""
+        self.providers = []
+
     def register(
         self,
         name: str,

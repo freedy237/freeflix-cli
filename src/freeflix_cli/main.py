@@ -30,6 +30,8 @@ from .handlers import (
     anilist,
     goldenanime,
     goldenms,
+    hianime,
+    yts as yts_handler,
     nyaa as nyaa_handler,
 )
 from . import history_ui
@@ -743,29 +745,56 @@ def _register_providers():
     """Register every provider in source-menu order (anime first, then
     movies/series, then torrents). Called once at startup."""
     _reco = f"  {icon('star')} {t('recommended')}"
+    _en = (tracker.get_anime_language() or tracker.get_language() or "en") == "en"
     # ── Anime / Manga sources ──────────────────────────────────
+    # English audience : HiAnime first + recommended (direct sub/dub HLS),
+    # then GoldenAnime, then Anime-Sama (no badge in English).
+    # French audience : Anime-Sama first + recommended.
+    if _en:
+        registry.register(
+            f"{icon('sparkle')} HiAnime ({t('EN sub + dub')}){_reco}",
+            hianime.handle_hianime,
+            supported_languages=["en"],
+            category="anime",
+        )
+        registry.register(
+            f"{icon('sparkle')} GoldenAnime ({t('VO and Subtitles')})",
+            goldenanime.handle_goldenanime,
+            supported_languages=["en", "fr"],
+            category="anime",
+        )
     registry.register(
-        f"{icon('anime')} Anime-Sama ({t('Anime and animated movies')}){_reco}",
+        f"{icon('anime')} Anime-Sama ({t('Anime and animated movies')})"
+        + ("" if _en else _reco),
         anime_sama.handle_anime_sama,
         supported_languages=["en", "fr"],
         category="anime",
     )
     registry.register(
-        f"{icon('manga')} French-Anime ({t('Anime VF/VOSTFR')})",
+        f"{icon('manga')} French-Anime ({t('Anime VF/VOSTFR')})"
+        + ("" if _en else _reco),
         french_manga.handle_french_manga,
         supported_languages=["fr"],
         category="anime",
     )
-    registry.register(
-        f"{icon('sparkle')} GoldenAnime ({t('VO and Subtitles')})",
-        goldenanime.handle_goldenanime,
-        supported_languages=["en", "fr"],
-        category="anime",
-    )
+    if not _en:
+        registry.register(
+            f"{icon('sparkle')} GoldenAnime ({t('VO and Subtitles')})",
+            goldenanime.handle_goldenanime,
+            supported_languages=["en"],
+            category="anime",
+        )
+    if not _en:
+        registry.register(
+            f"{icon('sparkle')} HiAnime ({t('EN sub + dub')})",
+            hianime.handle_hianime,
+            supported_languages=["en"],
+            category="anime",
+        )
     registry.register(
         f"{icon('wave')} Nyaa ({t('Torrents — high-quality anime releases')})",
         nyaa_handler.handle_nyaa,
-        supported_languages=["en", "fr"],
+        supported_languages=["en"],
         category="anime",
     )
 
@@ -774,6 +803,12 @@ def _register_providers():
     registry.register(
         f"{icon('star')} GoldenMS ({t('Movies & Series')})",
         goldenms.handle_goldenms,
+        supported_languages=["en"],
+        category="movies",
+    )
+    registry.register(
+        f"{icon('movie')} YTS ({t('Latest EN movies, torrents')})",
+        yts_handler.handle_yts,
         supported_languages=["en"],
         category="movies",
     )

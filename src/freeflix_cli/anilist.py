@@ -91,6 +91,40 @@ class AniListClient:
             return data["Page"]["media"]
         return []
 
+    def trending(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Trending-now anime (no query needed) for the Latest view."""
+        query = """
+        query {
+            Page(page: 1, perPage: %d) {
+                media(type: ANIME, sort: TRENDING_DESC) {
+                    id
+                    title {
+                        romaji
+                        english
+                        native
+                    }
+                    coverImage {
+                        medium
+                        large
+                        extraLarge
+                    }
+                    genres
+                    format
+                    episodes
+                    status
+                    seasonYear
+                }
+            }
+        }
+        """ % max(1, min(25, limit))
+        try:
+            data = self._query(query)
+            if data and data.get("Page") and data.get("Page", {}).get("media"):
+                return data["Page"]["media"]
+        except Exception:
+            pass
+        return []
+
 
 
     def update_progress(self, media_id: int, progress: int) -> bool:

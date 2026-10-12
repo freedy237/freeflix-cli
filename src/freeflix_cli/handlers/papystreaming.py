@@ -9,6 +9,7 @@ from ..cli_utils import (
     select_with_preview,
     make_preview,
     get_user_input,
+    print_info,
     print_warning,
     pause,
     spinner,
@@ -87,7 +88,12 @@ def handle_papystreaming():
     with spinner(f"{t('Searching for')} {query}…"):
         results = papystreaming.search(query)
     if not results:
-        print_warning(t("No results found."))
+        if papystreaming.blocked_by_cloudflare:
+            print_warning(t("Papystreaming is Cloudflare-protected right now."))
+            print_info(t("Settings → Cloudflare token : paste your cf_clearance "
+                         "cookie (+ User-Agent) to unlock it."))
+        else:
+            print_warning(t("No results found."))
         pause()
         return
 

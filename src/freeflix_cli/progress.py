@@ -190,7 +190,9 @@ class LoadingScreen:
         body.append(Align.center(Text(self._status, style=color("dim"))))
         tip = _tip_of_the_day()
         if tip:
-            body.append(Align.center(Text(f"💡 {tip}", style=color("dim"))))
+            from .icons import icon
+            body.append(Align.center(
+                Text(f"{icon('bulb')} {tip}", style=color("dim"))))
 
         inner = Group(*body)
         # Vertically center the whole thing on the screen.
@@ -214,7 +216,13 @@ def parse_progress(line: str) -> dict:
     """Best-effort extract {frac, speed, downloaded, total, eta} from a
     yt-dlp or aria2c progress line. Any field may be None."""
     info = {"frac": None, "speed": None, "downloaded": None,
-            "total": None, "eta": None}
+            "total": None, "eta": None, "meta": False}
+
+    if "[METADATA]" in line:
+        # aria2c resolving a magnet (no pieces yet) — surfaced as its own
+        # state so the UI shows "fetching metadata…" instead of "starting…".
+        info["meta"] = True
+        return info
 
     m = _FRAG.search(line)          # HLS overall (frag i/N) wins
     if m and int(m.group(2)):
@@ -281,7 +289,10 @@ def _render_download(title: str, info: dict, tick: int,
         ))
     if info.get("eta"):
         det.append(Text(f"ETA {info['eta']}", style=color("info")))
-    detail = Text("   ").join(det) if det else Text(t("starting…"), style=color("dim"))
+    detail = Text("   ").join(det) if det else Text(
+        t("Fetching torrent metadata…") if info.get("meta") else t("starting…"),
+        style=color("dim"),
+    )
 
     body = [head, Text(""), barline, Text(""), detail]
     if cancel_hint:
@@ -639,7 +650,7 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
 
     tick = 0
     last = {"frac": None, "speed": None, "downloaded": None,
-            "total": None, "eta": None}
+            "total": None, "eta": None, "meta": False}
     seen_ytdlp = False
 
     # ── Batch mode (no display, report to callback) ──────────────────
@@ -661,6 +672,10 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
                 if info["frac"] is not None and use_for_frac and info["frac"] > 0:
                     if last["frac"] is None or info["frac"] >= last["frac"]:
                         last["frac"] = info["frac"]
+                if info.get("meta"):
+                    last["meta"] = True
+                if info.get("frac"):
+                    last["meta"] = False
                 for k in ("speed", "eta", "downloaded", "total"):
                     v = info[k]
                     if v and not re.match(
@@ -709,6 +724,10 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
                         if info["frac"] is not None and use_for_frac and info["frac"] > 0:
                             if last["frac"] is None or info["frac"] >= last["frac"]:
                                 last["frac"] = info["frac"]
+                        if info.get("meta"):
+                            last["meta"] = True
+                        if info.get("frac"):
+                            last["meta"] = False
                         for k in ("speed", "eta", "downloaded", "total"):
                             v = info[k]
                             if v and not re.match(

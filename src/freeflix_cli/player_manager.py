@@ -1622,7 +1622,11 @@ def play_video(
         try:
             from curl_cffi import requests
 
-            r = requests.get(subtitle_url, timeout=10, impersonate="chrome")
+            # Reuse the stream headers : subtitle files often live on the
+            # same hotlink-protected CDN (HiAnime answers 403 HTML without
+            # the embed Referer).
+            r = requests.get(subtitle_url, headers=headers or {},
+                             timeout=10, impersonate="chrome")
             content = r.content
             if len(content or b"") > 5 * 1024 * 1024:
                 raise ValueError("subtitle file too large (>5 MB)")

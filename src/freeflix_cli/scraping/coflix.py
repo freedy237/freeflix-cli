@@ -86,18 +86,9 @@ def _norm_img(src: str) -> str:
     return src
 
 
-def _search_html(query: str) -> list[SearchResult]:
-    """
-    Search via the site's own results page (/?s=…). Each result is a
-    ``.md-manga-card`` whose <a> gives the /film|serie/ URL and whose <img>
-    carries BOTH the poster (src) and the title (alt) — so the preview pane
-    gets real posters, unlike the imageless WP REST endpoint.
-    """
-    page = website_origin.rstrip("/") + "/?s=" + urllib.parse.quote(query)
-    response = _get(page)
-    response.raise_for_status()
-    soup = parse_html(response.text)
-
+def _cards_from_soup(soup) -> list[SearchResult]:
+    """Result cards (anchor /film|serie/ + img alt/src) from any Coflix
+    listing page — shared by text search and the homepage latest grid."""
     results: list[SearchResult] = []
     seen = set()
     for a in soup.find_all("a", href=True):
@@ -118,6 +109,29 @@ def _search_html(query: str) -> list[SearchResult]:
         seen.add(href)
         results.append(SearchResult(title, href, cover, []))
     return results
+
+
+def latest(limit: int = 12) -> list[SearchResult]:
+    """Newest homepage additions (the front-page grid is reverse-chronological)."""
+    try:
+        response = _get(website_origin.rstrip("/") + "/")
+        response.raise_for_status()
+    except Exception:
+        return []
+    return _cards_from_soup(parse_html(response.text))[:limit]
+
+
+def _search_html(query: str) -> list[SearchResult]:
+    """
+    Search via the site's own results page (/?s=…). Each result is a
+    ``.md-manga-card`` whose <a> gives the /film|serie/ URL and whose <img>
+    carries BOTH the poster (src) and the title (alt) — so the preview pane
+    gets real posters, unlike the imageless WP REST endpoint.
+    """
+    page = website_origin.rstrip("/") + "/?s=" + urllib.parse.quote(query)
+    response = _get(page)
+    response.raise_for_status()
+    return _cards_from_soup(parse_html(response.text))
 
 
 def search(query: str) -> list[SearchResult]:

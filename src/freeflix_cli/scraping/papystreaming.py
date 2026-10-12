@@ -22,9 +22,18 @@ from bs4 import BeautifulSoup
 from .config import portals
 
 # Portail hot-patchable (changement de miroir sans release), comme les
-# autres scrapers — avec le domaine actuel en repli.
-BASE = portals.get("papystreaming", "https://papystreaming.fr").rstrip("/")
+# autres scrapers — avec le domaine actuel en repli. Lu à chaque appel
+# (pas à l'import) pour suivre les mises à jour distantes.
+def _base() -> str:
+    return portals.get("papystreaming", "https://papystreaming.fr").rstrip("/")
+
+
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
+
+# True quand la dernière recherche a heurté le mur Cloudflare (plutôt qu'un
+# vrai "aucun résultat") — le handler affiche la marche à suivre au lieu
+# d'un panneau vide.
+blocked_by_cloudflare = False
 
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _CARD = re.compile(r"/(movie|tv)/(\d+)(?:[/?#]|$)")
@@ -47,15 +56,21 @@ def _title_year(anchor, img) -> tuple[str, str]:
 
 def search(query: str) -> list[dict]:
     """Search Papystreaming. Returns [] on any network/parse error."""
+    global blocked_by_cloudflare
     from .. import cloudflare
+    blocked_by_cloudflare = False
+    base = _base()
     try:
         r = cloudflare.cf_get(
             scraper,
-            BASE + "/search?q=" + urllib.parse.quote(query),
-            headers={"Referer": BASE + "/"},
+            base + "/search?q=" + urllib.parse.quote(query),
+            headers={"Referer": base + "/"},
             timeout=15,
         )
         if r is None:
+            return []
+        if cloudflare.is_blocked(r):
+            blocked_by_cloudflare = True
             return []
         r.raise_for_status()
     except Exception:
@@ -85,7 +100,7 @@ def search(query: str) -> list[dict]:
             if poster.startswith("//"):
                 poster = "https:" + poster
             elif poster and not poster.startswith("http"):
-                poster = BASE + "/" + poster.lstrip("/")
+                poster = base + "/" + poster.lstrip("/")
 
         seen.add(key)
         results.append({

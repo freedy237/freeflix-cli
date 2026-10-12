@@ -134,3 +134,191 @@ def test_nyaa_size_detected_by_content():
                 size = _txt
                 break
     assert size == "9.7 GiB"
+
+
+def _hianime_payload(url="https://cdn.example.com/master.m3u8"):
+    import base64, json
+    data = json.dumps({"src": url, "subtitles": [
+        {"label": "English", "src": "https://cdn.example.com/en.vtt"}]})
+    raw = data.encode()
+    key = b"otaku-embed-v1"
+    enc = bytes(c ^ key[i % len(key)] for i, c in enumerate(raw))
+    return base64.b64encode(enc).decode()
+
+
+def test_hianime_full_chain(monkeypatch):
+    from freeflix_cli.scraping import goldenms as _g  # noqa (route helper)
+    from freeflix_cli.scraping import goldenanime as GA
+
+    search_html = (
+        '<div class="flw-item flw-item-big">'
+        '<div class="film-detail">'
+        '<h3 class="film-name"><a href="/watch/solo-leveling-235"'
+        ' title="Solo Leveling">x</a></h3></div></div>'
+    )
+    eps_html = ('<a class="ssl-item ep-item" data-number="1" data-id="4341"'
+                ' href="/watch/solo-leveling-235?ep=4341">')
+    servers_html = (
+        '<div class="item server-item" data-type="sub"'
+        ' data-server-name="ZokoAnime"'
+        ' data-hash="aHR0cHM6Ly9lbWJlZC5leGFtcGxlL3Y="></div>'
+        '<div class="item server-item" data-type="dub"'
+        ' data-server-name="ZokoAnime"'
+        ' data-hash="aHR0cHM6Ly9lbWJlZC5leGFtcGxlL2Q="></div>'
+    )
+    import base64
+    payload = _hianime_payload()
+
+    class _R:
+        def __init__(self, text="", js=None):
+            self.text = text
+            self._js = js
+            self.status_code = 200
+
+        def json(self):
+            return self._js
+
+    def _route(url, **kw):
+        if "/search?" in url:
+            return _R(text=search_html)
+        if "/episode/list/" in url:
+            return _R(js={"html": eps_html})
+        if "/episode/servers" in url:
+            return _R(js={"html": servers_html})
+        return _R(text=f'window.__P="{payload}"')
+
+    monkeypatch.setattr(GA, "_get", _route)
+    g = GA.AnimeExtractor()
+    out = g.search_hianime("Solo Leveling", episode=1)
+    assert len(out) == 2
+    assert {o["source"] for o in out} == {
+        "HiAnime (SUB - ZokoAnime)", "HiAnime (DUB - ZokoAnime)"}
+    assert all(o["type"] == "M3U8" for o in out)
+    assert out[0]["subtitles"] == [
+        {"lang": "English", "url": "https://cdn.example.com/en.vtt"}]
+    assert "Referer" in out[0]["headers"]
+
+
+def test_hianime_no_match_or_episode(monkeypatch):
+    from freeflix_cli.scraping import goldenanime as GA
+
+    class _R:
+        text = "<html></html>"
+        status_code = 200
+
+        def json(self):
+            return {"html": ""}
+
+    monkeypatch.setattr(GA, "_get", lambda *a, **k: _R())
+    g = GA.AnimeExtractor()
+    assert g.search_hianime("No Such Anime 12345") == []
+
+
+def test_hianime_shows_parse(monkeypatch):
+    from freeflix_cli.scraping import goldenanime as GA
+
+    html = (
+        '<div class="flw-item flw-item-big"><div class="film-poster">'
+        '<div class="tick-item tick-sub"><i class="x"></i>12</div>'
+        '<div class="tick-item tick-dub"><i class="x"></i>12</div>'
+        '<img src="https://cdn.example.com/p.png"></div>'
+        '<div class="film-detail"><h3 class="film-name">'
+        '<a href="https://hianime.at/solo-leveling-235"'
+        ' title="Solo Leveling &amp; Co">x</a></h3></div></div>'
+        '<div id="main-sidebar"><div class="film-detail">'
+        '<h3 class="film-name"><a href="https://hianime.at/nope-1"'
+        ' title="Sidebar Dup">x</a></h3></div></div>'
+    )
+
+    class _R:
+        text = html
+        status_code = 200
+
+    monkeypatch.setattr(GA, "_get", lambda *a, **k: _R())
+    shows = GA.AnimeExtractor().search_hianime_shows("Solo Leveling")
+    assert len(shows) == 1  # sidebar dup cut off
+    s = shows[0]
+    assert s["slug"] == "solo-leveling-235"
+    assert s["title"] == "Solo Leveling & Co"
+    assert s["poster"] == "https://cdn.example.com/p.png"
+    assert (s["sub"], s["dub"]) == ("12", "12")
+
+
+def test_hianime_episodes_parse(monkeypatch):
+    from freeflix_cli.scraping import goldenanime as GA
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return {"html": '<a data-number="1" data-id="4341" x>'
+                            '<a data-number="2" data-id="4342" x>'}
+
+    monkeypatch.setattr(GA, "_get", lambda *a, **k: _R())
+    assert GA.AnimeExtractor().get_hianime_episodes(
+        "solo-leveling-235") == [(1, "4341"), (2, "4342")]
+
+
+def test_coflix_latest_uses_homepage_grid(monkeypatch):
+    from freeflix_cli.scraping import coflix
+    html = (
+        "<html><body>"
+        '<a href="https://coflix.ac/film/dune/"><img alt="Dune"'
+        ' src="https://image.tmdb.org/t/p/w500/x.jpg"></a>'
+        '<a href="https://coflix.ac/serie/breaking-bad/"><img alt="Breaking Bad"'
+        ' src="https://image.tmdb.org/t/p/w500/y.jpg"></a>'
+        "</body></html>"
+    )
+
+    class _R:
+        text = html
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(coflix, "_get", lambda *a, **k: _R())
+    monkeypatch.setattr(coflix, "website_origin", "https://coflix.ac")
+    out = coflix.latest(5)
+    assert [r.title for r in out] == ["Dune", "Breaking Bad"]
+
+
+def test_top_catalog_normalizes(monkeypatch):
+    from freeflix_cli.handlers import goldenms as G
+    metas = [{"name": "X", "year": "2026", "id": "tt1",
+              "poster": "https://x/p.jpg"}]
+    monkeypatch.setattr(G, "_cinemeta_json", lambda *a, **k: {"metas": metas})
+    out = G.top_catalog(True, 5)
+    assert out[0]["releaseInfo"] == "2026"
+
+
+def test_anilist_trending_shape(monkeypatch):
+    from freeflix_cli import anilist as A
+    media = [{"id": 1, "title": {"english": "X", "romaji": "Y"}}]
+    monkeypatch.setattr(A.AniListClient, "_query",
+                        lambda self, q, v=None: {"Page": {"media": media}})
+    assert A.AniListClient().trending(3) == media
+
+
+def test_eztv_latest_sorted(monkeypatch):
+    from freeflix_cli.scraping import eztv
+    batch = {"torrents": [
+        {"title": "Old", "filename": "old.mkv", "hash": "A" * 40,
+         "season": 1, "episode": 1, "seeds": 1,
+         "date_released_unix": 100, "size_bytes": 10,
+         "magnet_url": "magnet:?xt=1", "imdb_id": "tt1"},
+        {"title": "New", "filename": "new.mkv", "hash": "B" * 40,
+         "season": 2, "episode": 3, "seeds": 9,
+         "date_released_unix": 200, "size_bytes": 20,
+         "magnet_url": "magnet:?xt=2", "imdb_id": "tt2"},
+    ]}
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return batch
+
+    monkeypatch.setattr(eztv.scraper, "get", lambda *a, **k: _R())
+    out = eztv.latest(5)
+    assert [r["filename"] for r in out] == ["new.mkv", "old.mkv"]

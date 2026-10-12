@@ -49,6 +49,16 @@ _EMOJI = {
     "movie_clap": "🎬",
     "loading": "⏳",
     "offline": "⚠",
+    # Actions (torrent / download flows)
+    "new": "🆕",
+    "list": "☰",
+    "bulb": "💡",
+    # Status correspondences (auto-converted by iconify in nerd mode)
+    "lock": "🔒",
+    "verified": "✅",
+    "arrow_down": "⬇",
+    "books": "📚",
+    "package": "📦",
 }
 
 # Semantic name -> Nerd Font codepoint (Font Awesome range, present in every
@@ -91,6 +101,16 @@ _NERD = {
     "movie_clap": chr(0xF008),  # film
     "loading": chr(0xF252),   # hourglass
     "offline": chr(0xF071),   # exclamation-triangle
+    # Actions (torrent / download flows)
+    "new": chr(0xF0F3),       # bell
+    "list": chr(0xF0CA),      # list-ul
+    "bulb": chr(0xF0EB),      # lightbulb
+    # Status correspondences (auto-converted by iconify in nerd mode)
+    "lock": chr(0xF023),      # lock
+    "verified": chr(0xF058),  # check-circle
+    "arrow_down": chr(0xF063),  # arrow-down (badges keep ✓/⬇/▸ readout)
+    "books": chr(0xF02D),     # book
+    "package": chr(0xF187),   # archive
 }
 
 

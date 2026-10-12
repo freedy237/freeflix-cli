@@ -34,6 +34,7 @@ class AnimeExtractor:
         self.allanime_referer = portals.get("allanime-referer", "https://allmanga.to")
         self.allanime_base = portals.get("allanime-base", "https://allanime.day")
         self.anizone_base = portals.get("anizone", "https://anizone.to")
+        self.hianime_base = portals.get("hianime", "https://hianime.at")
 
         self.headers = {
             "Referer": self.sudatchi_base + "/",
@@ -345,12 +346,228 @@ class AnimeExtractor:
         except Exception:
             return []
 
+    def search_hianime_shows(self, title):
+        """HiAnime catalogue search → [{slug, title, poster, sub, dub}]."""
+        import html as _html
+        import urllib.parse as _up
+
+        base = (self.hianime_base or "https://hianime.at").rstrip("/")
+        out = []
+        try:
+            r = _get(f"{base}/search?keyword={_up.quote(title or '')}",
+                     timeout=12)
+            if r.status_code != 200:
+                return out
+            txt = r.text or ""
+            # The top-10 sidebar repeats result markup — cut it off first
+            # (same trick as ani-cli).
+            txt = txt.split('id="main-sidebar"')[0]
+            # One flw-item block per result : poster + ticks + film-detail.
+            blocks = re.split(r'<div class="flw-item', txt)[1:]
+            for b in blocks:
+                m = re.search(
+                    r'<a href="[^"]*/([^"/]*)"[^>]*title="([^"]*)"', b)
+                if not m:
+                    continue
+                slug = m.group(1)
+                name = _html.unescape(m.group(2)).strip()
+                if not slug or not name:
+                    continue
+                im = re.search(r'<img[^>]+src="([^"]+)"', b)
+                sub = re.search(r'tick-sub">\s*<i[^>]*></i>\s*(\d+)', b)
+                dub = re.search(r'tick-dub">\s*<i[^>]*></i>\s*(\d+)', b)
+                out.append({
+                    "slug": slug,
+                    "title": name,
+                    "poster": im.group(1) if im else "",
+                    "sub": sub.group(1) if sub else "",
+                    "dub": dub.group(1) if dub else "",
+                })
+        except Exception:
+            pass
+        return out
+
+    def latest_hianime(self, limit: int = 15):
+        """Latest-Episode homepage section → [{slug, title, poster, ep}]."""
+        import html as _html
+
+        base = (self.hianime_base or "https://hianime.at").rstrip("/")
+        out = []
+        try:
+            r = _get(f"{base}/home", timeout=12)
+            if r.status_code != 200:
+                return out
+            txt = r.text or ""
+            i = txt.find("Latest Episode")
+            seg = txt[i:i + 40000] if i >= 0 else ""
+            # Cut at the next section header so only this shelf is read.
+            nxt = re.search(r"<h2[^>]*>", seg[100:])
+            if nxt:
+                seg = seg[:100 + nxt.start()]
+            for m in re.finditer(
+                    r'<a href="(?:https?://[^/]+)?/([^"/]*-[0-9]+)"[^>]*'
+                    r'title="([^"]*)"', seg):
+                slug = m.group(1)
+                if any(s["slug"] == slug for s in out):
+                    continue
+                name = _html.unescape(m.group(2)).strip()
+                em = re.search(
+                    r'<a href="(?:https?://[^/]+)?/' + re.escape(slug) +
+                    r'"[^>]{0,400}?<img[^>]+src="([^"]+)"', seg)
+                if not em:
+                    # Poster usually precedes the link in the same item.
+                    pos = m.start()
+                    im = re.findall(r'<img[^>]+src="([^"]+)"',
+                                    seg[max(0, pos - 1500):pos])
+                    poster = im[-1] if im else ""
+                else:
+                    poster = em.group(1)
+                ep = ""
+                # Episode badge near the link (E12 / EP 12 …), best effort.
+                bem = re.search(r"[Ee][Pp]?\s*(\d{1,4})",
+                                seg[m.start():m.start() + 600])
+                if bem:
+                    ep = bem.group(1)
+                out.append({"slug": slug, "title": name or slug,
+                            "poster": poster, "sub": "", "dub": "",
+                            "ep": ep})
+                if len(out) >= limit:
+                    break
+        except Exception:
+            pass
+        return out
+
+    def get_hianime_episodes(self, slug):
+        """[(episode_number, episode_id)] for a HiAnime show slug."""
+        base = (self.hianime_base or "https://hianime.at").rstrip("/")
+        try:
+            m = re.search(r"-(\d+)$", slug or "")
+            if not m:
+                return []
+            r = _get(f"{base}/api/theme/episode/list/{m.group(1)}",
+                     timeout=12)
+            html = r.json().get("html", "")
+            eps = re.findall(r'data-number="(\d+)"[^>]*data-id="(\d+)"', html)
+            return [(int(n), e) for n, e in eps]
+        except Exception:
+            return []
+
+    def extract_hianime_episode(self, slug, episode=1):
+        """Streams for one HiAnime show slug + episode number."""
+        import base64 as _b64
+
+        base = (self.hianime_base or "https://hianime.at").rstrip("/")
+        results = []
+        try:
+            eps = self.get_hianime_episodes(slug)
+            ep_id = None
+            for num, eid in eps:
+                if str(num) == str(episode):
+                    ep_id = eid
+                    break
+            if not ep_id:
+                return []
+            r = _get(
+                f"{base}/api/theme/episode/servers?episodeId={ep_id}",
+                timeout=12,
+            )
+            try:
+                servers_html = r.json().get("html", "")
+            except Exception:
+                return []
+
+            for lang in ("sub", "dub"):
+                # ZokoAnime first (known payload layout), HD-1 as fallback.
+                for server_name in ("ZokoAnime", "HD-1"):
+                    try:
+                        hm = re.search(
+                            r'data-type="' + lang + r'"[^>]*data-server-name="'
+                            + re.escape(server_name) + r'"[^>]*data-hash="([^"]*)"',
+                            servers_html,
+                        )
+                        if not hm:
+                            continue
+                        embed = _b64.b64decode(hm.group(1)).decode("utf-8")
+                        origin = embed.split("/")[2]
+                        headers = {
+                            "Referer": f"https://{origin}/",
+                            "Origin": f"https://{origin}",
+                        }
+                        er = _get(embed, headers=headers, timeout=12)
+                        bm = re.search(r'window\.__P="([^"]*)"', er.text or "")
+                        if not bm:
+                            continue
+                        raw = _b64.b64decode(bm.group(1))
+                        key = b"otaku-embed-v1"
+                        dec = bytes(
+                            c ^ key[i % len(key)] for i, c in enumerate(raw)
+                        ).decode("utf-8")
+                        data = json.loads(dec)
+                        stream_url = data.get("src")
+                        if not stream_url:
+                            continue
+                        subs = [
+                            {"lang": s.get("label") or s.get("lang"),
+                             "url": s.get("src") or s.get("url")}
+                            for s in (data.get("subtitles") or [])
+                            if isinstance(s, dict)
+                            and (s.get("src") or s.get("url"))
+                        ]
+                        results.append(
+                            {
+                                "source": f"HiAnime ({lang.upper()} - {server_name})",
+                                "quality": "Multi",
+                                "url": stream_url,
+                                "type": "M3U8",
+                                "headers": headers,
+                                "subtitles": subs or None,
+                            }
+                        )
+                        break  # one working server per language is enough
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return results
+
+    def search_hianime(self, title, episode=1):
+        """Extraction from HiAnime (ani-cli's provider, sub + dub).
+
+        Chain : search page → episodes API → servers API → embed page →
+        ``window.__P`` payload (base64 of JSON XOR ``otaku-embed-v1``) →
+        master m3u8 + subtitles. Pure stdlib decode, no browser.
+        """
+        results = []
+        try:
+            shows = self.search_hianime_shows(title)
+            if not shows:
+                return []
+            t_lower = (title or "").lower().strip()
+            slug = None
+            for sh in shows:
+                if (sh.get("title") or "").lower().strip() == t_lower:
+                    slug = sh["slug"]
+                    break
+            if not slug:
+                for sh in shows:
+                    if t_lower and t_lower in (sh.get("title") or "").lower():
+                        slug = sh["slug"]
+                        break
+            if not slug:
+                slug = shows[0]["slug"]
+            results = self.extract_hianime_episode(slug, episode)
+        except Exception:
+            pass
+        return results
+
     def extract_vo(self, title=None, anilist_id=None, episode=1):
         """Search, deduplication, and sorting."""
         results = []
 
         if anilist_id:
             results.extend(self.search_sudatchi(anilist_id, episode))
+        if title:
+            results.extend(self.search_hianime(title, episode))
         if title:
             results.extend(self.search_anizone(title, episode))
         if title and anilist_id:

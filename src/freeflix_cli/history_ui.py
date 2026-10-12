@@ -13,6 +13,7 @@ from .handlers import (
     french_manga,
     goldenanime,
     goldenms,
+    hianime,
 )
 from .i18n import t
 
@@ -47,6 +48,8 @@ def handle_resume(data, show_poster=True):
         french_manga.resume_french_manga(data)
     elif provider == "GoldenAnime":
         goldenanime.resume_goldenanime(data)
+    elif provider == "HiAnime":
+        hianime.resume_hianime(data)
     elif provider == "GoldenMS":
         goldenms.resume_goldenms(data)
 
@@ -85,6 +88,8 @@ def handle_history():
                 else:
                     text = f"[{provider}] {series} - {episode}"
             elif provider == "GoldenAnime":
+                text = f"[{provider}] {series} - {episode}"
+            elif provider == "HiAnime":
                 text = f"[{provider}] {series} - {episode}"
             elif provider == "GoldenMS":
                 if season == "Movie" or episode == "Movie":

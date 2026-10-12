@@ -50,6 +50,21 @@ def search_cinemeta(title: str, is_movie: bool):
         return []
 
 
+def top_catalog(is_movie: bool, limit: int = 20):
+    """Trending-now catalog (no query needed) for the Latest view."""
+    media_type = "movie" if is_movie else "series"
+    url = (f"https://v3-cinemeta.strem.io/catalog/{media_type}/top.json")
+    try:
+        metas = _cinemeta_json(url, ttl=1800).get("metas", []) or []
+    except Exception:
+        return []
+    # Normalize display fields the result list expects.
+    for m in metas:
+        if isinstance(m, dict) and not m.get("releaseInfo") and m.get("year"):
+            m["releaseInfo"] = str(m["year"])
+    return metas[:limit]
+
+
 def get_cinemeta_details(imdb_id: str, is_movie: bool):
     """Get full metadata including TMDB ID from Cinemeta."""
     media_type = "movie" if is_movie else "series"
@@ -85,17 +100,36 @@ def handle_goldenms():
 
     is_movie = c_idx == 0
 
-    title = get_user_input(
-        t("Enter Movie title") if is_movie else t("Enter Series title"),
-        header=f"{icon('star')} GoldenMS (Movies & Series)",
-        history=tracker.get_search_history(),
+    mode = select_from_list(
+        [f"{icon('new')} {t('Latest uploads')}",
+         f"{icon('search')} {t('Search by title')}", t("← Back")],
+        f"{icon('star')} GoldenMS (Movies & Series)",
     )
-    if not title:
+    if mode == 2:
         return
-    tracker.add_search_query(title)
 
-    print_info(f"{t('Searching Cinemeta for')} '{title}'...")
-    metas = search_cinemeta(title, is_movie)
+    if mode == 0:
+        print_info(f"{t('Loading latest movies…')}")
+        metas = top_catalog(is_movie)
+        title = ""
+    else:
+        title = get_user_input(
+            t("Enter Movie title (blank = latest)") if is_movie
+            else t("Enter Series title (blank = latest)"),
+            header=f"{icon('star')} GoldenMS (Movies & Series)",
+            history=tracker.get_search_history(),
+        )
+        if title and not title.lower() == "exit":
+            tracker.add_search_query(title)
+        if title and title.lower() == "exit":
+            return
+
+        if not title:
+            print_info(f"{t('Loading latest movies…')}")
+            metas = top_catalog(is_movie)
+        else:
+            print_info(f"{t('Searching Cinemeta for')} '{title}'...")
+            metas = search_cinemeta(title, is_movie)
 
     if not metas:
         print_warning(t("No results found."))
