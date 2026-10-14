@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.12.7
+
+- **Correctif Python 3.9** : `str | None` évalué à l'import cassait toutes
+  les installations en 3.9 (CI ubuntu+windows) — remplacé par `Optional`.
+  Balayage complet : aucune autre syntaxe 3.10+ évaluée au runtime.
+- Correctifs CI : import `Group` manquant sur le dashboard vide (nouveaux
+  utilisateurs), test du repli étroit insensible à la console Windows
+  legacy (coins carrés).
+
 ## 1.12.6
 
 - **Xpass réparé (GoldenMS)** : nouveau protocole reversé (endpoint

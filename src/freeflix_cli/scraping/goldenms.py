@@ -1,6 +1,7 @@
 from curl_cffi import requests as cffi_requests
 import urllib.parse
 import re
+from typing import Optional
 from .config import portals
 from ..net_config import DNS_OPTIONS
 
@@ -289,7 +290,7 @@ class MediaExtractor:
             pass
         return []
 
-    def _mapple_token(self, referer: str) -> str | None:
+    def _mapple_token(self, referer: str) -> Optional[str]:
         """Fetch a request token (2026-10 flow).
 
         The watch page no longer embeds ``window.__REQUEST_TOKEN__`` — the
