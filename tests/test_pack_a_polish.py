@@ -109,7 +109,10 @@ def test_neon_panel_light_travels_and_falls_back():
 
     narrow = Console(width=30, force_terminal=True, record=True)
     narrow.print(NeonPanel("hi", title="T", clock=lambda: 0.0))
-    assert "╭" in narrow.export_text()
+    # Narrow terminals fall back to a plain bordered panel (Rich may swap
+    # rounded corners for square ones on legacy Windows consoles).
+    _narrow_out = narrow.export_text()
+    assert "─" in _narrow_out and "│" in _narrow_out and "T" in _narrow_out
 
     # The real home dashboard returns a NeonPanel.
     assert isinstance(_home_dashboard(), NeonPanel)

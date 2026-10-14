@@ -394,6 +394,8 @@ def _home_dashboard():
     only if it's already in the render cache (warmed in the background), so the
     home stays instant.
     """
+    from rich.console import Group
+    from rich.table import Table
     from rich.text import Text
     from .themes import color
 
@@ -418,8 +420,6 @@ def _home_dashboard():
     topline = _LiveStatsLine(stats, in_progress, len(_new), streak_pop)
 
     if history:
-        from rich.console import Group
-        from rich.table import Table
         from .player_manager import episode_progress
         cont = Text(f"  {icon('play')} {t('Continue watching')}",
                     style=f"bold {color('header')}")
