@@ -18,7 +18,7 @@ from ..i18n import t
 from .. import terminal_image
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 from ..player_manager import episode_badges
-from ..cli_utils import spinner
+from ..cli_utils import skeleton, spinner
 
 
 def handle_coflix():
@@ -35,7 +35,7 @@ def handle_coflix():
             break
         tracker.add_search_query(query)
 
-        with spinner(f"{t('Searching for')} {query}…"):
+        with skeleton(f"{t('Searching for')} {query}…"):
             try:
                 results = coflix.search(query)
             except Exception as e:

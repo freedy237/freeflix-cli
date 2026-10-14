@@ -332,6 +332,60 @@ def _progress_bar_text(pct: int, width: int = 14):
     return t
 
 
+class _LiveStatsLine:
+    """First dashboard line, rebuilt on EVERY repaint: greeting + a LIVE
+    clock (HH:MM ticks while the menu idles) + cached counters. Numbers are
+    frozen at build (they can't change mid-menu) — only the clock moves."""
+
+    def __init__(self, stats, in_progress, new_count, streak_pop):
+        self._stats = stats
+        self._in_progress = in_progress
+        self._new = new_count
+        self._pop = streak_pop
+
+    def __rich_console__(self, console, options):
+        from rich.text import Text
+        from datetime import datetime
+        from .themes import color as _color
+
+        stats = self._stats
+        now = datetime.now()
+        hour = now.hour
+        greet = (t("Good night") if hour < 6 else t("Good morning") if hour < 12
+                 else t("Good afternoon") if hour < 18 else t("Good evening"))
+        line = Text()
+        line.append(f"  {greet} · {now.strftime('%H:%M')}    ",
+                    style=f"bold {_color('accent')}")
+        line.append(f"{icon('stats')} {t('This week')}: ", style=_color("dim"))
+        line.append(f"{stats['this_week']}", style=f"bold {_color('info')}")
+        line.append(f"    {icon('fire')} {t('Streak')}: ", style=_color("dim"))
+        # A fresh record pops in bright white for this whole home visit.
+        _flame = "bold bright_white" if self._pop else f"bold {_color('warning')}"
+        line.append(f"{stats['streak']}", style=_flame)
+        line.append(f"    {icon('play')} {t('In progress')}: ", style=_color("dim"))
+        line.append(f"{self._in_progress}", style=f"bold {_color('success')}")
+        # 7-day activity sparkline from the local watch log (no network).
+        try:
+            from datetime import timedelta, date as _date
+            _today = _date.today()
+            _counts = [
+                stats["by_day"].get((_today - timedelta(days=i)).isoformat(), 0)
+                for i in range(6, -1, -1)
+            ]
+            _mx = max(_counts) or 1
+            _levels = "▁▂▃▄▅▆▇"
+            _spark = "".join(_levels[min(6, int(c / _mx * 6))] for c in _counts)
+            line.append(f"    {t('Week activity')}: ", style=_color("dim"))
+            line.append(f"{_spark}", style=_color("accent"))
+        except Exception:
+            pass
+        if self._new:
+            line.append(f"    {icon('sparkle')} {t('New releases')}: ",
+                        style=_color("dim"))
+            line.append(f"{self._new}", style=f"bold {_color('accent')}")
+        yield from line.__rich_console__(console, options)
+
+
 def _home_dashboard():
     """
     The enriched home 'wow' panel: a greeting, a quick stats line and a
@@ -340,54 +394,34 @@ def _home_dashboard():
     only if it's already in the render cache (warmed in the background), so the
     home stays instant.
     """
-    from rich.panel import Panel
     from rich.text import Text
-    from rich import box
     from .themes import color
-    from datetime import datetime
 
     stats = tracker.get_stats()
     history = tracker.get_history()
     in_progress = len(tracker.data.get("episode_positions", {}))
-
-    hour = datetime.now().hour
-    greet = (t("Good night") if hour < 6 else t("Good morning") if hour < 12
-             else t("Good afternoon") if hour < 18 else t("Good evening"))
-
-    body = Text()
-    body.append(f"  {greet}    ", style=f"bold {color('accent')}")
-    body.append(f"{icon('stats')} {t('This week')}: ", style=color("dim"))
-    body.append(f"{stats['this_week']}", style=f"bold {color('info')}")
-    body.append(f"    {icon('fire')} {t('Streak')}: ", style=color("dim"))
-    body.append(f"{stats['streak']}", style=f"bold {color('warning')}")
-    body.append(f"    {icon('play')} {t('In progress')}: ", style=color("dim"))
-    body.append(f"{in_progress}", style=f"bold {color('success')}")
-    # 7-day activity sparkline from the local watch log (no network).
-    try:
-        from datetime import timedelta, date as _date
-        _today = _date.today()
-        _counts = [
-            stats["by_day"].get((_today - timedelta(days=i)).isoformat(), 0)
-            for i in range(6, -1, -1)
-        ]
-        _mx = max(_counts) or 1
-        _levels = "▁▂▃▄▅▆▇"
-        _spark = "".join(_levels[min(6, int(c / _mx * 6))] for c in _counts)
-        body.append(f"    {t('Week activity')}: ", style=color("dim"))
-        body.append(f"{_spark}", style=color("accent"))
-    except Exception:
-        pass
     from . import recent
     _new = recent.get_items()
-    if _new:
-        body.append(f"    {icon('sparkle')} {t('New releases')}: ", style=color("dim"))
-        body.append(f"{len(_new)}", style=f"bold {color('accent')}")
+
+    # Fresh streak record → the flame pops bright for this home visit.
+    try:
+        _last = int(tracker.data.get("ui_last_streak") or 0)
+    except Exception:
+        _last = 0
+    streak_pop = stats["streak"] > _last
+    try:
+        tracker.data["ui_last_streak"] = stats["streak"]
+        tracker._save_data()
+    except Exception:
+        pass
+
+    topline = _LiveStatsLine(stats, in_progress, len(_new), streak_pop)
 
     if history:
         from rich.console import Group
         from rich.table import Table
         from .player_manager import episode_progress
-        body.append(f"\n\n  {icon('play')} {t('Continue watching')}",
+        cont = Text(f"  {icon('play')} {t('Continue watching')}",
                     style=f"bold {color('header')}")
 
         # A borderless grid so title, meta and bar line up in clean columns
@@ -411,18 +445,21 @@ def _home_dashboard():
             else:
                 bar_cell = Text("")
             grid.add_row(title_cell, meta_cell, bar_cell)
-        inner = Group(body, Text(""), grid)
-        return Panel(inner, border_style=color("accent"), expand=True, box=box.ROUNDED,
-                     padding=(1, 2), title="[bold]FreeFlix[/bold]", title_align="left",
-                     subtitle=f"[{color('dim')}]{t('anime · manga · movies · series')}[/]",
-                     subtitle_align="right")
+        inner = Group(topline, Text(""), cont, Text(""), grid)
+        from .neon import NeonPanel
+        return NeonPanel(inner, border_style=color("accent"),
+                         title="FreeFlix", title_style=f"bold {color('accent')}",
+                         subtitle=t('anime · manga · movies · series'),
+                         subtitle_style=color("accent"))
 
-    body.append(f"\n\n  {t('Nothing watched yet — pick a source below to start!')}",
-                style=color("dim"))
-    return Panel(body, border_style=color("accent"), expand=True, box=box.ROUNDED,
-                 padding=(1, 2), title="[bold]FreeFlix[/bold]", title_align="left",
-                 subtitle=f"[{color('dim')}]{t('anime · manga · movies · series')}[/]",
-                 subtitle_align="right")
+    nothing = Text(f"  {t('Nothing watched yet — pick a source below to start!')}",
+                   style=color("dim"))
+    inner = Group(topline, Text(""), nothing)
+    from .neon import NeonPanel
+    return NeonPanel(inner, border_style=color("accent"),
+                     title="FreeFlix", title_style=f"bold {color('accent')}",
+                     subtitle=t('anime · manga · movies · series'),
+                     subtitle_style=color("accent"))
 
 
 def _theme_preview_panel(theme: dict, title: str):

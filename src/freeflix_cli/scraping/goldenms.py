@@ -15,6 +15,38 @@ def _get(url, **kw):
     """Cloudflare-aware GET (cf_clearance + FlareSolverr cascade)."""
     return cloudflare.cf_get(scraper, url, **kw)
 
+
+# Xpass /data/* crypto (reversed 2026-10 from their player bundle) : the
+# endpoint answers an AES-256-GCM blob (base64url, iv = first 12 bytes)
+# keyed by SHA256("spv3-data-response|<build>|<path>|<token>").
+_XPASS_KEY_PREFIX = "spv3-data-response|spv3-build-1787821613-50e5fc97c9dce367|"
+
+
+def _xpass_decrypt_data(body: str, path: str, token: str):
+    """Decrypt an Xpass /data/* response body → parsed JSON (or None)."""
+    import base64 as _b64
+    import hashlib as _hl
+    import json as _json
+
+    try:
+        parts = (token or "").split(".")
+        if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[1]):
+            return None
+        key = bytes.fromhex(_hl.sha256(
+            (_XPASS_KEY_PREFIX + path + "|" + token).encode()
+        ).hexdigest())
+        b64 = (body or "").strip().replace("-", "+").replace("_", "/")
+        b64 += "=" * ((4 - len(b64) % 4) % 4)
+        raw = _b64.b64decode(b64)
+        if len(raw) <= 12 + 16:
+            return None
+        from Crypto.Cipher import AES as _AES
+        plain = _AES.new(key, _AES.MODE_GCM, nonce=raw[:12]
+                         ).decrypt_and_verify(raw[12:-16], raw[-16:])
+        return _json.loads(plain.decode("utf-8"))
+    except Exception:
+        return None
+
 class MediaExtractor:
     """
     Movie and Series extractor based on CineStream.
@@ -257,6 +289,44 @@ class MediaExtractor:
             pass
         return []
 
+    def _mapple_token(self, referer: str) -> str | None:
+        """Fetch a request token (2026-10 flow).
+
+        The watch page no longer embeds ``window.__REQUEST_TOKEN__`` — the
+        frontend bootstraps it via ``POST /api/request-token`` (no body,
+        ``Accept: application/json``) which answers
+        ``{"token": …, "expiresIn"|"expiresAt": …}``. Returns the token or
+        None (Cloudflare may captcha API routes for some IPs — the caller
+        then yields no sources instead of crashing).
+        """
+        import time as _time
+
+        try:
+            r = scraper.post(
+                f"{self.mapple_api}/api/request-token",
+                headers={
+                    "User-Agent": scraper.headers.get("User-Agent", "Mozilla/5.0"),
+                    "Referer": referer,
+                    "Origin": self.mapple_api,
+                    "Accept": "application/json",
+                },
+                timeout=10,
+            )
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            if not isinstance(data, dict):
+                return None
+            token = data.get("token")
+            if not isinstance(token, str) or len(token) < 3:
+                return None
+            exp = data.get("expiresAt")
+            if isinstance(exp, (int, float)) and exp <= _time.time() * 1000:
+                return None
+            return token
+        except Exception:
+            return None
+
     def search_mapple(self, tmdb_id, season=None, episode=None):
         """Extraction via Mapple."""
         if not tmdb_id:
@@ -269,20 +339,29 @@ class MediaExtractor:
         }
 
         try:
-            # 1. Get Token
+            # 1. Get Token (request-token bootstrap; the watch page no longer
+            # embeds one).
             media_type = "movie" if season is None else "tv"
             tv_slug = f"{season}-{episode}" if season else ""
             watch_url = f"{base_url}/watch/{media_type}/{tmdb_id}"
             if season:
                 watch_url += f"/{tv_slug}"
 
-            r = _get(watch_url, headers=headers, timeout=10)
-            token_match = re.search(
-                r"window\.__REQUEST_TOKEN__\s*=\s*[\"']([^\"']+)[\"']", r.text
-            )
-            if not token_match:
+            token = self._mapple_token(watch_url)
+            if not token:
+                # Legacy fallback: an embedded token, if the layout ever
+                # carries one again.
+                try:
+                    r = _get(watch_url, headers=headers, timeout=10)
+                    token_match = re.search(
+                        r"window\.__REQUEST_TOKEN__\s*=\s*[\"']([^\"']+)[\"']",
+                        r.text or "",
+                    )
+                    token = token_match.group(1) if token_match else None
+                except Exception:
+                    token = None
+            if not token:
                 return []
-            token = token_match.group(1)
 
             # 2. Extract Streams (Iterate through sources)
             sources = [
@@ -349,7 +428,16 @@ class MediaExtractor:
             return []
 
     def search_xpass(self, tmdb_id, season=None, episode=None):
-        """Extraction via Xpass."""
+        """Extraction via Xpass (2026-10 layout).
+
+        The old ``href="…/playlist/…"`` links are gone. The embed page now
+        carries ``var dataUrl="/data/movie|tv/…?token=…"`` ; that endpoint
+        returns an AES-256-GCM blob (see :func:`_xpass_decrypt_data`).
+        Decrypted JSON is a list of ``{name, url: /mdata/…/playlist.json}``
+        and each playlist.json holds the direct ``file`` (m3u8) entries.
+        """
+        from concurrent.futures import ThreadPoolExecutor as _Pool
+
         if not tmdb_id:
             return []
 
@@ -361,39 +449,62 @@ class MediaExtractor:
                 else f"{base_url}/e/tv/{tmdb_id}/{season}/{episode}"
             )
             r = _get(embed_url, headers={"Referer": f"{base_url}/"}, timeout=10)
+            m = re.search(r'var dataUrl="([^"]+)"', r.text or "")
+            if not m:
+                return []
+            data_url = m.group(1)
+            if not data_url.startswith("http"):
+                data_url = base_url + data_url
 
-            # Extract backups/sources via regex
-            import html as _html
-            matches = [
-                _html.unescape(m)
-                for m in re.findall(r'href=["\']([^"\']+/playlist/[^"\']+)["\']', r.text)
-            ]
-            results = []
+            body = (
+                _get(data_url, headers={"Referer": embed_url},
+                     timeout=10).text or ""
+            ).strip()
+            if not body:
+                return []
+            q = urllib.parse.urlparse(data_url)
+            token = (urllib.parse.parse_qs(q.query).get("token") or [""])[0]
+            entries = _xpass_decrypt_data(body, q.path, token)
+            if not isinstance(entries, list):
+                return []
 
-            for url in matches:
-                full_url = url if url.startswith("http") else f"{base_url}{url}"
+            headers = {"Referer": f"{base_url}/"}
+
+            def _one(entry):
+                if not isinstance(entry, dict):
+                    return []
+                name = entry.get("name") or "Xpass"
+                pl = entry.get("url") or ""
+                if not pl:
+                    return []
+                if not pl.startswith("http"):
+                    pl = base_url + pl
                 try:
-                    r_json = _get(full_url, timeout=10).json()
-                    playlist = r_json.get("playlist", [])[0]
-                    sources = playlist.get("sources", [])
-                    for src in sources:
-                        file_url = src.get("file")
-                        if file_url:
-                            results.append(
-                                {
-                                    "source": "Xpass",
-                                    "quality": "Multi",
-                                    "url": file_url,
-                                    "type": (
-                                        "M3U8"
-                                        if "m3u8" in file_url.lower()
-                                        else "VIDEO"
-                                    ),
-                                    "headers": {"Referer": f"{base_url}/"},
-                                }
-                            )
+                    data = _get(pl, headers=headers, timeout=10).json()
                 except Exception:
-                    continue
+                    return []
+                out = []
+                for item in (data.get("playlist") or []) if isinstance(data, dict) else []:
+                    for src in (item.get("sources") or []) if isinstance(item, dict) else []:
+                        if not isinstance(src, dict):
+                            continue
+                        file_url = src.get("file")
+                        if not file_url:
+                            continue
+                        out.append({
+                            "source": f"Xpass ({name})",
+                            "quality": src.get("label") or "Multi",
+                            "url": file_url,
+                            "type": ("M3U8" if "m3u8" in file_url.lower()
+                                     else "VIDEO"),
+                            "headers": dict(headers),
+                        })
+                return out
+
+            results = []
+            with _Pool(max_workers=6) as _pool:
+                for chunk in _pool.map(_one, entries):
+                    results.extend(chunk)
             return results
         except Exception:
             return []

@@ -55,15 +55,40 @@ def _tip_of_the_day() -> str:
 
 
 # ─── Bars ─────────────────────────────────────────────────────────────
+def _reveal(text: str, t0: float = None, cps: float = 45.0) -> str:
+    """Typewriter reveal: prefix of ``text`` typed at ``cps`` chars/sec
+    since ``t0`` (monotonic). Full text once done or when ``t0`` is None."""
+    try:
+        if t0 is None:
+            return text
+        n = int(max(0.0, time.monotonic() - t0) * cps)
+        return text if n >= len(text) else text[:max(1, n)]
+    except Exception:
+        return text
+
+
 def bar(frac: float, width: int = 26) -> Text:
-    """A determinate ▰▰▱ bar for ``frac`` in [0, 1], themed."""
+    """A determinate ▰▰▱ bar for ``frac`` in [0, 1], themed.
+
+    The fill carries a slow marching highlight (two bright cells gliding
+    along the filled region) so every bar in the app feels alive on each
+    repaint — same plain text, only styles move."""
+    import time as _time
+
     try:
         frac = max(0.0, min(1.0, float(frac)))
     except (TypeError, ValueError):
         frac = 0.0
     n = int(round(frac * width))
     t = Text()
-    t.append(FILLED * n, style=color("accent"))
+    try:
+        march = int(_time.monotonic() * 4) % 6
+    except Exception:
+        march = 0
+    for i in range(n):
+        t.append(FILLED,
+                 style="bold bright_white" if (i + march) % 6 < 2
+                 else color("accent"))
     t.append(EMPTY * (width - n), style=color("dim"))
     return t
 
@@ -127,6 +152,7 @@ class LoadingScreen:
                               refresh_per_second=20, screen=True, transient=True)
             self._live.start()
             self._active = True
+            self._t0 = time.monotonic()
             self._thread = threading.Thread(target=self._animate, daemon=True)
             self._thread.start()
         except Exception:
@@ -176,7 +202,9 @@ class LoadingScreen:
         w = console.size.width
         h = console.size.height
         from . import splash
-        body = [splash.logo_renderable(w, h), Text("")]
+        track = self._disp_frac
+        body = [splash.logo_renderable(w, h, animate=True, tick=self._tick),
+                Text("")]
         body.append(Align.center(splash.tagline_text(w)))
         if self.version:
             body.append(Align.center(Text(f"v{self.version}", style=color("dim"))))
@@ -191,6 +219,7 @@ class LoadingScreen:
         tip = _tip_of_the_day()
         if tip:
             from .icons import icon
+            tip = _reveal(tip, getattr(self, "_t0", None))
             body.append(Align.center(
                 Text(f"{icon('bulb')} {tip}", style=color("dim"))))
 

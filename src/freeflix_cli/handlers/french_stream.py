@@ -9,6 +9,7 @@ from ..cli_utils import (
     get_user_input,
     console,
     pause,
+    skeleton,
     spinner,
     crumb,
 )
@@ -40,7 +41,7 @@ def handle_french_stream():
     if not query or query.lower() == "exit":
         return
 
-    with spinner(f"{t('Searching for')} {query}…"):
+    with skeleton(f"{t('Searching for')} {query}…"):
         results = french_stream.search(query)
 
     if not results:

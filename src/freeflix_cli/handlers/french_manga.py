@@ -8,6 +8,7 @@ from ..cli_utils import (
     print_warning,
     get_user_input,
     pause,
+    skeleton,
     spinner,
 )
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
@@ -76,7 +77,7 @@ def handle_french_manga():
         return
     tracker.add_search_query(query)
 
-    with spinner(f"{t('Searching for')} {query}…"):
+    with skeleton(f"{t('Searching for')} {query}…"):
         results = french_manga.search(query)
     if not results:
         print_warning(t("No results found."))

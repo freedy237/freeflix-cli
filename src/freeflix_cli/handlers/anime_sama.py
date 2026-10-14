@@ -9,6 +9,7 @@ from ..cli_utils import (
     print_error,
     get_user_input,
     pause,
+    skeleton,
     spinner,
     crumb,
 )
@@ -137,7 +138,7 @@ def handle_anime_sama():
         return
 
     try:
-        with spinner(f"{t('Searching for')} {query}…"):
+        with skeleton(f"{t('Searching for')} {query}…"):
             results = anime_sama.search(query)
     except Exception as e:
         print_error(f"{t('Search failed (network/source issue):')} {type(e).__name__}")

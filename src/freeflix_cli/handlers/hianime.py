@@ -15,6 +15,7 @@ from ..cli_utils import (
     print_success,
     get_user_input,
     pause,
+    skeleton,
     spinner,
     crumb,
 )
@@ -113,10 +114,10 @@ def handle_hianime():
             return
 
     if from_latest:
-        with spinner(f"{t('Loading latest movies…')}"):
+        with skeleton(f"{t('Loading latest movies…')}"):
             shows = goldenanime.latest_hianime(15)
     else:
-        with spinner(f"{t('Searching for')} {query}…"):
+        with skeleton(f"{t('Searching for')} {query}…"):
             shows = goldenanime.search_hianime_shows(query)
     if not shows:
         print_warning(t("No results found."))

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.12.6
+
+- **Xpass réparé (GoldenMS)** : nouveau protocole reversé (endpoint
+  `/data/…` chiffré AES-256-GCM, clé SHA256) — 20 à 30 sources par film,
+  vérifiées jouables. Mapple bascule sur le bootstrap `request-token`.
+- **Interface vivante** : reflet en boucle sur le logo du splash (lettres
+  seules), comète à traîne dégradée autour du panneau d'accueil (titre et
+  sous-titre en couleur du thème, espacements symétriques), curseur qui
+  respire, horloge HH:MM, barres à reflet défilant, skeletons shimmer sur
+  les 13 chargements de listes, tip en machine à écrire, pop de streak,
+  toasts de fin de download + cloche, titre d'onglet live (▶ + EQ) pendant
+  la lecture mpv.
+- **Dood** : miroir `d000d.com` reconnu.
+
 ## 1.12.5
 
 - **Anime anglais (VO sous-titrée)** : HiAnime ajouté en 1er (recommandé), puis

@@ -322,3 +322,95 @@ def test_eztv_latest_sorted(monkeypatch):
     monkeypatch.setattr(eztv.scraper, "get", lambda *a, **k: _R())
     out = eztv.latest(5)
     assert [r["filename"] for r in out] == ["new.mkv", "old.mkv"]
+
+
+def test_xpass_decrypt_roundtrip():
+    """Xpass /data/* crypto: encrypt with the documented scheme, the helper
+    must recover the JSON ; tampered input must yield None (fail-closed)."""
+    import base64
+    import hashlib
+    import json
+    import os
+
+    from Crypto.Cipher import AES
+
+    from freeflix_cli.scraping import goldenms
+
+    path = "/data/movie/550"
+    token = "djN8cGF0aHxi" + "." + "ab" * 32
+    payload = [{"name": "TIK 1", "url": "/mdata/abc/1/playlist.json"}]
+    key = bytes.fromhex(hashlib.sha256(
+        (goldenms._XPASS_KEY_PREFIX + path + "|" + token).encode()
+    ).hexdigest())
+    nonce = os.urandom(12)
+    ct, tag = AES.new(key, AES.MODE_GCM, nonce=nonce).encrypt_and_digest(
+        json.dumps(payload).encode()
+    )
+    body = base64.urlsafe_b64encode(nonce + ct + tag).decode().rstrip("=")
+
+    assert goldenms._xpass_decrypt_data(body, path, token) == payload
+    # Tampered / wrong shapes fail closed.
+    assert goldenms._xpass_decrypt_data(body[:-4] + "AAAA", path, token) is None
+    assert goldenms._xpass_decrypt_data(body, path, "badtoken") is None
+    assert goldenms._xpass_decrypt_data("", path, token) is None
+
+
+def test_xpass_search_uses_dataurl(monkeypatch):
+    """search_xpass follows var dataUrl → decrypt → playlist.json files."""
+    import json as _json
+
+    from freeflix_cli.scraping import goldenms
+
+    entries = [{"name": "TIK 1", "url": "/mdata/abc/1/playlist.json"}]
+
+    class _R:
+        def __init__(self, text="", payload=None):
+            self._text = text
+            self._payload = payload
+            self.status_code = 200
+
+        @property
+        def text(self):
+            return self._text
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            pass
+
+    calls = {}
+
+    def _fake_get(url, **kw):
+        calls.setdefault("urls", []).append(url)
+        if url.endswith("/e/movie/550"):
+            return _R(text='<script>var dataUrl="/data/movie/550?token=T.{}";</script>'.format("ab" * 32))
+        if "/data/movie/550" in url:
+            import base64
+            import hashlib
+
+            from Crypto.Cipher import AES
+
+            token = "T." + "ab" * 32
+            key = bytes.fromhex(hashlib.sha256(
+                (goldenms._XPASS_KEY_PREFIX + "/data/movie/550" + "|" + token).encode()
+            ).hexdigest())
+            import os
+
+            nonce = os.urandom(12)
+            ct, tag = AES.new(key, AES.MODE_GCM, nonce=nonce).encrypt_and_digest(
+                _json.dumps(entries).encode()
+            )
+            blob = base64.urlsafe_b64encode(nonce + ct + tag).decode().rstrip("=")
+            return _R(text=blob)
+        if url.endswith("playlist.json"):
+            return _R(payload={"playlist": [{"sources": [
+                {"file": "https://cdn.example.com/master.m3u8", "label": "TIK 2"}]}]})
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(goldenms, "_get", _fake_get)
+    out = goldenms.goldenms_extractor.search_xpass(550)
+    assert len(out) == 1
+    assert out[0]["url"] == "https://cdn.example.com/master.m3u8"
+    assert out[0]["source"] == "Xpass (TIK 1)"
+    assert out[0]["type"] == "M3U8"

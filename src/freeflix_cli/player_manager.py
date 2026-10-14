@@ -43,6 +43,66 @@ def last_playback_finished_naturally() -> bool:
     return bool(_LAST_PLAYBACK.get("finished"))
 
 
+# ─── Live terminal title + EQ ──────────────────────────────────────
+# While mpv plays, the terminal tab itself shows ▶ title · pos/dur plus a
+# tiny animated equalizer — zero scrollback spam, and the window list /
+# taskbar stays informative. Driven by the existing PlaybackMonitor polls.
+_EQ_LEVELS = "▁▂▃▄▅▆▇"
+
+
+def _set_term_title(text: str):
+    """Set the terminal window/tab title (OSC 0). Silent when piped."""
+    try:
+        if sys.stdout.isatty():
+            sys.stdout.write(f"\033]0;{str(text)[:80]}\a")
+            sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def _chain_title_updater(monitor, title: str):
+    """Wrap a PlaybackMonitor's on_position so the terminal tab tracks
+    playback (▶ title · pos/dur + animated EQ). The original callback
+    still runs first ; failures never break position saving."""
+    prev = getattr(monitor, "on_position", None)
+    short = title or "FreeFlix Stream"
+    short = short if len(short) <= 40 else short[:39] + "…"
+    state = {"last": ""}
+
+    def _fmt(sec):
+        try:
+            sec = max(0, int(sec))
+            return f"{sec // 60}:{sec % 60:02d}"
+        except Exception:
+            return "?"
+
+    def _cb(pos, dur):
+        try:
+            if callable(prev):
+                prev(pos, dur)
+        except Exception:
+            pass
+        try:
+            eq = "".join(
+                _EQ_LEVELS[int(time.monotonic() * 2.5 + i * 1.7) % len(_EQ_LEVELS)]
+                for i in range(4)
+            )
+            txt = (f"▶ {short} · {_fmt(pos)}/{_fmt(dur)} {eq}"
+                   if dur else f"▶ {short} {eq}")
+            if txt != state["last"]:
+                state["last"] = txt
+                _set_term_title(txt)
+        except Exception:
+            pass
+
+    try:
+        monitor.on_position = _cb
+    except Exception:
+        pass
+    _set_term_title(f"▶ {short}")
+    return monitor
+
+
 # ─── Stream-resolution prefetch cache ──────────────────────────────
 # Resolving a player URL to its real HLS link (scrape embed + decrypt +
 # follow redirects) costs a few seconds. While the user is reading the
@@ -2089,6 +2149,7 @@ def play_video(
                 run_env = _nvidia_env() if player_name == "mpv" else None
                 # Proxy mode : show live data usage and the total at the end.
                 if ipc_monitor:
+                    _chain_title_updater(ipc_monitor, title)
                     ipc_monitor.start()
                 try:
                     _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
@@ -2096,6 +2157,7 @@ def play_video(
                     if ipc_monitor:
                         ipc_monitor.stop()
                         _LAST_PLAYBACK["finished"] = ipc_monitor.finished_naturally()
+                    _set_term_title("FreeFlix CLI")
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
                 print_success(t("Playback completed successfully!"))
@@ -2175,6 +2237,7 @@ def play_video(
                     cmd.extend(ipc_args_d)
                     cmd.append(stream_url)
                     if ipc_mon_d:
+                        _chain_title_updater(ipc_mon_d, title)
                         ipc_mon_d.start()
                     try:
                         subprocess.run(cmd, check=True, env=_nvidia_env())
@@ -2182,6 +2245,7 @@ def play_video(
                         if ipc_mon_d:
                             ipc_mon_d.stop()
                             _LAST_PLAYBACK["finished"] = ipc_mon_d.finished_naturally()
+                        _set_term_title("FreeFlix CLI")
                     _save_mpv_position(pos_file_d, pos_key_d)
 
                 print_success(t("Playback completed successfully!"))

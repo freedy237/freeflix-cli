@@ -2,6 +2,8 @@ import os
 import readchar
 import re
 import threading
+import time
+from contextlib import contextmanager
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
@@ -12,6 +14,51 @@ from .themes import color
 from .icons import iconify, icon
 
 console = Console()
+
+
+def _pulse(period: float = 2.4, duty: float = 0.6) -> bool:
+    """Breathing phase for living UI (cursor, flames…) : True during the
+    bright part of the cycle. Time-driven, so every Live repaint advances
+    it with zero threads."""
+    try:
+        return (time.monotonic() % period) < period * duty
+    except Exception:
+        return True
+
+
+# ─── Toasts ──────────────────────────────────────────────────────────
+# Tiny in-memory hub: long jobs (downloads…) post a toast, and the next
+# menu repaint shows it in the status bar for a few seconds — no overlay,
+# no threading, no scrollback spam.
+_toasts: list = []  # (expires_at, text, style)
+
+
+def push_toast(text: str, style: str = None, ttl: float = 6.0, bell: bool = False):
+    """Post a transient status-bar toast (shown until ``ttl`` expires).
+    Non-blocking: the next menu repaint picks it up (see _status_bar).
+    Callers pass already-translated text."""
+    try:
+        _toasts.append((time.monotonic() + max(1.0, ttl),
+                        str(text), style or color("success")))
+        del _toasts[:-4]
+        if bell:
+            try:
+                console.bell()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _current_toast():
+    """Newest unexpired toast as (text, style), else None."""
+    try:
+        now = time.monotonic()
+        while _toasts and _toasts[0][0] <= now:
+            _toasts.pop(0)
+        return (_toasts[-1][1], _toasts[-1][2]) if _toasts else None
+    except Exception:
+        return None
 
 
 def clear_screen():
@@ -518,6 +565,12 @@ def _status_bar(filtering: bool = False) -> Text:
         _kbd(_t("/: filter")), Text(" · ", style=color("dim")),
         _kbd(_t("?: help")),
     )
+    # A fresh toast (download finished, …) rides along for a few seconds.
+    tn = _current_toast()
+    if tn is not None:
+        msg, style = tn
+        bar.append(Text("   ✓ ", style=style))
+        bar.append(Text(msg, style=style))
     return bar
 
 
@@ -1052,9 +1105,14 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 # text — no harsh full-width reverse. The prefix is 4 cells
                 # ("❯ ▌ ") so the label lines up with the 4-space unselected
                 # rows below. Badges keep their own colours on the cursor row.
+                # The chevron breathes (slow bright pulse) so the menu feels
+                # alive even when idle.
+                bright = _pulse()
                 row = Text()
-                row.append("❯ ", style=f"bold {color('accent')}")
-                row.append("▌ ", style=color("accent"))
+                row.append("❯ ", style=f"bold {color('accent')}"
+                           if bright else color("accent"))
+                row.append("▌ ", style=color("accent")
+                           if bright else color("dim"))
                 row.append_text(_hl_match(option, fq,
                                           base=f"bold {color('accent')}"))
                 lines.append(row)
@@ -1883,6 +1941,70 @@ def spinner(message: str):
     return console.status(
         f"[{color('info')}]{iconify(message)}[/{color('info')}]", spinner="dots"
     )
+
+
+@contextmanager
+def skeleton(label: str, lines: int = 4):
+    """Shimmering placeholder bars while LIST content loads (search results,
+    latest additions…). Same ``with`` contract as :func:`spinner` — swap it
+    in wherever a list is being fetched so the wait itself looks alive :
+
+        with skeleton(f"{t('Searching for')} {query}…"):
+            results = scraper.search(query)
+
+    A bright band sweeps each bar (staggered per row) on a background
+    thread ; the whole block is transient and vanishes when done.
+    Only wrap pure work — don't prompt or start another Live inside it.
+    """
+    live = None
+    if console.is_terminal:
+        try:
+            live = Live(Text(""), console=console, refresh_per_second=12,
+                        transient=True)
+            live.start()
+        except Exception:
+            live = None
+    stop = threading.Event()
+    state = {"tick": 0}
+
+    def _loop():
+        widths = [0.92, 0.78, 0.85, 0.64, 0.71][:max(1, min(5, lines))]
+        while not stop.is_set():
+            state["tick"] += 1
+            try:
+                bw = max(24, min(56, console.size.width - 24))
+                body = Text(iconify(label), style=color("dim"))
+                for r, f in enumerate(widths):
+                    n = max(8, int(bw * f))
+                    pos = (state["tick"] * 3 + r * 7) % (n + 14) - 7
+                    row = Text("\n  ")
+                    for i in range(n):
+                        d = abs(i - pos)
+                        row.append(
+                            "━",
+                            style="bold bright_white" if d <= 3
+                            else "white" if d <= 6 else color("dim"))
+                    body.append_text(row)
+                live.update(body)
+            except Exception:
+                pass
+            time.sleep(0.08)
+
+    thread = None
+    if live is not None:
+        thread = threading.Thread(target=_loop, daemon=True)
+        thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        if thread is not None:
+            thread.join(timeout=0.5)
+        if live is not None:
+            try:
+                live.stop()
+            except Exception:
+                pass
 
 
 def _header_panel(text: str) -> Panel:

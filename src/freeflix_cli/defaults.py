@@ -129,8 +129,9 @@ DEFAULT_PLAYERS = {
     "voe": {"type": "voe"},
     # lulustream.com : alias that 302-redirects to luluvdo.com (same player).
     "lulustream": {"type": "voe"},
-    # d0000d.com : DoodStream mirror (redirects to playmogo.com).
+    # d0000d.com / d000d.com : DoodStream mirrors (redirect to playmogo.com).
     "d0000d": {"type": "dood", "ext": "mp4"},
+    "d000d": {"type": "dood", "ext": "mp4"},
 
 }
 

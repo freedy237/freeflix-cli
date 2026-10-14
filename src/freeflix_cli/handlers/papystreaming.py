@@ -12,6 +12,7 @@ from ..cli_utils import (
     print_info,
     print_warning,
     pause,
+    skeleton,
     spinner,
     crumb,
 )
@@ -85,7 +86,7 @@ def handle_papystreaming():
     if not query or query.lower() == "exit":
         return
 
-    with spinner(f"{t('Searching for')} {query}…"):
+    with skeleton(f"{t('Searching for')} {query}…"):
         results = papystreaming.search(query)
     if not results:
         if papystreaming.blocked_by_cloudflare:

@@ -22,7 +22,8 @@ from ..cli_utils import (
     print_success,
     get_user_input,
     pause,
-    spinner,
+    skeleton,
+    push_toast,
 )
 from ..scraping import nyaa
 from ..player_manager import DOWNLOAD_DIR, get_mpv_path
@@ -134,6 +135,7 @@ def _download_torrent(magnet: str, title: str, watch: bool = False) -> bool:
             print_error(f"aria2c {t('exited with code')} {rc}")
             return False
         print_success(f"{t('Torrent download finished:')} {title}")
+        push_toast(f"{t('Torrent download finished:')} {title}", bell=True)
         return True
 
     return _download_and_watch(magnet, title)
@@ -208,6 +210,7 @@ def _download_and_watch(magnet: str, title: str) -> bool:
                 print_warning(t("Not enough data yet — leaving the download running in the foreground."))
                 proc.wait()
                 print_success(f"{t('Torrent download finished:')} {title}")
+                push_toast(f"{t('Torrent download finished:')} {title}", bell=True)
                 return proc.returncode == 0
 
         print_info(f"{t('Playing (download continues in background):')} {os.path.basename(target)}")
@@ -263,7 +266,7 @@ def handle_nyaa():
         results = nyaa.search(query, max_results=20, category=category,
                               trusted_only=trusted_only)
     elif mode == 0:
-        with spinner(f"{t('Loading latest torrents…')}"):
+        with skeleton(f"{t('Loading latest torrents…')}"):
             results = nyaa.latest(category, max_results=20)
     else:
         return
@@ -324,3 +327,4 @@ def _batch_download(results: list) -> None:
         print_warning(f"{t('Batch finished:')} {ok} ✓, {fail} ✗")
     else:
         print_success(f"{t('Batch finished:')} {ok} ✓")
+    push_toast(f"{t('Batch finished:')} {ok} ✓")

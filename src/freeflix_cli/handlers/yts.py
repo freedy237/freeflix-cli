@@ -12,7 +12,7 @@ from ..cli_utils import (
     print_success,
     get_user_input,
     pause,
-    spinner,
+    skeleton,
     crumb,
 )
 from ..icons import icon
@@ -152,7 +152,7 @@ def handle_yts():
         f"{icon('movie')} YTS (EN)",
     )
     if mode == 0:
-        with spinner(f"{t('Loading latest movies…')}"):
+        with skeleton(f"{t('Loading latest movies…')}"):
             results = yts.latest(20)
         if results:
             _play_results(results, f"{icon('movie')} {t('Latest movies:')}")
@@ -169,7 +169,7 @@ def handle_yts():
             tracker.add_search_query(query)
         if not query or query.lower() == "exit":
             return
-        with spinner(f"{t('Searching for')} {query}…"):
+        with skeleton(f"{t('Searching for')} {query}…"):
             results = yts.search(query)
         if not results:
             print_warning(t("No results found."))
@@ -229,7 +229,7 @@ def _handle_series():
     if mode == 2:
         return
     if mode == 0:
-        with spinner(t("Searching EZTV…")):
+        with skeleton(t("Searching EZTV…")):
             latest = eztv.latest(20)
         if not latest:
             print_warning(t("No results found."))
@@ -247,7 +247,7 @@ def _handle_series():
         tracker.add_search_query(query)
     if not query or query.lower() == "exit":
         return
-    with spinner(f"{t('Searching for')} {query}…"):
+    with skeleton(f"{t('Searching for')} {query}…"):
         metas = [m for m in search_cinemeta(query, False) if m.get("imdb_id")]
     if not metas:
         print_warning(t("No results found."))
@@ -264,7 +264,7 @@ def _handle_series():
             meta.get("name", ""), str(meta.get("year") or ""))
         if season is None:
             return
-        with spinner(t("Searching EZTV…")):
+        with skeleton(t("Searching EZTV…")):
             rels = eztv.episode_torrents(meta["imdb_id"], season, episode)
         if not rels:
             print_warning(t("No releases found (try another episode)."))
