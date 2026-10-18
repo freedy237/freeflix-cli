@@ -98,9 +98,15 @@ class NeonPanel:
         index_of = {p: i for i, p in enumerate(path)}
         center = (self._clock() * total / self._loop) % total
 
+        from . import motion
+        _reduced = motion.reduced()
+
         def glow(x, y):
             """Comet style at a border cell: white-hot head, short halo
-            ahead, long gradient tail melting into the theme accent."""
+            ahead, long gradient tail melting into the theme accent.
+            Reduced motion: the border stays still (no comet)."""
+            if _reduced:
+                return None
             idx = index_of[(x, y)]
             behind = (center - idx) % total
             ahead = (idx - center) % total

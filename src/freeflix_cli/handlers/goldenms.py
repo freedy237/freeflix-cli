@@ -20,6 +20,7 @@ from ..languages import get_language_label
 from ..scraping import player as player_scraper
 from ..icons import icon
 from ..i18n import t
+from ..scraping.utils import clean_text
 import re
 
 
@@ -90,53 +91,74 @@ def _is_valid(r):
 
 
 def handle_goldenms():
-    """Main entry point for the GoldenMS provider (Movies & Series)."""
-    choices = [t("Movie"), t("Series"), t("← Back")]
-    c_idx = select_from_list(
-        choices, t("Select Type:"), header=f"{icon('star')} GoldenMS (Movies & Series)"
-    )
-    if c_idx == 2:
-        return
+    """Main entry point for the GoldenMS provider (Movies & Series).
 
-    is_movie = c_idx == 0
-
-    mode = select_from_list(
-        [f"{icon('new')} {t('Latest uploads')}",
-         f"{icon('search')} {t('Search by title')}", t("← Back")],
-        f"{icon('star')} GoldenMS (Movies & Series)",
-    )
-    if mode == 2:
-        return
-
-    if mode == 0:
-        print_info(f"{t('Loading latest movies…')}")
-        metas = top_catalog(is_movie)
-        title = ""
-    else:
-        title = get_user_input(
-            t("Enter Movie title (blank = latest)") if is_movie
-            else t("Enter Series title (blank = latest)"),
+    Back stack : mode ← type ; search ← results ; seasons ← results ;
+    episodes ← seasons ; stream ← episodes (one level per Esc)."""
+    while True:  # ── Type level ──
+        c_idx = select_from_list(
+            [t("Movie"), t("Series"), t("← Back")],
+            t("Select Type:"),
             header=f"{icon('star')} GoldenMS (Movies & Series)",
-            history=tracker.get_search_history(),
         )
-        if title and not title.lower() == "exit":
-            tracker.add_search_query(title)
-        if title and title.lower() == "exit":
+        if c_idx == 2:
             return
+        _goldenms_type_flow(is_movie=(c_idx == 0))
 
-        if not title:
-            print_info(f"{t('Loading latest movies…')}")
-            metas = top_catalog(is_movie)
-        else:
-            print_info(f"{t('Searching Cinemeta for')} '{title}'...")
-            metas = search_cinemeta(title, is_movie)
 
-    if not metas:
-        print_warning(t("No results found."))
-        pause()
-        return
+def _goldenms_type_flow(is_movie: bool):
+    """Mode → search → results, with state kept (Back = one level)."""
+    last_query = ""
+    while True:  # ── Mode level ──
+        mode = select_from_list(
+            [f"{icon('new')} {t('Latest uploads')}",
+             f"{icon('search')} {t('Search by title')}", t("← Back")],
+            f"{icon('star')} GoldenMS (Movies & Series)",
+        )
+        if mode == 2:
+            return  # → type menu
+        from_latest = (mode == 0)
 
-    # Preview pane : Cinemeta poster + rating/genres beside the result list.
+        while True:  # ── Search level (single pass in latest mode) ──
+            if from_latest:
+                title = ""
+            else:
+                title = get_user_input(
+                    t("Enter Movie title (blank = latest)") if is_movie
+                    else t("Enter Series title (blank = latest)"),
+                    default=last_query or None,
+                    header=f"{icon('star')} GoldenMS (Movies & Series)",
+                    history=tracker.get_search_history(),
+                    cancel_value=None,  # Esc = back ; blank still means "latest"
+                )
+                if title is None or (title and title.lower() == "exit"):
+                    break  # → mode menu
+                if title:
+                    last_query = title
+                    tracker.add_search_query(title)
+
+            if not title:
+                print_info(f"{t('Loading latest movies…')}")
+                metas = top_catalog(is_movie)
+            else:
+                print_info(f"{t('Searching Cinemeta for')} '{title}'...")
+                metas = search_cinemeta(title, is_movie)
+
+            if not metas:
+                print_warning(t("No results found."))
+                pause()
+                if from_latest:
+                    break  # → mode menu
+                continue  # → search input again
+
+            _goldenms_results_flow(metas, is_movie, title)
+            # Back at the results list → search input (search) / mode (latest).
+            if from_latest:
+                break
+
+
+def _goldenms_results_flow(metas: list, is_movie: bool, title: str):
+    """Match list → details → movie stream / series seasons. Back = one level."""
     def _meta_lines(m):
         out = []
         if m.get("releaseInfo"):
@@ -151,119 +173,137 @@ def handle_goldenms():
     previews = [
         make_preview(
             cover=m.get("poster", ""),
-            title=m.get("name", "?"),
+            title=clean_text(m.get("name", "?")),
             lines=_meta_lines(m),
             panel_title="GoldenMS",
         )
         for m in metas
     ]
     labels = [
-        f"{m.get('name', '?')} ({m.get('releaseInfo', '?')})" for m in metas
+        f"{clean_text(m.get('name', '?'))} ({m.get('releaseInfo', '?')})"
+        for m in metas
     ]
-    selection_idx = select_with_preview(
-        labels, f"{icon('tv')} {t('Select Match:')}", previews
-    )
 
-    if selection_idx >= len(metas):  # Esc / Back
+    while True:  # ── Results level ──
+        selection_idx = select_with_preview(
+            labels, f"{icon('tv')} {t('Select Match:')}", previews
+        )
+        if selection_idx >= len(metas):  # Esc / Back
+            return  # → search input (search) / mode (latest)
+
+        selected_meta = metas[selection_idx]
+        media_title = selected_meta.get("name", title)
+        imdb_id = selected_meta.get("id", "")
+
+        with spinner(t("Fetching metadata…")):
+            full_meta = get_cinemeta_details(imdb_id, is_movie)
+
+        tmdb_id = full_meta.get("moviedb_id")
+        if not tmdb_id:
+            print_warning(t("TMDB ID not found in Cinemeta, some sources might degrade."))
+
+        release_year = full_meta.get(
+            "year", selected_meta.get("releaseInfo", "").split("-")[0]
+        )
+        cover = full_meta.get("poster") or selected_meta.get("poster")
+
+        # Poster + summary at selection (Cinemeta/TMDB cover).
+        from .. import terminal_image
+        terminal_image.show_poster(
+            cover,
+            info_lines=[
+                f"{release_year}" if release_year else "",
+                (full_meta.get("genres") and ", ".join(full_meta["genres"][:4])) or "",
+            ],
+        )
+
+        if is_movie:
+            _flow_goldenms_stream(
+                title=media_title, tmdb_id=tmdb_id, imdb_id=imdb_id,
+                year=release_year, season=None, episode=None,
+                is_movie=True, logo_url=cover,
+            )
+            continue  # Back at streams → results list
+
+        _goldenms_series_flow(
+            media_title, full_meta, tmdb_id, imdb_id, release_year, cover
+        )
+        # Back at seasons → results list.
+
+
+def _goldenms_series_flow(media_title, full_meta, tmdb_id, imdb_id,
+                          release_year, cover):
+    """Series : seasons → episodes → streams. One level per Back."""
+    videos = full_meta.get("videos", [])
+    if not videos:
+        # No episode list from Cinemeta → manual entry, then play.
+        season_str = get_user_input(t("Enter season number"), default="1")
+        season = int(season_str) if season_str.isdigit() else 1
+        ep_str = get_user_input(t("Enter episode number"), default="1")
+        episode = int(ep_str) if ep_str.isdigit() else 1
+        _flow_goldenms_stream(
+            title=media_title, tmdb_id=tmdb_id, imdb_id=imdb_id,
+            year=release_year, season=season, episode=episode,
+            is_movie=False, logo_url=cover,
+        )
         return
 
-    selected_meta = metas[selection_idx]
-    media_title = selected_meta.get("name", title)
-    imdb_id = selected_meta.get("id", "")
+    season_map: dict = {}
+    for video in videos:
+        s = video.get("season", 0)
+        ep = video.get("episode", 0)
+        name = video.get("name", f"Episode {ep}")
+        season_map.setdefault(s, []).append((ep, name))
 
-    # Fetch full details to get TMDB ID
-    with spinner(t("Fetching metadata…")):
-        full_meta = get_cinemeta_details(imdb_id, is_movie)
+    sorted_seasons = sorted(season_map.keys())
 
-    tmdb_id = full_meta.get("moviedb_id")
-    if not tmdb_id:
-        print_warning(t("TMDB ID not found in Cinemeta, some sources might degrade."))
-
-    release_year = full_meta.get(
-        "year", selected_meta.get("releaseInfo", "").split("-")[0]
-    )
-
-    # Poster + summary at selection (Cinemeta/TMDB cover).
-    from .. import terminal_image
-    terminal_image.show_poster(
-        full_meta.get("poster") or selected_meta.get("poster"),
-        title=media_title,
-        info_lines=[
-            f"{release_year}" if release_year else "",
-            (full_meta.get("genres") and ", ".join(full_meta["genres"][:4])) or "",
-        ],
-    )
-
-    season = None
-    episode = None
-
-    if not is_movie:
-        videos = full_meta.get("videos", [])
-
-        if videos:
-            season_map = {}
-            for video in videos:
-                s = video.get("season", 0)
-                ep = video.get("episode", 0)
-                name = video.get("name", f"Episode {ep}")
-                if s not in season_map:
-                    season_map[s] = []
-                season_map[s].append((ep, name))
-
-            sorted_seasons = sorted(season_map.keys())
-
-            season_options = (
-                [f"{t('Season')} {s} · {len(season_map[s])} {t('ep')}"
-                 for s in sorted_seasons]
-                + [t("Manual Input"), t("← Back")]
+    while True:  # ── Season level ──
+        season_options = (
+            [f"{t('Season')} {s} · {len(season_map[s])} {t('ep')}"
+             for s in sorted_seasons]
+            + [t("Manual Input"), t("← Back")]
+        )
+        s_idx = select_from_list(
+            season_options, f"{icon('tv')} {t('Select Season:')}"
+        )
+        if s_idx == len(sorted_seasons) + 1:
+            return  # → results list
+        if s_idx == len(sorted_seasons):  # Manual input
+            season_str = get_user_input(t("Enter season number"), default="1")
+            season = int(season_str) if season_str.isdigit() else 1
+            ep_str = get_user_input(t("Enter episode number"), default="1")
+            episode = int(ep_str) if ep_str.isdigit() else 1
+            _flow_goldenms_stream(
+                title=media_title, tmdb_id=tmdb_id, imdb_id=imdb_id,
+                year=release_year, season=season, episode=episode,
+                is_movie=False, logo_url=cover,
             )
-            s_idx = select_from_list(
-                season_options, f"{icon('tv')} {t('Select Season:')}"
-            )
+            continue  # → season menu again
 
-            if s_idx == len(sorted_seasons) + 1:
-                return  # Back → source menu
-            if s_idx == len(sorted_seasons):
-                season_str = get_user_input(t("Enter season number"), default="1")
-                season = int(season_str) if season_str.isdigit() else 1
+        season = sorted_seasons[s_idx]
+        episodes_list = sorted(season_map[season], key=lambda x: x[0])
+
+        while True:  # ── Episode level ──
+            ep_options = [f"E{ep[0]:02d} - {ep[1]}" for ep in episodes_list] + [
+                t("Manual Input"),
+                t("← Back"),
+            ]
+            ep_idx = select_from_list(
+                ep_options, f"{t('Select Episode')} ({t('Season')} {season}) :"
+            )
+            if ep_idx == len(episodes_list) + 1:
+                break  # → season menu
+            if ep_idx == len(episodes_list):
                 ep_str = get_user_input(t("Enter episode number"), default="1")
                 episode = int(ep_str) if ep_str.isdigit() else 1
             else:
-                season = sorted_seasons[s_idx]
-
-                episodes_list = sorted(season_map[season], key=lambda x: x[0])
-                ep_options = [f"E{ep[0]:02d} - {ep[1]}" for ep in episodes_list] + [
-                    t("Manual Input"),
-                    t("← Cancel"),
-                ]
-                ep_idx = select_from_list(
-                    ep_options, f"{t('Select Episode')} ({t('Season')} {season}) :"
-                )
-
-                if ep_idx == len(episodes_list) + 1:
-                    return
-                elif ep_idx == len(episodes_list):
-                    ep_str = get_user_input(t("Enter episode number"), default="1")
-                    episode = int(ep_str) if ep_str.isdigit() else 1
-                else:
-                    episode = episodes_list[ep_idx][0]
-        else:
-            season_str = get_user_input(t("Enter season number"), default="1")
-            season = int(season_str) if season_str.isdigit() else 1
-
-            ep_str = get_user_input(t("Enter episode number"), default="1")
-            episode = int(ep_str) if ep_str.isdigit() else 1
-
-    _flow_goldenms_stream(
-        title=media_title,
-        tmdb_id=tmdb_id,
-        imdb_id=imdb_id,
-        year=release_year,
-        season=season,
-        episode=episode,
-        is_movie=is_movie,
-        logo_url=full_meta.get("poster") or selected_meta.get("poster"),
-    )
+                episode = episodes_list[ep_idx][0]
+            _flow_goldenms_stream(
+                title=media_title, tmdb_id=tmdb_id, imdb_id=imdb_id,
+                year=release_year, season=season, episode=episode,
+                is_movie=False, logo_url=cover,
+            )
+            # Back at the stream menu → episode menu again.
 
 
 def _flow_goldenms_stream(

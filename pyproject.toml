@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freeflix-cli"
-version = "1.12.7"
+version = "1.13.0"
 description = "Watch movies, series, and anime from your terminal — multi-language, multi-source, no browser required. A maintained fork of autoflix-cli."
 readme = "README.md"
 requires-python = ">=3.9.2"
@@ -27,6 +27,7 @@ dependencies = [
     "curl-cffi>=0.13.0",
     "html5lib>=1.1",
     "jsbeautifier>=1.15.4",
+    "lxml>=5.0",
     "m3u8>=6.0.0",
     "platformdirs>=4.0.0",
     "pycryptodome>=3.23.0",
@@ -34,12 +35,10 @@ dependencies = [
     "rich>=14.2.0",
 ]
 
-# Optional speed-ups. `pip install freeflix-cli[speed]` pulls in lxml — HTML
-# parsing then uses it (~3× faster on big pages). Without it, FreeFlix falls
-# back to html5lib automatically (see scraping.utils.parse_html), so this is a
-# pure bonus and never required (keeps the Termux/Android install simple).
+# `speed` is kept as an empty alias so `pip install freeflix-cli[speed]`
+# keeps working for anyone with it pinned in a script.
 [project.optional-dependencies]
-speed = ["lxml>=5.0"]
+speed = []
 
 [project.urls]
 Homepage = "https://github.com/freedy237/freeflix-cli"
@@ -48,7 +47,7 @@ Issues = "https://github.com/freedy237/freeflix-cli/issues"
 "Upstream (autoflix-cli)" = "https://github.com/PaulExplorer/autoflix-cli"
 
 [project.scripts]
-freeflix = "freeflix_cli.main:main"
+freeflix = "freeflix_cli.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/freeflix_cli"]

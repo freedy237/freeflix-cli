@@ -16,11 +16,20 @@ from .icons import iconify, icon
 console = Console()
 
 
+def plural(n: int, one: str, many: str) -> str:
+    """Translated singular/plural label for a count ("1 saison", "3 saisons")."""
+    from .i18n import t as _t
+    return _t(one) if int(n) == 1 else _t(many)
+
+
 def _pulse(period: float = 2.4, duty: float = 0.6) -> bool:
     """Breathing phase for living UI (cursor, flames…) : True during the
     bright part of the cycle. Time-driven, so every Live repaint advances
-    it with zero threads."""
+    it with zero threads. Reduced motion keeps it steadily bright."""
     try:
+        from . import motion
+        if motion.reduced():
+            return True
         return (time.monotonic() % period) < period * duty
     except Exception:
         return True
@@ -71,8 +80,20 @@ def clear_screen():
     console.clear()
 
 
+def _finish_input(text: str, default: str, cancelled: bool,
+                  cancel_value=""):
+    """Resolve a text prompt: Esc CANCELS (returns ``cancel_value``) ; Enter on
+    an empty field accepts the displayed default. This distinction matters —
+    Esc used to return the pre-filled default, which re-ran the search instead
+    of going back. A caller where an EMPTY string is a valid choice (GoldenMS:
+    blank = latest) can pass a distinct ``cancel_value`` (e.g. None)."""
+    if cancelled:
+        return cancel_value
+    return (text or "").strip() or (default or "")
+
+
 def get_user_input(prompt: str, default: str = None, header: str = None,
-                   history: list = None) -> str:
+                   history: list = None, cancel_value="") -> str:
     """
     Get user input with a styled prompt.
 
@@ -90,7 +111,8 @@ def get_user_input(prompt: str, default: str = None, header: str = None,
     """
     if header and console.is_terminal:
         try:
-            return _input_fullscreen(prompt, default, header, history)
+            return _input_fullscreen(prompt, default, header, history,
+                                     cancel_value)
         except Exception:
             pass  # any raw-mode issue -> plain prompt below
 
@@ -100,14 +122,15 @@ def get_user_input(prompt: str, default: str = None, header: str = None,
 
 
 def _input_fullscreen(prompt: str, default: str, header: str,
-                       history: list = None) -> str:
+                       history: list = None, cancel_value="") -> str:
     """Full-screen, resize-safe single-line text prompt (cross-platform).
 
     Renders the header panel + prompt + live-typed text inside a screen=True
     Live, so resizing the window reflows the whole frame with no leftovers.
-    Enter submits, Esc cancels (returns the default), Ctrl-C raises.
+    Enter submits, Esc cancels, Ctrl-C raises.
     Keys come from _read_menu_key() (Windows msvcrt / POSIX with focus-event
-    filtering), so history recall works on every OS.
+    filtering), so history recall works on every OS. Esc CANCELS (returns an
+    empty string); Enter on an empty field accepts the displayed default.
     """
     import sys
 
@@ -119,6 +142,7 @@ def _input_fullscreen(prompt: str, default: str, header: str,
     from .i18n import t as _t
     text = ""
     result = {"val": None}
+    cancelled = {"v": False}
     history = history or []
     hist_idx = {"i": -1}   # -1 = live text, 0.. = into history
 
@@ -146,7 +170,8 @@ def _input_fullscreen(prompt: str, default: str, header: str,
             if key == "":
                 continue  # event focus/souris ignoré
             if key == readchar.key.ESC:
-                result["val"] = ""  # Esc -> cancel
+                cancelled["v"] = True
+                result["val"] = ""  # Esc -> cancel (never the default)
             elif key == readchar.key.UP:
                 if history and hist_idx["i"] < len(history) - 1:
                     hist_idx["i"] += 1
@@ -172,7 +197,7 @@ def _input_fullscreen(prompt: str, default: str, header: str,
                         hist_idx["i"] = -1  # back to live editing
             live.update(render())
 
-    return result["val"].strip() or default
+    return _finish_input(result["val"], default, cancelled["v"], cancel_value)
 
 
 def pause():
@@ -625,7 +650,9 @@ def toast(message: str, kind: str = "success", seconds: float = 1.1):
               "warning": color("warning"), "error": color("error")}
     marks = {"success": "✓", "info": "i", "warning": "!", "error": "✗"}
     style = styles.get(kind, color("info"))
-    text = Text(f"  {marks.get(kind, 'i')} {message}", style=f"bold {style}")
+    text = Text()
+    text.append("  ▌ ", style=style)
+    text.append(f"{marks.get(kind, 'i')} {message}", style=f"bold {style}")
     if not console.is_terminal:
         console.print(text)
         return
@@ -988,6 +1015,27 @@ def _styled_option(text: str, base: str = "") -> Text:
     return out
 
 
+_LEAVE_WORDS = {
+    "back", "retour", "cancel", "annuler", "quit", "quitter",
+    "exit", "sortir",
+}
+
+
+def _looks_like_leave(label: str, index: int, total: int) -> bool:
+    """True when the chosen row is this menu's Back/Cancel/Exit entry.
+
+    Restricted to the LAST row (every menu appends its leave option there) and
+    matched on a small multilingual set, so media titles containing "Back" /
+    "Exit" never trigger a screen wipe, while translated labels ("Retour",
+    "Annuler", "Quitter") without the "←" arrow still do."""
+    plain = re.sub(r"\[/?[^\]]*\]", "", str(label)).strip()
+    if plain.startswith("←"):
+        return True
+    if index != total - 1:
+        return False
+    return plain.lstrip("←❌✗⚠!?· ").strip().lower() in _LEAVE_WORDS
+
+
 def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                      header: str = None, group_headers: dict = None,
                      top=None, flush_input: bool = False,
@@ -1141,10 +1189,17 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     # scrollback. Inline menus (no header) keep the transient in-place render
     # so any context printed above them stays visible.
     use_screen = bool(header)
+    # get_renderable=... : re-evaluate the frame on every auto-refresh so the
+    # breathing cursor, the toast rail and the status line actually update
+    # while the menu sits idle (previously the same frozen renderable was
+    # repainted, so a toast posted by a background job only appeared after a
+    # keypress). Refresh stays modest to keep big lists cheap.
     live_kwargs = (
-        dict(console=console, refresh_per_second=20, screen=True)
+        dict(console=console, refresh_per_second=8, screen=True,
+             get_renderable=generate_renderable)
         if use_screen
-        else dict(refresh_per_second=10, transient=True)
+        else dict(refresh_per_second=6, transient=True,
+                  get_renderable=generate_renderable)
     )
     result = None  # ORIGINAL index chosen
     # Purge stale input at EVERY menu entry (not just Home): keystrokes typed
@@ -1215,6 +1270,16 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 raise KeyboardInterrupt("Menu cancelled by user")
             live.update(generate_renderable())
 
+    label = str(options[result])
+    # A Back/Cancel/Exit selection means we are leaving this level: wipe the
+    # screen so the previous level starts clean instead of stacking the old
+    # menus, posters and confirmations in the scrollback. Detection is
+    # multilingual, restricted to the LAST row (Back/Cancel/Exit are always the
+    # final option), and falls back to the leading "←" — so a film literally
+    # named "Back to the Future" no longer wipes the screen when picked, and a
+    # translated "Annuler"/"Retour" without the arrow still does.
+    if _looks_like_leave(label, result, len(options)):
+        clear_screen()
     console.print(
         f"\n[bold {color('accent')}]❯ {iconify(prompt)}[/bold {color('accent')}] "
         f"[{color('success')}]{iconify(options[result])}[/{color('success')}]"
@@ -1882,30 +1947,52 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                                     )
                                     if painted[0] != skey and _paint_sixel():
                                         painted[0] = skey
-                                elif _paint_sixel():
-                                    painted[0] = (ov_region.get("cover"),
-                                                  ov_region.get("cols"),
-                                                  ov_region.get("rows"))
-                        elif overlay[0] and visible:
-                            # No key/resize/anim, but the selected poster's sixel
-                            # may have JUST finished rendering (spinner → image):
-                            # one repaint to drop the spinner and paint pixels.
+                                else:
+                                    # Block preview: note whether the image was
+                                    # actually in THIS frame. If chafa is still
+                                    # running, `painted` stays stale so the
+                                    # ready-transition below repaints it without
+                                    # waiting for a keypress.
+                                    _, _, _, pc, pr = _dims()
+                                    cc = (previews[visible[selected]].get("cover", "")
+                                          if visible else "")
+                                    if (cc and terminal_image.get_cached_text(
+                                            cc, pc, pr) is not None):
+                                        painted[0] = (cc, pc, pr)
+                        elif visible:
+                            # No key/resize/loading tick, but the selected
+                            # poster may have JUST finished rendering (chafa is
+                            # slow): swap spinner → image / paint the sixel
+                            # immediately instead of waiting for a keypress.
                             cc = previews[visible[selected]].get("cover", "")
                             _, _, _, pc, pr = _dims()
-                            k = (cc, pc, pr, ov_region.get("row"),
-                                 ov_region.get("col")) if ov_region else None
-                            if (cc and k is not None and painted[0] != k
-                                    and terminal_image.get_download_path(cc) is not None):
-                                live.update(render(), refresh=True)
-                                _paint_sixel()
-                                painted[0] = k
+                            if overlay[0] and ov_region:
+                                k = (cc, pc, pr, ov_region.get("row"),
+                                     ov_region.get("col"))
+                                if (cc and painted[0] != k
+                                        and terminal_image.get_download_path(cc) is not None):
+                                    live.update(render(), refresh=True)
+                                    _paint_sixel()
+                                    painted[0] = k
+                            elif cc:
+                                k = (cc, pc, pr)
+                                if (painted[0] != k
+                                        and terminal_image.get_cached_text(cc, pc, pr)
+                                        is not None):
+                                    live.update(render(), refresh=True)
+                                    painted[0] = k
             finally:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
         else:
             mp = {readchar.key.UP: "UP", readchar.key.DOWN: "DOWN",
                   readchar.key.ENTER: "ENTER", readchar.key.ESC: "ESC",
                   readchar.key.BACKSPACE: "BACKSPACE"}
-            with Live(render(), console=console, refresh_per_second=12, screen=True) as live:
+            # get_renderable=render so the background chafa render swaps the
+            # spinner for the image on its own (same fix as the POSIX loop):
+            # previously the frozen frame meant Windows users also had to press
+            # a key to see a slow poster.
+            with Live(console=console, refresh_per_second=4, screen=True,
+                      get_renderable=render) as live:
                 while chosen["idx"] is None:
                     raw = _read_menu_key()   # robust on Windows (drains focus events)
                     if raw == readchar.key.CTRL_C:
@@ -1923,6 +2010,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
 
     idx = chosen["idx"]
     if idx is None or idx == n:
+        clear_screen()  # leaving this level → previous level starts clean
         return n
     return _finish(idx)
 

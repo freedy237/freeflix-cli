@@ -414,3 +414,42 @@ def test_xpass_search_uses_dataurl(monkeypatch):
     assert out[0]["url"] == "https://cdn.example.com/master.m3u8"
     assert out[0]["source"] == "Xpass (TIK 1)"
     assert out[0]["type"] == "M3U8"
+
+
+def test_clean_text_normalises_scraped_strings():
+    from freeflix_cli.scraping.utils import clean_text
+
+    assert clean_text("  Tokyo   Ravens  ") == "Tokyo Ravens"
+    assert clean_text("Dune &amp; Co") == "Dune & Co"
+    assert clean_text("\u00a0One\u200b Piece") == "One Piece"
+    assert clean_text("  - | ") == ""
+    assert clean_text(None) == ""
+
+
+def test_show_poster_does_not_repeat_title():
+    """After a menu printed the title, show_poster must not print it again,
+    and info lines are whitespace-collapsed (no '1 saison(s)' mess)."""
+    import io
+
+    from rich.console import Console
+
+    from freeflix_cli import terminal_image
+
+    buf = io.StringIO()
+    old = terminal_image._console
+    old_title = terminal_image._last_poster_title
+    old_render = terminal_image.render_url
+    terminal_image._console = Console(file=buf, force_terminal=False, width=80)
+    terminal_image.render_url = lambda *a, **k: False
+    terminal_image._last_poster_title = ""
+    try:
+        terminal_image.show_poster("", title="Tokyo   Ravens",
+                                   info_lines=["1 saison", "  "])
+        terminal_image.show_poster("", title="Tokyo Ravens", info_lines=["2 saisons"])
+    finally:
+        terminal_image._console = old
+        terminal_image._last_poster_title = old_title
+        terminal_image.render_url = old_render
+    out = buf.getvalue()
+    assert out.count("Tokyo Ravens") == 1
+    assert "2 saisons" in out and "1 saison" in out

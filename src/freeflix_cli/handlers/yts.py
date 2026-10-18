@@ -5,11 +5,11 @@ from ..scraping import eztv
 from .goldenms import search_cinemeta, get_cinemeta_details
 from .goldenms import _flow_goldenms_stream
 from ..cli_utils import (
+    clear_screen,
     select_from_list,
     select_with_preview,
     make_preview,
     print_warning,
-    print_success,
     get_user_input,
     pause,
     skeleton,
@@ -17,6 +17,7 @@ from ..cli_utils import (
 )
 from ..icons import icon
 from ..i18n import t
+from ..scraping.utils import clean_text
 from ..tracker import tracker
 from . import nyaa as nyaa_handler
 from .goldenanime import _flow_goldenanime_stream
@@ -81,7 +82,7 @@ def _pick_quality(movie: dict):
 
 
 def _play_results(results, prompt_title):
-    """Preview list → quality → Download / Download+Watch / Back."""
+    """Preview list → quality → actions. Back = one level (actions → list)."""
     previews = [
         make_preview(
             cover=r.get("poster", ""),
@@ -100,26 +101,35 @@ def _play_results(results, prompt_title):
         f"[{r['qualities'][-1]['quality']}]"
         for r in results
     ]
-    idx = select_with_preview(labels, prompt_title, previews)
-    if idx >= len(results):
-        return
-    movie = results[idx]
-    if not any(q.get("seeds") for q in movie["qualities"]):
-        print_warning(t("Warning: 0 seeders — this torrent may never complete."))
-    with crumb(movie["title"]):
-        q = _pick_quality(movie)
-        if q is None:
-            return
-        actions = [f"{icon('play')} {t('Stream')}", f"{icon('download')} {t('Download')}", f"{icon('play')} {t('Download + Watch')}",
-                   t("← Back")]
-        act = select_from_list(actions, f"{movie['title'][:55]} [{q['quality']}]")
-        if act == 0:
-            _stream_movie(movie)
-        elif act == 1:
-            nyaa_handler._download_torrent(q["magnet"], movie["title"], watch=False)
-        elif act == 2:
-            nyaa_handler._download_and_watch(q["magnet"], movie["title"])
-    pause()
+    while True:  # ── Results level ──
+        idx = select_with_preview(labels, prompt_title, previews)
+        if idx >= len(results):
+            return  # → search prompt / provider menu
+        movie = results[idx]
+        if not any(q.get("seeds") for q in movie["qualities"]):
+            print_warning(t("Warning: 0 seeders — this torrent may never complete."))
+        with crumb(movie["title"]):
+            while True:  # ── Quality level ──
+                q = _pick_quality(movie)
+                if q is None:
+                    break  # → results list
+                actions = [
+                    f"{icon('play')} {t('Stream')}",
+                    f"{icon('download')} {t('Download')}",
+                    f"{icon('play')} {t('Download + Watch')}",
+                    t("← Back"),
+                ]
+                act = select_from_list(actions, f"{movie['title'][:55]} [{q['quality']}]")
+                if act == 3:
+                    continue  # → quality picker
+                if act == 0:
+                    _stream_movie(movie)
+                elif act == 1:
+                    nyaa_handler._download_torrent(q["magnet"], movie["title"], watch=False)
+                elif act == 2:
+                    nyaa_handler._download_and_watch(q["magnet"], movie["title"])
+                break  # action done → results list
+        # (no pause here: Back must come straight back to the results list)
 
 
 def _stream_movie(movie: dict) -> None:
@@ -145,154 +155,202 @@ def _stream_movie(movie: dict) -> None:
 
 
 def handle_yts():
-    """YTS flow : Latest movies, title search, or series (EZTV)."""
-    mode = select_from_list(
-        [f"{icon('new')} {t('Latest uploads')}", f"{icon('search')} {t('Search by title')}",
-         f"{icon('tv')} {t('Series episodes (EZTV)')}", t("← Back")],
-        f"{icon('movie')} YTS (EN)",
-    )
-    if mode == 0:
-        with skeleton(f"{t('Loading latest movies…')}"):
-            results = yts.latest(20)
-        if results:
-            _play_results(results, f"{icon('movie')} {t('Latest movies:')}")
-            print_success(t("Done."))
-            return
-        print_warning(t("Latest is empty right now — falling back to search."))
-    if mode <= 1:
-        query = get_user_input(
-            t("Search query (or 'exit' to back)"),
-            header=f"{icon('movie')} YTS (EN)",
-            history=tracker.get_search_history(),
+    """YTS flow : Latest movies, title search, or series (EZTV).
+
+    Back stack : mode ← search input ← results (state kept, no refetch)."""
+    last_query = ""
+    while True:  # ── Mode level ──
+        mode = select_from_list(
+            [f"{icon('new')} {t('Latest uploads')}",
+             f"{icon('search')} {t('Search by title')}",
+             f"{icon('tv')} {t('Series episodes (EZTV)')}", t("← Back")],
+            f"{icon('movie')} YTS (EN)",
         )
-        if query and query.lower() != "exit":
+        if mode == 3:
+            return
+
+        if mode == 0:
+            with skeleton(f"{t('Loading latest movies…')}"):
+                results = yts.latest(20)
+            if not results:
+                print_warning(t("Latest is empty right now — falling back to search."))
+                mode = 1  # fall through to search
+            else:
+                _play_results(results, f"{icon('movie')} {t('Latest movies:')}")
+                continue  # Back at results → mode menu
+
+        if mode == 2:
+            _handle_series()
+            continue  # Back at series menu → mode menu
+
+        # Search mode: Back at results → search input (prefilled).
+        while True:
+            clear_screen()  # each new search starts clean
+            query = get_user_input(
+                t("Search query (or 'exit' to back)"),
+                default=last_query or None,
+                header=f"{icon('movie')} YTS (EN)",
+                history=tracker.get_search_history(),
+            )
+            if not query or query.lower() == "exit":
+                break  # → mode menu
+            last_query = query
             tracker.add_search_query(query)
-        if not query or query.lower() == "exit":
-            return
-        with skeleton(f"{t('Searching for')} {query}…"):
-            results = yts.search(query)
-        if not results:
-            print_warning(t("No results found."))
-            pause()
-            return
-        _play_results(results, f"{icon('tv')} {t('Search Results:')}")
-    elif mode == 2:
-        _handle_series()
-    else:
-        return
-    print_success(t("Done."))
+            with skeleton(f"{t('Searching for')} {query}…"):
+                results = yts.search(query)
+            if not results:
+                print_warning(t("No results found."))
+                pause()
+                continue
+            _play_results(results, f"{icon('tv')} {t('Search Results:')}")
+            # Back at results → search input again.
 
 
 def _play_latest(latest: list) -> None:
-    """Pick one fresh episode → Stream / Download / Download+Watch."""
+    """Pick one fresh episode → Stream / Download / Download+Watch.
+    Back from actions returns to the episode list."""
     opts = [
         f"{r.get('show', '')[:45]} S{int(r.get('season') or 0):02d}"
-        f"E{int(r.get('episode') or 0):02d}  ·  {r['quality']}  ·  "
-        f"{r['size']}  ·  S:{r['seeds']}"
+        f"E{int(r.get('episode') or 0):02d}  ·  {r.get('quality')}  ·  "
+        f"{r.get('size')}  ·  S:{r.get('seeds')}"
         for r in latest
-    ] + [t("← Back")]
-    idx = select_from_list(opts, f"{icon('new')} {t('Latest episodes')}")
-    if idx >= len(latest):
-        return
-    r = latest[idx]
-    try:
-        s, e = int(r.get("season") or 0), int(r.get("episode") or 0)
-    except (TypeError, ValueError):
-        s, e = 0, 0
-    if not r.get("seeds"):
-        print_warning(t("Warning: 0 seeders — this torrent may never complete."))
-    actions = [f"{icon('play')} {t('Stream')}",
-               f"{icon('download')} {t('Download')}",
-               f"{icon('play')} {t('Download + Watch')}", t("← Back")]
-    act = select_from_list(actions, (r.get("show") or r["filename"])[:60])
-    if act == 0:
-        _flow_goldenms_stream(
-            title=r.get("show") or "", tmdb_id=None,
-            imdb_id=r.get("imdb", ""), year=None,
-            season=s or None, episode=e or None, is_movie=False,
-            logo_url="",
-        )
-    elif act == 1:
-        nyaa_handler._download_torrent(r["magnet"], r["filename"], watch=False)
-    elif act == 2:
-        nyaa_handler._download_and_watch(r["magnet"], r["filename"])
+    ]
+    while True:  # ── Latest episodes level ──
+        idx = select_from_list(opts + [t("← Back")],
+                               f"{icon('new')} {t('Latest episodes')}")
+        if idx >= len(latest):
+            return
+        r = latest[idx]
+        try:
+            season_n = int(r.get("season") or 0)
+            episode_n = int(r.get("episode") or 0)
+        except (TypeError, ValueError):
+            season_n, episode_n = 0, 0
+        if not r.get("seeds"):
+            print_warning(t("Warning: 0 seeders — this torrent may never complete."))
+        while True:  # ── Actions level ──
+            actions = [
+                f"{icon('play')} {t('Stream')}",
+                f"{icon('download')} {t('Download')}",
+                f"{icon('play')} {t('Download + Watch')}",
+                t("← Back"),
+            ]
+            act = select_from_list(actions, (r.get("show") or r["filename"])[:60])
+            if act == 3:
+                break  # → episode list
+            if act == 0:
+                _flow_goldenms_stream(
+                    title=r.get("show") or "", tmdb_id=None,
+                    imdb_id=r.get("imdb", ""), year=None,
+                    season=season_n or None, episode=episode_n or None,
+                    is_movie=False, logo_url="",
+                )
+            elif act == 1:
+                nyaa_handler._download_torrent(r["magnet"], r["filename"], watch=False)
+            elif act == 2:
+                nyaa_handler._download_and_watch(r["magnet"], r["filename"])
+            pause()
+            break  # action done → episode list
 
 
 def _handle_series():
-    """Series flow : latest episodes or title search → season/episode."""
+    """Series flow : latest episodes or title search → season/episode.
+
+    Back stack : series menu ← results ← releases ← actions."""
     from .papystreaming import _pick_season_episode
-    mode = select_from_list(
-        [f"{icon('new')} {t('Latest episodes')}",
-         f"{icon('search')} {t('Search by title')}", t("← Back")],
-        f"{icon('tv')} EZTV (EN)",
-    )
-    if mode == 2:
-        return
-    if mode == 0:
-        with skeleton(t("Searching EZTV…")):
-            latest = eztv.latest(20)
-        if not latest:
+
+    while True:  # ── Series menu ──
+        mode = select_from_list(
+            [f"{icon('new')} {t('Latest episodes')}",
+             f"{icon('search')} {t('Search by title')}", t("← Back")],
+            f"{icon('tv')} EZTV (EN)",
+        )
+        if mode == 2:
+            return
+
+        if mode == 0:
+            with skeleton(t("Searching EZTV…")):
+                latest = eztv.latest(20)
+            if not latest:
+                print_warning(t("No results found."))
+                pause()
+                continue
+            _play_latest(latest)  # loops; Back at its list → series menu
+            continue
+
+        # Search mode: Back from the input → series menu.
+        query = get_user_input(
+            t("Search query (or 'exit' to back)"),
+            header=f"{icon('tv')} EZTV (EN)",
+            history=tracker.get_search_history(),
+        )
+        if not query or query.lower() == "exit":
+            continue
+        tracker.add_search_query(query)
+        with skeleton(f"{t('Searching for')} {query}…"):
+            metas = [m for m in search_cinemeta(query, False) if m.get("imdb_id")]
+        if not metas:
             print_warning(t("No results found."))
             pause()
-            return
-        _play_latest(latest)
-        pause()
-        return
-    query = get_user_input(
-        t("Search query (or 'exit' to back)"),
-        header=f"{icon('tv')} EZTV (EN)",
-        history=tracker.get_search_history(),
-    )
-    if query and query.lower() != "exit":
-        tracker.add_search_query(query)
-    if not query or query.lower() == "exit":
-        return
-    with skeleton(f"{t('Searching for')} {query}…"):
-        metas = [m for m in search_cinemeta(query, False) if m.get("imdb_id")]
-    if not metas:
-        print_warning(t("No results found."))
-        pause()
-        return
-    labels = [f"{m.get('name')} ({m.get('year', '?')})" for m in metas[:10]]
-    m_idx = select_from_list(labels + [t("← Back")],
-                             f"{icon('tv')} {t('Search Results:')}")
-    if m_idx >= len(metas[:10]):
-        return
-    meta = metas[m_idx]
-    with crumb(meta.get("name", "")):
-        season, episode = _pick_season_episode(
-            meta.get("name", ""), str(meta.get("year") or ""))
-        if season is None:
-            return
-        with skeleton(t("Searching EZTV…")):
-            rels = eztv.episode_torrents(meta["imdb_id"], season, episode)
-        if not rels:
-            print_warning(t("No releases found (try another episode)."))
-            pause()
-            return
-        opts = [
-            f"{r['quality']}  ·  {r['size']}  ·  S:{r['seeds']}  ·  "
-            f"{r['filename'][:60]}"
-            for r in rels[:15]
-        ] + [t("← Back")]
-        r_idx = select_from_list(opts, f"S{season:02d}E{episode:02d}")
-        if r_idx >= len(rels[:15]):
-            return
-        rel = rels[r_idx]
-        if not rel.get("seeds"):
-            print_warning(t("Warning: 0 seeders — this torrent may never complete."))
-        actions = [f"{icon('play')} {t('Stream')}", f"{icon('download')} {t('Download')}", f"{icon('play')} {t('Download + Watch')}",
-                   t("← Back")]
-        act = select_from_list(actions, rel["filename"][:60])
-        if act == 0:
-            _flow_goldenms_stream(
-                title=meta.get("name", ""), tmdb_id=None,
-                imdb_id=meta.get("imdb_id", ""), year=None,
-                season=season, episode=episode, is_movie=False,
-                logo_url="",
+            continue
+
+        labels = [f"{clean_text(m.get('name'))} ({m.get('year', '?')})" for m in metas[:10]]
+        while True:  # ── Results level ──
+            m_idx = select_from_list(
+                labels + [t("← Back")], f"{icon('tv')} {t('Search Results:')}"
             )
-        elif act == 1:
-            nyaa_handler._download_torrent(rel["magnet"], rel["filename"], watch=False)
-        elif act == 2:
-            nyaa_handler._download_and_watch(rel["magnet"], rel["filename"])
-    pause()
+            if m_idx >= len(metas[:10]):
+                break  # → series menu
+            meta = metas[m_idx]
+
+            with crumb(meta.get("name", "")):
+                season, episode = _pick_season_episode(
+                    meta.get("name", ""), str(meta.get("year") or "")
+                )
+            if season is None:
+                continue  # → results
+            with skeleton(t("Searching EZTV…")):
+                rels = eztv.episode_torrents(meta["imdb_id"], season, episode)
+            if not rels:
+                print_warning(t("No releases found (try another episode)."))
+                pause()
+                continue
+
+            rels = rels[:15]
+            opts = [
+                f"{r['quality']}  ·  {r['size']}  ·  S:{r['seeds']}  ·  "
+                f"{r['filename'][:60]}"
+                for r in rels
+            ]
+            while True:  # ── Releases level ──
+                r_idx = select_from_list(
+                    opts + [t("← Back")], f"S{season:02d}E{episode:02d}"
+                )
+                if r_idx >= len(rels):
+                    break  # → results
+                rel = rels[r_idx]
+                if not rel.get("seeds"):
+                    print_warning(t("Warning: 0 seeders — this torrent may never complete."))
+                while True:  # ── Actions level ──
+                    actions = [
+                        f"{icon('play')} {t('Stream')}",
+                        f"{icon('download')} {t('Download')}",
+                        f"{icon('play')} {t('Download + Watch')}",
+                        t("← Back"),
+                    ]
+                    act = select_from_list(actions, rel["filename"][:60])
+                    if act == 3:
+                        break  # → releases
+                    if act == 0:
+                        _flow_goldenms_stream(
+                            title=meta.get("name", ""), tmdb_id=None,
+                            imdb_id=meta.get("imdb_id", ""), year=None,
+                            season=season, episode=episode, is_movie=False,
+                            logo_url="",
+                        )
+                    elif act == 1:
+                        nyaa_handler._download_torrent(rel["magnet"], rel["filename"], watch=False)
+                    elif act == 2:
+                        nyaa_handler._download_and_watch(rel["magnet"], rel["filename"])
+                    pause()
+                    break  # action done → releases

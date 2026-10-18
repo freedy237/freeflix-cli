@@ -93,9 +93,10 @@ def test_dedup_players_drops_duplicate_urls():
     ]
 
 
-def test_analyze_gives_ffprobe_room_for_throttled_mp4(monkeypatch):
-    """sendvid serves throttled MP4s needing ~15 s of ffprobe — the fallback
-    must be called with a timeout that fits, or no quality is ever shown."""
+def test_analyze_ffprobe_timeout_is_bounded(monkeypatch):
+    """The quality menu must not stall on a throttled MP4: ffprobe now gets
+    the caller's bounded timeout (default 9 s, 5 s from the menu) instead of
+    the old fixed 20 s."""
     from freeflix_cli import player_manager as pm
 
     seen = {}
@@ -111,5 +112,29 @@ def test_analyze_gives_ffprobe_room_for_throttled_mp4(monkeypatch):
     )
     out = pm.analyze_stream_quality("https://sendvid.com/embed/x", {})
     assert out["qualities"] == [{"height": 720, "mbps": 1.4}]
-    assert seen["timeout"] >= 18
+    assert 0 < seen["timeout"] <= 9
     assert pm.format_quality_label(out) == "720p ~1.4 Mbps"
+
+
+def test_analyze_is_cached(monkeypatch):
+    """Re-entering the same episode must not re-extract every player."""
+    from freeflix_cli import player_manager as pm
+
+    calls = {"n": 0}
+
+    def _fake_link(*a, **k):
+        calls["n"] += 1
+        return "https://cdn.example.com/master.m3u8"
+
+    monkeypatch.setattr(pm.player, "get_hls_link", _fake_link)
+    monkeypatch.setattr(
+        pm, "_probe_stream",
+        lambda *a, **k: {"variants": [{"label": "1080p", "bandwidth": 5_000_000,
+                                       "height": 1080, "uri": "v.m3u8"}],
+                         "blocked": None},
+    )
+    pm._quality_cache.clear()
+    first = pm.analyze_stream_quality("https://player.example/embed/cache-test", {})
+    second = pm.analyze_stream_quality("https://player.example/embed/cache-test", {})
+    assert first["ok"] and second["ok"]
+    assert calls["n"] == 1  # second call served from the cache

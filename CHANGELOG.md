@@ -1,5 +1,82 @@
 # Changelog
 
+## 1.13.0
+
+- **Performances** : `lxml` devient une dépendance par défaut (parsing HTML
+  **14,7× plus rapide** — mesuré : 7,38 s → 0,50 s sur 20 pages) ; point
+  d'entrée CLI allégé (`--version` en **59 ms**, import principal 0,80 s →
+  0,28 s) ; splash raccourci (1,9 s → 0,86 s) ; **cache d'origine des miroirs
+  24 h** (Anime-Sama : 8,3 s → 0,00 s au lancement suivant) ; timeouts courts
+  (6 s connexion) ; **sondes de langues en parallèle** (saison Anime-Sama :
+  ~10 s → 2,3 s, revisite **0,009 s** grâce au cache négatif) ; cache TTL sur
+  les recherches et listes d'épisodes (HiAnime, Coflix, YTS, EZTV,
+  French-Stream) ; 8 niveaux de sparkline.
+- **Esthétique** : dégradé truecolor du wordmark au repos, **points d'état
+  sémantiques** (○ hors ligne) pour la santé des sources, toast avec rail
+  coloré, **thème clair auto** via `COLORFGBG`, **mode animations réduites**
+  (réglage + `FREEFLIX_REDUCED_MOTION=1` : comète/reflet/barres figés).
+- **Corrections** : sélecteur de match GoldenAnime **inatteignable** (code
+  enfermé dans `_ani_lines`) ; nouvel layout Anime-Sama (`as-carte`) avec
+  fallback ancien ; cache HTTP isolé dans les tests (conftest) ; retries des
+  posters honorant `attempts` ; cache French-Stream correctement structuré ;
+  **plus de flash terminal entre le splash et l'accueil** (l'écran alterné est
+  passé directement au premier menu) ; reflet du logo restauré en boucle
+  fluide (~0,66 s/pass) sur un splash de 0,86 s ; **Coflix** : pages
+  contenu/agrégateur de lecteurs et grille d'accueil mises en cache (revisite
+  contenu 0,06 s au lieu de ~3 s, derniers ajouts 0,08 s au lieu de 2,1 s).
+- **Contenus nettoyés partout** : entités HTML décodées, espaces/espaces
+  insécables/zero-width normalisés, titres dupliqués supprimés (menu + fiche),
+  en-têtes « Film : » redondants retirés, pluriels corrects (« 1 saison »,
+  « 3 saisons ») au lieu de « saison(s) ».
+- **Lecteurs plus rapides** : cache des analyses qualité/débit (10 min, 2 min
+  en échec), budget du menu d'analyse 26 s → 6 s, ffprobe borné au budget
+  (plus d'attente de 20 s sur un MP4 bridé), sondes HLS parallèles — les
+  qualités « 1080p ~1,9 · 720p ~1,0 Mbps » s'affichent en ~4 s puis
+  instantanément en revisite.
+- **Navigation cohérente (pile)** : un seul Échap = un seul niveau, avec état
+  conservé — Résultats ← Recherche, Saisons ← Résultats, Épisodes ← Saisons,
+  Lecteurs ← Épisodes. Appliqué à Anime-Sama, HiAnime, GoldenAnime,
+  French-Anime, French-Stream, Coflix, YTS/EZTV et Nyaa ; les résultats ne
+  sont plus re-fetchés au retour, la recherche est pré-remplie. Corrige aussi
+  un crash GoldenAnime en recherche par ID AniList et l'affichage littéral
+  « None » après une fiche. Test de navigation automatisé ajouté.
+- **Écran propre** : chaque retour (Back / Cancel / Exit), chaque entrée
+  dans un provider **et chaque nouvelle recherche** vident l'écran — les
+  anciens menus, posters et confirmations ne s'empilent plus dans le
+  scrollback ; le niveau affiché est toujours le seul visible. YTS/EZTV
+  gagnent aussi la boucle recherche (retour résultats → recherche).
+- **Échap dans la recherche = retour** (corrigé) : il renvoyait la requête
+  pré-remplie et relançait la recherche (effet « Échap → résultats »).
+  Désormais Échap annule, Entrée sur champ vide accepte le défaut.
+- **Posters d'aperçu fluides (corrigé)** : quand chafa mettait du temps, le
+  poster ne s'affichait qu'après une touche de navigation. La boucle ne
+  repeignait pas la transition « moulinette → image » quand le rendu
+  terminait entre deux ticks ; elle est désormais détectée et affichée sans
+  touche (aperçus en blocs **et** sixel).
+- **GoldenMS : Échap ne lance plus les derniers ajouts** — un champ vide
+  signifie « latest », donc Échap ouvrait cette vue au lieu de revenir. Il
+  retourne maintenant au menu précédent (valeur d'annulation distincte).
+- **Navigation (suite)** : GoldenMS entre dans la pile (type ← mode ← recherche
+  ← résultats ← saisons ← épisodes ← lecteur) ; Papystreaming gagne la boucle
+  de recherche (retour résultats → recherche) et le sélecteur saison/épisode
+  remonte d'un niveau (idem EZTV) ; « Continue from AniList » (saison, langue,
+  épisode), les reprises Anime-Sama / French-Stream et le sous-menu saison des
+  sous-titres GoldenAnime ont un vrai Back ; le menu qualité HLS propose
+  « ← Back » au lieu de lancer la lecture sur Échap.
+- **Accueil vivant** : l'entrée « Nouveautés » est présente dès qu'une série
+  Anime-Sama est suivie (ouverture = attente bornée du fetch de fond, plus
+  jamais invisible pendant la visite) ; les menus reçoivent `get_renderable`
+  (curseur qui respire, toasts et barre d'état mis à jour au repos) ; l'aperçu
+  poster Windows profite du même correctif que Linux.
+- **Robustesse** : les pages de challenge/vides ne sont plus écrites dans le
+  cache TTL (French-Stream, Coflix, HiAnime, Anime-Sama) — plus de « aucun
+  résultat » pendant plusieurs minutes après un blocage passager ; l'historique
+  tolère une entrée corrompue ; la reprise Coflix retrouve le bon épisode même
+  si le titre finit par « VF »/« VOSTFR ».
+- **Confort** : détection Back multilingue (Retour/Annuler/Quitter) sans faux
+  positif sur un titre comme « Back to the Future » ; YTS ne force plus Entrée
+  après chaque film.
+
 ## 1.12.7
 
 - **Correctif Python 3.9** : `str | None` évalué à l'import cassait toutes

@@ -17,6 +17,8 @@ import urllib.parse
 from curl_cffi import requests as cffi_requests
 from ..net_config import DNS_OPTIONS
 from .config import portals
+from .. import httpcache
+from .utils import clean_text
 
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
@@ -72,7 +74,7 @@ def _clean(movie: dict) -> dict | None:
     quals.sort(key=lambda q: q["size_bytes"])
     return {
         "yts_id": movie.get("id"),
-        "title": movie.get("title_english") or movie.get("title") or "?",
+        "title": clean_text(movie.get("title_english") or movie.get("title") or "?"),
         "year": movie.get("year") or "",
         "rating": movie.get("rating") or 0,
         "runtime": movie.get("runtime") or 0,
@@ -86,6 +88,14 @@ def _clean(movie: dict) -> dict | None:
 
 
 def _fetch(path: str, params: dict) -> list[dict]:
+    import json as _json
+    ckey = "yts:" + path + "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    cached = httpcache.get(ckey, 300)
+    if cached is not None:
+        try:
+            return _json.loads(cached)
+        except ValueError:
+            pass
     bases = [_base()] + [b for b in MIRRORS if b != _base()]
     for base in bases:
         try:
@@ -98,6 +108,7 @@ def _fetch(path: str, params: dict) -> list[dict]:
             movies = (data.get("data") or {}).get("movies") or []
             out = [c for c in (_clean(m) for m in movies) if c]
             if out:
+                httpcache.store(ckey, _json.dumps(out))
                 return out
         except Exception:
             continue

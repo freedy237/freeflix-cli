@@ -15,6 +15,7 @@ from curl_cffi import requests as cffi_requests
 from .objects import SearchResult, Player
 from ..net_config import DNS_OPTIONS
 from .config import portals
+from .utils import clean_text, parse_html
 
 website_origin = portals.get("french-manga", "https://w16.french-manga.net").rstrip("/")
 
@@ -61,7 +62,6 @@ def search(query: str) -> list:
     except Exception:
         return []
 
-    from .utils import parse_html
     results = []
     # Par carte (BeautifulSoup) plutôt qu'une regex DOTALL inter-cartes qui
     # mélangeait les posters quand une carte n'avait pas de titre.
@@ -75,7 +75,7 @@ def search(query: str) -> list:
         if not url.startswith("http"):
             url = website_origin + url
         title_tag = card.find("div", {"class": "search-title"})
-        title = title_tag.get_text(strip=True) if title_tag else ""
+        title = clean_text(title_tag.get_text(strip=True)) if title_tag else ""
         if not title:
             continue
         # Pull the card's poster (TMDB thumbnail) so the preview pane has a cover.
@@ -163,7 +163,7 @@ def get_episodes(url: str) -> dict:
         return out
 
     info = data.get("info") or {}
-    out["title"] = info.get("title", "") if isinstance(info, dict) else ""
+    out["title"] = clean_text(info.get("title", "")) if isinstance(info, dict) else ""
 
     for lang in ("vf", "vostfr"):
         ep_map = data.get(lang) or {}

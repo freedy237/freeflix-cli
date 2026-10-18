@@ -153,7 +153,10 @@ def cf_get(session, url, **kw):
     import time as _t
 
     base_headers = kw.pop("headers", {})
-    kw.setdefault("timeout", 20)  # never hang a fetch on a dead host
+    # Fast failure on dead mirrors: 6 s to connect, 20 s max to read. The
+    # cascade (retries/DoH) then reaches a live mirror quickly instead of
+    # each attempt stalling for the full 20 s.
+    kw.setdefault("timeout", (6, 20))
 
     def _headers():
         cf = get_cf_headers(url)

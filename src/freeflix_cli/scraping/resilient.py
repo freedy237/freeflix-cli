@@ -28,8 +28,13 @@ import threading
 DEFAULT_SELECTORS: dict[str, dict[str, list[str]]] = {
     "anime-sama": {
         "search_container": ["#list_catalog"],
-        "search_card": ["div.card-content"],
-        "search_title": ["h2"],
+        # Two layouts coexist: the 2026-10 "as-carte" cards and the older
+        # "card-content" ones (kept as fallback so a partial rollout on
+        # either side never empties the search).
+        "search_card": ["div.as-carte", "div.card-content"],
+        "search_title": ["h3.as-carte-titre", "h2"],
+        "search_link": ["a.as-carte-lien", "a"],
+        "search_img": ["img"],
         "search_genre": ["p.info-value"],
         "search_info": ["p.info-value"],
         "series_title": ["h4#titreOeuvre", "h1"],

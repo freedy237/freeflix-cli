@@ -7,6 +7,7 @@ Resolution rides ``AnimeExtractor.search_hianime_*`` (ani-cli's chain).
 
 from ..scraping.goldenanime import goldenanime
 from ..cli_utils import (
+    clear_screen,
     select_from_list,
     select_with_preview,
     make_preview,
@@ -91,7 +92,11 @@ def handle_hianime_episode(title, slug, start_episode, cover_url=None,
 
 
 def handle_hianime():
-    """Handle HiAnime provider flow (English, sub/dub)."""
+    """Handle HiAnime provider flow (English, sub/dub).
+
+    Back stack : results ← episodes ← streams, one level per Esc.
+    Backing out of a show re-shows the SAME results (no refetch).
+    """
     mode = select_from_list(
         [f"{icon('new')} {t('Latest uploads')}",
          f"{icon('search')} {t('Search by title')}", t("← Back")],
@@ -100,69 +105,88 @@ def handle_hianime():
     if mode == 2:
         return
     from_latest = (mode == 0)
-    if from_latest:
-        query = ""
-    else:
-        query = get_user_input(
-            t("Search query (or 'exit' to back)"),
-            header=f"{icon('sparkle')} HiAnime (EN)",
-            history=tracker.get_search_history(),
-        )
-        if query and query.lower() != "exit":
-            tracker.add_search_query(query)
-        if not query or query.lower() == "exit":
-            return
+    last_query = ""
+    while True:  # ── Search level (search mode) / single pass (latest) ──
+        clear_screen()  # each new search starts clean
+        if from_latest:
+            query = ""
+        else:
+            query = get_user_input(
+                t("Search query (or 'exit' to back)"),
+                default=last_query or None,
+                header=f"{icon('sparkle')} HiAnime (EN)",
+                history=tracker.get_search_history(),
+            )
+            if query and query.lower() != "exit":
+                tracker.add_search_query(query)
+            if not query or query.lower() == "exit":
+                return
+            last_query = query
 
-    if from_latest:
-        with skeleton(f"{t('Loading latest movies…')}"):
-            shows = goldenanime.latest_hianime(15)
-    else:
-        with skeleton(f"{t('Searching for')} {query}…"):
-            shows = goldenanime.search_hianime_shows(query)
-    if not shows:
-        print_warning(t("No results found."))
-        pause()
-        return
+        if from_latest:
+            with skeleton(f"{t('Loading latest movies…')}"):
+                shows = goldenanime.latest_hianime(15)
+        else:
+            with skeleton(f"{t('Searching for')} {query}…"):
+                shows = goldenanime.search_hianime_shows(query)
+        if not shows:
+            print_warning(t("No results found."))
+            pause()
+            if from_latest:
+                return
+            continue
 
-    previews = [
-        make_preview(
-            cover=s.get("poster", ""),
-            title=s["title"],
-            lines=[f"SUB {s.get('sub') or '?'} · DUB {s.get('dub') or '?'}"],
-            panel_title="HiAnime",
-        )
-        for s in shows
-    ]
-    labels = [s["title"] for s in shows]
-    c_idx = select_with_preview(
-        labels, f"{icon('tv')} {t('Search Results:')}", previews
-    )
-    if c_idx >= len(shows):
-        return
-    sel = shows[c_idx]
+        previews = [
+            make_preview(
+                cover=s.get("poster", ""),
+                title=s["title"],
+                lines=[f"SUB {s.get('sub') or '?'} · DUB {s.get('dub') or '?'}"],
+                panel_title="HiAnime",
+            )
+            for s in shows
+        ]
+        labels = [s["title"] for s in shows]
 
-    from .. import terminal_image
-    terminal_image.show_poster(sel.get("poster", ""), title=sel["title"])
+        while True:  # ── Results level ──
+            c_idx = select_with_preview(
+                labels, f"{icon('tv')} {t('Search Results:')}", previews
+            )
+            if c_idx >= len(shows):
+                break  # → search input (search mode) / provider menu (latest)
+            sel = shows[c_idx]
 
-    with spinner(f"{t('Loading')} {sel['title']}…"):
-        episodes = goldenanime.get_hianime_episodes(sel["slug"])
-    if not episodes:
-        print_warning(t("No episodes found."))
-        pause()
-        return
+            from .. import terminal_image
+            terminal_image.show_poster(sel.get("poster", ""))
 
-    total = len(episodes)
-    with crumb(sel["title"]):
-        ep_labels = [f"{t('Episode')} {n}" for n, _eid in episodes] + [t("← Back")]
-        e_idx = select_from_list(
-            ep_labels, f"{icon('tv')} {t('Select Episode:')}",
-            # From Latest : land on the newest episode (last in list).
-            default_index=(len(episodes) - 1 if from_latest and episodes else 0),
-        )
-    if e_idx >= len(episodes):
-        return
-    handle_hianime_episode(sel["title"], sel["slug"], episodes[e_idx][0],
-                           cover_url=sel.get("poster", ""), total_eps=total)
+            with spinner(f"{t('Loading')} {sel['title']}…"):
+                episodes = goldenanime.get_hianime_episodes(sel["slug"])
+            if not episodes:
+                print_warning(t("No episodes found."))
+                pause()
+                continue
+
+            total = len(episodes)
+            ep_idx = (len(episodes) - 1 if from_latest and episodes else 0)
+            while True:  # ── Episodes level ──
+                with crumb(sel["title"]):
+                    ep_labels = [f"{t('Episode')} {n}" for n, _eid in episodes] + [
+                        t("← Back")
+                    ]
+                    e_idx = select_from_list(
+                        ep_labels, f"{icon('tv')} {t('Select Episode:')}",
+                        default_index=min(ep_idx, len(episodes) - 1),
+                    )
+                if e_idx >= len(episodes):
+                    break  # → results
+                ep_idx = e_idx
+                handle_hianime_episode(
+                    sel["title"], sel["slug"], episodes[e_idx][0],
+                    cover_url=sel.get("poster", ""), total_eps=total,
+                )
+                # Back from the stream/next menu → episodes list again.
+
+        if from_latest:
+            return  # latest is a single feed: Back leaves the provider
 
 
 def resume_hianime(data):

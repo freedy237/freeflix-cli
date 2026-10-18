@@ -561,15 +561,21 @@ class TestAnimeSamaSeasonLang:
 
     def test_vf_entry_no_duplicates_500_skipped(self):
         from freeflix_cli.scraping import anime_sama
-        orig = anime_sama._get
-        anime_sama._get = self._fake_get
+
+        class _FakeCffi:
+            @staticmethod
+            def get(url, **kw):
+                return self._fake_get(url)
+
+        orig = anime_sama.cffi_requests.get
+        anime_sama.cffi_requests.get = _FakeCffi.get
         try:
             season = anime_sama.get_season(
                 "https://anime-sama.to/catalogue/test/saison1/vf/")
             assert list(season.episodes.keys()) == ["vf"]
             assert len(season.episodes["vf"]) == 1
         finally:
-            anime_sama._get = orig
+            anime_sama.cffi_requests.get = orig
 
 
 class TestCoflixPlayersSkipBadLi:

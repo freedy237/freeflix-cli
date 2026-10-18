@@ -168,6 +168,8 @@ _FR = {
     "Accent reset.": "Accent réinitialisé.",
     # Search history + new releases (1.8.3)
     "New releases": "Nouveautés",
+    "Checking for new releases...": "Recherche des nouveautés…",
+    "No new releases right now.": "Aucune nouveauté pour le moment.",
     "Recent searches": "Recherches récentes",
     "↑/↓ recall · type to search": "↑/↓ rappeler · tape pour chercher",
     # Home dashboard (1.8.2)
@@ -193,6 +195,10 @@ _FR = {
     "Ready": "Prêt",
     # In-flow messages (Anime-Sama & shared)
     "season(s)": "saison(s)",
+    "season": "saison",
+    "seasons": "saisons",
+    "episode": "épisode",
+    "episodes": "épisodes",
     "No matches found on AniList.": "Aucune correspondance sur AniList.",
     "Failed to update AniList.": "Échec de la mise à jour AniList.",
     "The source may be down or rate-limiting — try again in a moment.":
@@ -299,6 +305,8 @@ _FR = {
     "None": "Aucun",
     "Analyzing players (resolutions, bitrate)…": "Analyse des lecteurs (résolutions, débit)…",
     "Analyze players (resolutions/bitrate)": "Analyser les lecteurs (résolutions/débit)",
+    "Reduce motion": "Réduire les animations",
+    "Reduce motion:": "Animations réduites :",
     "Player analysis:": "Analyse des lecteurs :",
     "If a source is Cloudflare-blocked, pass the check in your browser,": "Si une source est bloquée par Cloudflare, passe le test dans ton navigateur,",
     "then paste the 'cf_clearance' cookie value + your User-Agent here.": "puis colle ici la valeur du cookie 'cf_clearance' + ton User-Agent.",
@@ -592,6 +600,7 @@ _FR = {
     'Esc again to decline': 'Échap à nouveau pour refuser',
     'Failed to download subtitles:': 'Échec du téléchargement des sous-titres :',
     'Failed to load (network/source issue):': 'Chargement échoué (problème réseau/source) :',
+    'Failed to load (network/source issue).': 'Chargement échoué (problème réseau/source).',
     'Failed to load season (network/source issue):': 'Chargement de la saison échoué (problème réseau/source) :',
     'Fetching AniList data for ID:': "Récupération des données AniList pour l'ID :",
     'Finalizing upgrade': 'Finalisation de la mise à jour',

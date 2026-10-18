@@ -10,6 +10,8 @@ scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 
 from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
+from .. import httpcache  # noqa: E402 (persistent catalogue cache)
+from .utils import cacheable_body, clean_text  # noqa: E402
 
 
 def _get(url, **kw):
@@ -354,11 +356,17 @@ class AnimeExtractor:
         base = (self.hianime_base or "https://hianime.at").rstrip("/")
         out = []
         try:
-            r = _get(f"{base}/search?keyword={_up.quote(title or '')}",
-                     timeout=12)
-            if r.status_code != 200:
-                return out
-            txt = r.text or ""
+            ckey = f"hianime:search:{(title or '').lower()}"
+            body = httpcache.get(ckey, 900)
+            if body is None:
+                r = _get(f"{base}/search?keyword={_up.quote(title or '')}",
+                         timeout=12)
+                if r.status_code != 200:
+                    return out
+                body = r.text or ""
+                if cacheable_body(body):
+                    httpcache.store(ckey, body)
+            txt = body
             # The top-10 sidebar repeats result markup — cut it off first
             # (same trick as ani-cli).
             txt = txt.split('id="main-sidebar"')[0]
@@ -370,7 +378,7 @@ class AnimeExtractor:
                 if not m:
                     continue
                 slug = m.group(1)
-                name = _html.unescape(m.group(2)).strip()
+                name = clean_text(_html.unescape(m.group(2)))
                 if not slug or not name:
                     continue
                 im = re.search(r'<img[^>]+src="([^"]+)"', b)
@@ -394,10 +402,16 @@ class AnimeExtractor:
         base = (self.hianime_base or "https://hianime.at").rstrip("/")
         out = []
         try:
-            r = _get(f"{base}/home", timeout=12)
-            if r.status_code != 200:
-                return out
-            txt = r.text or ""
+            body = httpcache.get("hianime:home", 300)
+            if body is None:
+                r = _get(f"{base}/home", timeout=12)
+                if r.status_code != 200:
+                    return out
+                body = r.text or ""
+                if body:
+                    if cacheable_body(body):
+                        httpcache.store("hianime:home", body)
+            txt = body
             i = txt.find("Latest Episode")
             seg = txt[i:i + 40000] if i >= 0 else ""
             # Cut at the next section header so only this shelf is read.
@@ -410,7 +424,7 @@ class AnimeExtractor:
                 slug = m.group(1)
                 if any(s["slug"] == slug for s in out):
                     continue
-                name = _html.unescape(m.group(2)).strip()
+                name = clean_text(_html.unescape(m.group(2)))
                 em = re.search(
                     r'<a href="(?:https?://[^/]+)?/' + re.escape(slug) +
                     r'"[^>]{0,400}?<img[^>]+src="([^"]+)"', seg)
@@ -444,9 +458,16 @@ class AnimeExtractor:
             m = re.search(r"-(\d+)$", slug or "")
             if not m:
                 return []
-            r = _get(f"{base}/api/theme/episode/list/{m.group(1)}",
-                     timeout=12)
-            html = r.json().get("html", "")
+            ckey = f"hianime:eps:{m.group(1)}"
+            cached = httpcache.get(ckey, 900)
+            if cached is not None:
+                html = json.loads(cached).get("html", "")
+            else:
+                r = _get(f"{base}/api/theme/episode/list/{m.group(1)}",
+                         timeout=12)
+                html = r.json().get("html", "")
+                if cacheable_body(html):
+                    httpcache.store(ckey, json.dumps({"html": html}))
             eps = re.findall(r'data-number="(\d+)"[^>]*data-id="(\d+)"', html)
             return [(int(n), e) for n, e in eps]
         except Exception:

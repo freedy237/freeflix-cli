@@ -15,6 +15,7 @@ from ..cli_utils import (
     skeleton,
     spinner,
     crumb,
+    clear_screen,
 )
 from ..icons import icon
 from ..i18n import t
@@ -59,81 +60,92 @@ def _pick_season_episode(title: str, year: str):
         )
     seasons = sorted(season_map)
 
-    s_opts = [f"{t('Season')} {s}" for s in seasons] + [t("← Back")]
-    s_idx = select_from_list(s_opts, f"{icon('tv')} {t('Select Season:')}")
-    if s_idx >= len(seasons):
-        return (None, None)
-    season = seasons[s_idx]
+    while True:  # ── Season level ──
+        s_opts = [f"{t('Season')} {s}" for s in seasons] + [t("← Back")]
+        s_idx = select_from_list(s_opts, f"{icon('tv')} {t('Select Season:')}")
+        if s_idx >= len(seasons):
+            return (None, None)  # → caller (results / provider)
+        season = seasons[s_idx]
 
-    eps = sorted(season_map[season], key=lambda x: x[0])
-    e_opts = [f"E{ep[0]:02d} - {ep[1]}" for ep in eps] + [t("← Back")]
-    with crumb(f"{t('Season')} {season}"):
-        e_idx = select_from_list(e_opts, f"{icon('tv')} {t('Select Episode:')}")
-    if e_idx >= len(eps):
-        return (None, None)
-    return (season, eps[e_idx][0])
+        eps = sorted(season_map[season], key=lambda x: x[0])
+        while True:  # ── Episode level ──
+            e_opts = [f"E{ep[0]:02d} - {ep[1]}" for ep in eps] + [t("← Back")]
+            with crumb(f"{t('Season')} {season}"):
+                e_idx = select_from_list(e_opts, f"{icon('tv')} {t('Select Episode:')}")
+            if e_idx >= len(eps):
+                break  # → season list (one level up)
+            return (season, eps[e_idx][0])
 
 
 def handle_papystreaming():
-    """Search Papystreaming, then resolve + play via the shared resolvers."""
-    query = get_user_input(
-        t("Search query (or 'exit' to back)"),
-        header=f"{icon('movie')} Papystreaming",
-        history=tracker.get_search_history(),
-    )
-    if query and query.lower() != "exit":
+    """Search Papystreaming, then resolve + play via the shared resolvers.
+
+    Back stack : results ← search (state kept, no refetch) ; the season/
+    episode picker keeps its own one-level Back."""
+    last_query = ""
+    while True:  # ── Search level ──
+        clear_screen()  # each new search starts clean
+        query = get_user_input(
+            t("Search query (or 'exit' to back)"),
+            default=last_query or None,
+            header=f"{icon('movie')} Papystreaming",
+            history=tracker.get_search_history(),
+        )
+        if not query or query.lower() == "exit":
+            return
+        last_query = query
         tracker.add_search_query(query)
-    if not query or query.lower() == "exit":
-        return
 
-    with skeleton(f"{t('Searching for')} {query}…"):
-        results = papystreaming.search(query)
-    if not results:
-        if papystreaming.blocked_by_cloudflare:
-            print_warning(t("Papystreaming is Cloudflare-protected right now."))
-            print_info(t("Settings → Cloudflare token : paste your cf_clearance "
-                         "cookie (+ User-Agent) to unlock it."))
-        else:
-            print_warning(t("No results found."))
-        pause()
-        return
+        with skeleton(f"{t('Searching for')} {query}..."):
+            results = papystreaming.search(query)
+        if not results:
+            if papystreaming.blocked_by_cloudflare:
+                print_warning(t("Papystreaming is Cloudflare-protected right now."))
+                print_info(t("Settings → Cloudflare token : paste your cf_clearance "
+                             "cookie (+ User-Agent) to unlock it."))
+            else:
+                print_warning(t("No results found."))
+            pause()
+            continue
 
-    # Preview pane : poster + type/year beside the result list.
-    previews = [
-        make_preview(
-            cover=r["poster"],
-            title=r["title"],
-            lines=[
-                (t("Movie") if r["media_type"] == "movie" else t("Series"))
-                + (f" · {r['year']}" if r["year"] else "")
-            ],
-            panel_title="Papystreaming",
+        # Preview pane : poster + type/year beside the result list.
+        previews = [
+            make_preview(
+                cover=r["poster"],
+                title=r["title"],
+                lines=[
+                    (t("Movie") if r["media_type"] == "movie" else t("Series"))
+                    + (f" · {r['year']}" if r["year"] else "")
+                ],
+                panel_title="Papystreaming",
+            )
+            for r in results
+        ]
+        labels = [r["title"] + (f" ({r['year']})" if r["year"] else "") for r in results]
+
+        idx = select_with_preview(
+            labels, f"{icon('tv')} {t('Search Results:')}", previews
         )
-        for r in results
-    ]
-    labels = [r["title"] + (f" ({r['year']})" if r["year"] else "") for r in results]
-    idx = select_with_preview(
-        labels, f"{icon('tv')} {t('Search Results:')}", previews
-    )
-    if idx >= len(results):  # Esc / Back
-        return
-    sel = results[idx]
+        if idx >= len(results):  # Esc / Back
+            continue  # → search input (pre-filled, no refetch)
+        sel = results[idx]
 
-    is_movie = sel["media_type"] == "movie"
-    season = episode = None
-    with crumb(sel["title"]):
-        if not is_movie:
-            season, episode = _pick_season_episode(sel["title"], sel["year"])
-            if season is None:  # backed out of the season/episode picker
-                return
+        is_movie = sel["media_type"] == "movie"
+        season = episode = None
+        with crumb(sel["title"]):
+            if not is_movie:
+                season, episode = _pick_season_episode(sel["title"], sel["year"])
+                if season is None:  # backed out of the season list
+                    continue  # → search input
 
-        _flow_goldenms_stream(
-            title=sel["title"],
-            tmdb_id=sel["tmdb_id"],
-            imdb_id="",
-            year=sel["year"] or None,
-            season=season,
-            episode=episode,
-            is_movie=is_movie,
-            logo_url=sel["poster"],
-        )
+            _flow_goldenms_stream(
+                title=sel["title"],
+                tmdb_id=sel["tmdb_id"],
+                imdb_id="",
+                year=sel["year"] or None,
+                season=season,
+                episode=episode,
+                is_movie=is_movie,
+                logo_url=sel["poster"],
+            )
+        # Back at the stream menu → search input again.

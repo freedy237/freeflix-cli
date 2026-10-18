@@ -9,7 +9,8 @@ from .objects import (
     Player,
     CoflixMovie,
 )
-from .utils import parse_html
+from .utils import (cacheable_body, clean_text, load_origin as resilient_origin,
+                    parse_html, store_origin)
 import base64
 import json
 import re
@@ -20,6 +21,7 @@ website_origin = ""
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
 from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
+from .. import httpcache  # noqa: E402 (persistent search cache)
 
 
 def _get(url, **kw):
@@ -32,7 +34,7 @@ def _get(url, **kw):
     import time as _time
 
     base_headers = kw.pop("headers", {})
-    kw.setdefault("timeout", 20)  # never hang on a dead host
+    kw.setdefault("timeout", (6, 20))  # fail fast on a dead mirror
 
     def _fetch():
         cf = cloudflare.get_cf_headers(url)
@@ -55,10 +57,34 @@ from .config import portals  # noqa: E402 (deliberate late import — order matt
 from ..i18n import t  # noqa: E402 (late import like cloudflare — order matters)
 
 
+def _get_cached(url: str, ttl: int = 600) -> str:
+    """GET a catalogue/content page with a short TTL cache.
+
+    Coflix pages are heavy (400-450 KB) and a content view needs TWO of them
+    (movie page + player aggregator), which cost ~3 s on a slow link. Caching
+    the body makes every revisit instantaneous while a 10-minute TTL keeps
+    new episodes visible quickly."""
+    ckey = f"coflix:page:{url}"
+    body = httpcache.get(ckey, ttl)
+    if body is not None:
+        return body
+    response = _get(url)
+    response.raise_for_status()
+    body = response.text or ""
+    if cacheable_body(body):
+        httpcache.store(ckey, body)
+    return body
+
+
 def get_website_url(portal=portals["coflix"]):
     global website_origin
 
     if website_origin:
+        return
+
+    cached = resilient_origin("coflix")
+    if cached:
+        website_origin = cached
         return
 
     base = portal if portal.startswith("http") else "https://" + portal
@@ -73,6 +99,7 @@ def get_website_url(portal=portals["coflix"]):
     response.raise_for_status()
 
     website_origin = str(response.url).rstrip("/")
+    store_origin("coflix", website_origin)
 
 
 
@@ -102,7 +129,7 @@ def _cards_from_soup(soup) -> list[SearchResult]:
         img = a.find("img")
         if img is None:
             continue
-        title = (img.get("alt") or "").strip()
+        title = clean_text(img.get("alt") or "")
         cover = _norm_img(img.get("src") or img.get("data-src") or "")
         if not title:
             continue
@@ -114,11 +141,10 @@ def _cards_from_soup(soup) -> list[SearchResult]:
 def latest(limit: int = 12) -> list[SearchResult]:
     """Newest homepage additions (the front-page grid is reverse-chronological)."""
     try:
-        response = _get(website_origin.rstrip("/") + "/")
-        response.raise_for_status()
+        body = _get_cached(website_origin.rstrip("/") + "/", 120)
     except Exception:
         return []
-    return _cards_from_soup(parse_html(response.text))[:limit]
+    return _cards_from_soup(parse_html(body))[:limit]
 
 
 def _search_html(query: str) -> list[SearchResult]:
@@ -129,9 +155,15 @@ def _search_html(query: str) -> list[SearchResult]:
     gets real posters, unlike the imageless WP REST endpoint.
     """
     page = website_origin.rstrip("/") + "/?s=" + urllib.parse.quote(query)
-    response = _get(page)
-    response.raise_for_status()
-    return _cards_from_soup(parse_html(response.text))
+    ckey = f"coflix:search:{query.strip().lower()}"
+    body = httpcache.get(ckey, 600)
+    if body is None:
+        response = _get(page)
+        response.raise_for_status()
+        body = response.text or ""
+        if cacheable_body(body):
+            httpcache.store(ckey, body)
+    return _cards_from_soup(parse_html(body))
 
 
 def search(query: str) -> list[SearchResult]:
@@ -194,14 +226,19 @@ def get_players(players_url: str) -> list[Player]:
         "Referer": website_origin,
     }
 
-    response = _get(players_url, headers=headers)
-
-    content = response.text or ""
+    ckey = f"coflix:page:{players_url}"
+    cached = httpcache.get(ckey, 600)
+    if cached is not None:
+        content = cached
+        response = None
+    else:
+        response = _get(players_url, headers=headers)
+        content = response.text or ""
     # coflix's player aggregator (lecteurvideo.com) sits behind Cloudflare
     # and returns a 403 challenge page no terminal can pass. Surface a
     # clear message instead of a raw HTTPError.
     head = content[:1500].lower()
-    if response.status_code != 200 and (
+    if response is not None and response.status_code != 200 and (
         "cloudflare" in head or "cf-ray" in head or "attention required" in head
     ):
         hint = (
@@ -213,7 +250,10 @@ def get_players(players_url: str) -> list[Player]:
         raise RuntimeError(
             "Source Coflix protégée par Cloudflare en ce moment." + hint
         )
-    response.raise_for_status()
+    if response is not None:
+        response.raise_for_status()
+        if cacheable_body(content):
+            httpcache.store(ckey, content)
 
     soup = parse_html(content)
 
@@ -271,15 +311,13 @@ def get_episode(url: str) -> Episode:
     page embeds the player aggregator in an <iframe> (same as movies), so the
     players come straight from get_players() ; the title falls back to the h1.
     """
-    response = _get(url)
-    response.raise_for_status()
-
-    soup = parse_html(response.text)
+    body = _get_cached(url, 600)
+    soup = parse_html(body)
 
     h1 = soup.find("h1")
-    title: str = h1.get_text(strip=True) if h1 else ""
+    title: str = clean_text(h1.get_text(strip=True)) if h1 else ""
 
-    players_url = _players_url_from_page(soup, response.text)
+    players_url = _players_url_from_page(soup, body)
 
     players = get_players(players_url) if players_url else []
 
@@ -301,9 +339,8 @@ def get_season(url: str) -> CoflixSeason:
         raw = frag[len("panel="):]
         panel = raw if re.fullmatch(r"[A-Za-z0-9_-]+", raw) else ""
 
-    response = _get(page_url)
-    response.raise_for_status()
-    soup = parse_html(response.text)
+    season_body = _get_cached(page_url, 600)
+    soup = parse_html(season_body)
 
     panels = soup.select(f".cf-episodes-panel[data-panel='{panel}']") if panel != "" \
         else soup.select(".cf-episodes-panel")
@@ -380,14 +417,12 @@ def _extract_cover(soup, html: str = "") -> str:
 
 
 def get_movie(url: str) -> CoflixMovie:
-    response = _get(url)
-    response.raise_for_status()
-
-    soup = parse_html(response.text)
+    body = _get_cached(url, 600)
+    soup = parse_html(body)
 
     h1 = soup.find("h1")
-    title: str = h1.text.strip() if h1 else url.rstrip("/").split("/")[-1].replace("-", " ").title()
-    img: str = _extract_cover(soup, response.text)
+    title: str = clean_text(h1.text) if h1 else url.rstrip("/").split("/")[-1].replace("-", " ").title()
+    img: str = _extract_cover(soup, body)
 
     genres: list[str] = []
     genres_container = soup.find("div", {"class": "ctgrs"})
@@ -399,21 +434,19 @@ def get_movie(url: str) -> CoflixMovie:
     year_elem = soup.find("span", {"class": "fwb fz20 e-fz25 dib"})
     year = year_elem.text.strip() if year_elem else "Unknown"
 
-    players_url = _players_url_from_page(soup, response.text)
+    players_url = _players_url_from_page(soup, body)
     players = get_players(players_url) if players_url else []
 
     return CoflixMovie(title, url, img, genres, year, players)
 
 
 def get_series(url: str) -> CoflixSeries:
-    response = _get(url)
-    response.raise_for_status()
-
-    soup = parse_html(response.text)
+    body = _get_cached(url, 600)
+    soup = parse_html(body)
 
     h1 = soup.find("h1")
     title: str = h1.text.strip() if h1 else url.rstrip("/").split("/")[-1].replace("-", " ").title()
-    img: str = _extract_cover(soup, response.text)
+    img: str = _extract_cover(soup, body)
 
     genres: list[str] = []
     genres_container = soup.find("div", {"class": "ctgrs"})

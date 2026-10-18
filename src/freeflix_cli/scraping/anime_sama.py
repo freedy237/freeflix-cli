@@ -1,7 +1,11 @@
 from curl_cffi import requests as cffi_requests
 from .objects import SearchResult, SamaSeason, SamaSeries, SeasonAccess, Episode
-from .utils import parse_episodes_from_js, parse_html
+from .utils import (
+    parse_episodes_from_js, parse_html, clean_text, cacheable_body,
+    load_origin as resilient_origin, store_origin,
+)
 from ..net_config import DNS_OPTIONS
+from .. import httpcache
 from . import resilient
 from random import randint
 import re
@@ -43,7 +47,8 @@ def _get(url, cache_ttl=0, cache_key=None, **kw):
     resp = _fetch()
     if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
         resp = _fetch()
-    if cache_ttl and getattr(resp, "status_code", None) == 200:
+    if (cache_ttl and getattr(resp, "status_code", None) == 200
+            and cacheable_body(resp.text)):
         httpcache.store(ckey, resp.text)
     return resp
 
@@ -58,6 +63,12 @@ def get_website_url(portal=portals["anime-sama"]):
     global website_origin
 
     if website_origin:
+        return
+
+    # Cached settled mirror (24 h) — skips the 2-request resolution entirely.
+    cached = resilient_origin("anime-sama")
+    if cached:
+        website_origin = cached
         return
 
     base = portal if portal.startswith("http") else "https://" + portal
@@ -80,9 +91,10 @@ def get_website_url(portal=portals["anime-sama"]):
     resp2 = cloudflare.cf_get(scraper, recommanded_url, timeout=20)
     if resp2 is None:
         website_origin = recommanded_url.rstrip("/")
-        return
-    resp2.raise_for_status()
-    website_origin = str(resp2.url).rstrip("/")
+    else:
+        resp2.raise_for_status()
+        website_origin = str(resp2.url).rstrip("/")
+    store_origin("anime-sama", website_origin)
 
 
 def search(query: str) -> list[SearchResult]:
@@ -104,14 +116,28 @@ def search(query: str) -> list[SearchResult]:
         return vals[0] if vals else default  # remote [] corrompu → défaut
 
     container_css = _css("search_container", "#list_catalog")
-    card_css = _css("search_card", "div.card-content")
     info_css = _css("search_info", "p.info-value")
 
     result_container = soup.select_one(container_css)
 
+    def _first(node, key, default):
+        """First match among the ordered selectors (old + new layouts)."""
+        for sel in resilient.get("anime-sama", key, [default]):
+            el = node.select_one(sel)
+            if el is not None:
+                return el
+        return None
+
     # Check if the container exists to avoid errors if no results
     if result_container:
         for result in result_container.find_all("div", recursive=False):
+            # Skip SCAN-ONLY cards on the 2026-10 layout (an "Anime" badge
+            # means the title is watchable; the scan badge alone does not).
+            if result.select_one(".as-badge-scan") and not result.select_one(
+                ".as-badge-anime"
+            ):
+                continue
+
             is_scan_only = False
             for info in result.select(info_css):
                 if info.get_text(strip=True) == "Scans":
@@ -120,20 +146,24 @@ def search(query: str) -> list[SearchResult]:
             if is_scan_only:
                 continue
 
-            link_tag = result.find("a")
+            link_tag = _first(result, "search_link", "a")
             if not link_tag:
                 continue
             url: str = link_tag.attrs.get("href", "")
             if url and not url.startswith("http"):
                 url = website_origin.rstrip("/") + "/" + url.lstrip("/")
-            img_tag = link_tag.img
+            img_tag = _first(link_tag, "search_img", "img")
+            if img_tag is None:
+                img_tag = _first(result, "search_img", "img")
             img: str = img_tag.attrs.get("src", "") if img_tag else ""
-            info_block = result.select_one(card_css)
-            if not info_block:
-                continue
-            h2 = info_block.h2
-            title: str = h2.text if h2 else ""
-            genre_p = info_block.select_one(info_css)
+            # New cards also expose a high-res poster in data-img.
+            if not img and result.attrs.get("data-img"):
+                img = str(result.attrs["data-img"])
+            title_tag = _first(result, "search_title", "h3")
+            title: str = clean_text(title_tag.get_text(strip=True) if title_tag else "")
+            if not title and result.attrs.get("data-nom"):
+                title = clean_text(result.attrs["data-nom"])
+            genre_p = _first(result, "search_genre", "p.info-value")
             genres: list[str] = genre_p.text.split(", ") if genre_p else []
             if not title:
                 continue
@@ -153,34 +183,71 @@ def get_season(url: str) -> SamaSeason:
     # d'entrée était déjà en vf, et corrompait les slugs contenant "vostfr".
     m = re.search(r"/(vostfr|vf|vj|vcn|vqc|vkr|va|vf1|vf2)/?$", url)
     base = url[:m.start()] if m else url.rstrip("/")
+
+    # The 9 language probes are INDEPENDENT network fetches: run them in a
+    # small pool instead of one after another (first visit to a season was
+    # ~3-9 s sequential, now ~0.8-1.5 s). Each worker uses its own one-shot
+    # request (curl_cffi sessions are not shared across threads) and the
+    # persistent cache serves repeat visits instantly.
+    def _probe(lang_code: str):
+        stable = f"{base}/{lang_code}/episodes.js"
+        cached = httpcache.get(stable, 3600)
+        if cached is not None:
+            return lang_code, cached, True
+        nurl = stable + f"?filever={randint(1, 100000)}"
+        try:
+            # Same Referer/Origin as the browser: without them the CDN
+            # answers 403 to the parallel (fresh-session) requests.
+            origin = website_origin or base
+            r = cffi_requests.get(
+                nurl,
+                impersonate="chrome",
+                timeout=(6, 20),
+                curl_options=DNS_OPTIONS,
+                headers={"Referer": origin + "/", "Origin": origin},
+            )
+            if r.status_code == 404:
+                # Negative cache: this language doesn't exist for the season.
+                # Without it every revisit re-probed 7 dead URLs (~2 s).
+                httpcache.store(stable, "")
+                return lang_code, None, False
+            r.raise_for_status()
+            text = r.text or ""
+            if "var eps" in text:
+                httpcache.store(stable, text)
+            else:
+                httpcache.store(stable, "")  # announced but unpublished
+            return lang_code, text, False
+        except Exception:
+            return lang_code, None, False
+
     seen_stable = set()
+    todo = []
     for lang_code in lang_codes:
-        stable = base + f"/{lang_code}/episodes.js"
+        stable = f"{base}/{lang_code}/episodes.js"
         if stable in seen_stable:
             continue
         seen_stable.add(stable)
-        nurl = stable + f"?filever={randint(1, 100000)}"
-        try:
-            response = _get(nurl, cache_ttl=3600, cache_key=stable)
-        except Exception:
-            continue
-        if response.status_code == 404:
-            continue
-        try:
-            response.raise_for_status()
-        except Exception:
-            continue  # une langue en 500/403 n'aborte plus toute la saison
+        todo.append(lang_code)
 
-        # Season announced but not yet published (episodes.js is empty,
-        # e.g. `//`) — skip instead of crashing in parse_episodes_from_js.
-        if "var eps" not in (response.text or ""):
-            continue
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            probed = list(pool.map(_probe, todo))
+    except Exception:
+        probed = [_probe(lc) for lc in todo]
 
-        parsed = parse_episodes_from_js(response.text)
+    for lang_code, text, _cached in probed:
+        if not text or "var eps" not in text:
+            continue
+        parsed = parse_episodes_from_js(text)
         if not parsed:
             continue
         episodes[lang_code] = parsed
         valid_lang.append(lang_code)
+
+    # Stable display order (pool completion order is not deterministic).
+    valid_lang.sort(key=lang_codes.index)
 
     # Clean up the title based on the URL
     parts = url.removesuffix("/").split("/")
@@ -203,7 +270,7 @@ def get_series(url: str) -> SamaSeries:
     # Title : newer anime-sama layout dropped <h4 id="titreOeuvre"> in favour
     # of a plain <h1>. The selector list (old id, then h1) is hot-patchable;
     # fall back to the URL slug if none match.
-    title = resilient.first_text(soup, "anime-sama", "series_title")
+    title = clean_text(resilient.first_text(soup, "anime-sama", "series_title"))
     if not title:
         title = url.rstrip("/").split("/")[-1].replace("-", " ").title()
 

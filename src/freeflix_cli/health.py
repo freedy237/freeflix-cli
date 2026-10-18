@@ -88,17 +88,17 @@ def refresh(portals: dict, force: bool = False) -> None:
 
 
 def badge_for(label: str) -> str:
-    """Return a trailing offline badge for a provider menu *label*, or ''.
+    """Return a trailing status badge for a provider menu *label*, or ''.
 
     Only badges when we have a FRESH, definitive 'down' result — an unknown or
-    stale source shows nothing (fail-quiet)."""
+    stale source shows nothing (fail-quiet). Semantic dot (○ = offline) rather
+    than a text glyph: it reads at a glance and scales with the theme."""
     low = label.lower()
     for key, needles in _PROVIDER_HOSTS.items():
         if any(n in low for n in needles):
             ent = _status.get(key)
             if ent and (time.time() - ent[0]) < _TTL and not ent[1]:
-                from .icons import icon
                 from .i18n import t
-                return f"  {icon('offline')} {t('offline')}"
+                return f"  ○ {t('offline')}"
             return ""
     return ""

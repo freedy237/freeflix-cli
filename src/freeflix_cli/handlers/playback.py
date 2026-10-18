@@ -164,11 +164,14 @@ def play_episode_flow(
         # 25 s+) must not stall the whole menu. Collect what's done within
         # the budget ; stragglers just get no annotation, and we DON'T wait
         # for them on exit (shutdown(wait=False)).
-        # 26 s: resolve (~5 s) + throttled ffprobe (sendvid ≈ 15-18 s) + margin.
-        ANALYSIS_BUDGET = 26
+        # 7 s total: cached analyses return instantly; uncached hosts get a
+        # 5 s per-player budget (HLS master parsing is fast — only throttled
+        # direct MP4s used to need 15-20 s, and they now fail fast instead of
+        # stalling the whole menu).
+        ANALYSIS_BUDGET = 6
         ex = ThreadPoolExecutor(max_workers=8)
         futs = {
-            ex.submit(analyze_stream_quality, p.url, headers): p
+            ex.submit(analyze_stream_quality, p.url, headers, 5): p
             for p in supported_players
         }
         with spinner(t("Analyzing players (resolutions, bitrate)…")):

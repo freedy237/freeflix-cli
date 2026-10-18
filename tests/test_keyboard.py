@@ -128,9 +128,13 @@ def test_input_types_and_submits():
     assert _run_input(["a", "b", "c", readchar.key.ENTER]) == "abc"
 
 
-def test_input_backspace_and_esc_default():
+def test_input_backspace_and_esc_cancels():
     assert _run_input(["a", "b", readchar.key.BACKSPACE, readchar.key.ENTER]) == "a"
-    assert _run_input([readchar.key.ESC], default="dflt") == "dflt"
+    # Esc CANCELS — it must never resolve to the pre-filled default (that
+    # re-ran the search instead of going back: the "Esc → results" trap).
+    assert _run_input([readchar.key.ESC], default="dflt") == ""
+    # Enter on an EMPTY field still accepts the default.
+    assert _run_input([readchar.key.ENTER], default="dflt") == "dflt"
 
 
 def test_input_history_recall():
@@ -239,7 +243,7 @@ class _DummyLive2:
 
 def test_input_double_esc_cancels():
     assert _run_input([readchar.key.ESC, readchar.key.ESC],
-                      default="dflt") == "dflt"
+                      default="dflt") == ""
 
 
 def test_windows_fast_double_esc_replays():

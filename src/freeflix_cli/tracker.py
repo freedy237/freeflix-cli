@@ -140,10 +140,14 @@ class ProgressTracker:
             return []
 
         entries = list(self.data["history"].values())
-        # Parse date and sort
-        entries.sort(
-            key=lambda x: datetime.fromisoformat(x["last_watched"]), reverse=True
-        )
+        # Parse date and sort — but one corrupted entry (missing/invalid
+        # last_watched) must never crash the Home screen or the History menu.
+        def _when(entry):
+            try:
+                return datetime.fromisoformat(entry["last_watched"])
+            except (KeyError, ValueError, TypeError):
+                return datetime.min
+        entries.sort(key=_when, reverse=True)
         return entries
 
     def delete_history_item(self, provider: str, series_title: str):

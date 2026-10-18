@@ -11,6 +11,7 @@ from ..cli_utils import (
     print_success,
     get_user_input,
     clean_title,
+    pause,
 )
 from .anime_sama import anime_sama
 from . import goldenanime
@@ -98,196 +99,196 @@ def handle_anilist_continue():
         )
         return
 
-    # --- Existing Anime-Sama logic ---
-    anime_sama.get_website_url()
+    # --- Anime-Sama path : search → match → seasons → languages → episodes,
+    #     one level per Back (state kept, no refetch). ---
+    _anilist_anime_sama_flow(
+        media_title,
+        selected_entry["media"]["title"]["romaji"],
+        media_id,
+        next_episode_num,
+    )
 
+
+def _anilist_target_season(media_title, romaji_title):
+    """Detect 'Season X' / 'S X' / 'Part X' in an AniList title (or None)."""
+    for cand in (media_title, romaji_title):
+        if not cand:
+            continue
+        for pat in (r"Season\s+(\d+)", r"\s+S(\d+)", r"Part\s+(\d+)"):
+            m = re.search(pat, cand, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_num):
+    """Anime-Sama leg of 'Continue from AniList', with a one-level Back stack."""
+    anime_sama.get_website_url()
     cleaned_title = clean_title(media_title)
 
     print_info(f"{t('Searching for')} '{media_title}' {t('on Anime-Sama')}...")
     results = anime_sama.search(media_title)
-
-    # Fallback 1: Try Cleaned English Title
     if not results and cleaned_title != media_title:
         print_info(f"{t('No results for full title. Trying cleaned:')} '{cleaned_title}'...")
         results = anime_sama.search(cleaned_title)
-
-    # Fallback 2: Try Romaji
-    romaji_title = selected_entry["media"]["title"]["romaji"]
     if not results and romaji_title and romaji_title != media_title:
         print_warning(
             f"{t('No results for English title. Trying Romaji:')} '{romaji_title}'..."
         )
         results = anime_sama.search(romaji_title)
+    if not results:
+        cleaned_romaji = clean_title(romaji_title)
+        if cleaned_romaji and cleaned_romaji != romaji_title:
+            print_info(f"{t('Trying cleaned Romaji:')} '{cleaned_romaji}'...")
+            results = anime_sama.search(cleaned_romaji)
 
-        # Fallback 2.1: Try Cleaned Romaji
-        if not results:
-            cleaned_romaji = clean_title(romaji_title)
-            if cleaned_romaji != romaji_title:
-                print_info(f"{t('Trying cleaned Romaji:')} '{cleaned_romaji}'...")
-                results = anime_sama.search(cleaned_romaji)
-
-    # Fallback 3: Manual Search
     if not results:
         print_warning(t("No results found on Anime-Sama."))
-        choice = select_from_list(
-            [t("Try Manual Search"), t("Cancel")], t("What would you like to do?")
-        )
-        if choice == 0:
-            manual_query = get_user_input(t("Enter search query"))
-            results = anime_sama.search(manual_query)
-            if not results:
-                print_error(t("Still no results found."))
-                return
-        else:
+        if select_from_list([t("Try Manual Search"), t("← Back")],
+                            t("What would you like to do?")) != 0:
+            return
+        manual_query = get_user_input(t("Enter search query"))
+        if not manual_query:
+            return
+        results = anime_sama.search(manual_query)
+        if not results:
+            print_error(t("Still no results found."))
             return
 
-    # Let user confirm the match to be safe
-    r_idx = select_from_list(
-        [r.title for r in results] + [t("Cancel")], t("Select the matching result:")
-    )
-    if r_idx == len(results):
-        return
+    target_season_num = _anilist_target_season(media_title, romaji_title)
+    from .playback import play_episode_flow
 
-    selection = results[r_idx]
+    while True:  # ── Match level ──
+        r_idx = select_from_list(
+            [r.title for r in results] + [t("← Back")],
+            t("Select the matching result:"),
+        )
+        if r_idx >= len(results):
+            return  # → home
+        selection = results[r_idx]
 
-    # Now just use the Anime-Sama handler logic but bypass search?
-    # Or just jump into getting series...
-
-    print_info(f"{t('Loading')} [cyan]{selection.title}[/cyan]...")
-    series = anime_sama.get_series(selection.url)
-
-    if not series.seasons:
-        print_warning(t("No seasons found."))
-        return
-
-    # Try to auto-select the season if the title had a season number
-    target_season_num = None
-    # Check media_title or romaji_title for "Season X"
-    for cand in [media_title, romaji_title]:
-        if not cand:
+        print_info(f"{t('Loading')} [cyan]{selection.title}[/cyan]...")
+        try:
+            series = anime_sama.get_series(selection.url)
+        except Exception as e:
+            print_error(f"{t('Failed to load (network/source issue):')} {type(e).__name__}")
+            pause()
             continue
-        match = re.search(r"Season\s+(\d+)", cand, re.IGNORECASE)
-        if match:
-            target_season_num = int(match.group(1))
-            break
-        match = re.search(r"\s+S(\d+)", cand, re.IGNORECASE)
-        if match:
-            target_season_num = int(match.group(1))
-            break
+        if not series.seasons:
+            print_warning(t("No seasons found."))
+            pause()
+            continue
 
-    # Also check if it's "Part X" which sometimes maps to seasons on providers
-    if target_season_num is None:
-        for cand in [media_title, romaji_title]:
-            if not cand:
-                continue
-            match = re.search(r"Part\s+(\d+)", cand, re.IGNORECASE)
-            if match:
-                # Part 1 is usually Season 1, Part 2 could be Season 2 or just Part 2
-                target_season_num = int(match.group(1))
-                break
-
-    default_season_idx = 0
-    if target_season_num is not None:
-        # Try to find "Saison X" or "Season X" or just "X" in series.seasons
-        for i, s in enumerate(series.seasons):
-            s_match = re.search(r"(?:Saison|Season)\s+(\d+)", s.title, re.IGNORECASE)
-            if s_match and int(s_match.group(1)) == target_season_num:
-                default_season_idx = i
-                break
-            # Fallback for movie or single season if it matches "Saison 1"
-            if (
-                target_season_num == 1
-                and "Saison" not in s.title
-                and "Season" not in s.title
-            ):
-                # If it's the only season, it's probably it
-                if len(series.seasons) == 1:
+        default_season_idx = 0
+        if target_season_num is not None:
+            for i, sea in enumerate(series.seasons):
+                s_match = re.search(r"(?:Saison|Season)\s+(\d+)", sea.title, re.IGNORECASE)
+                if s_match and int(s_match.group(1)) == target_season_num:
+                    default_season_idx = i
+                    break
+                if (target_season_num == 1
+                        and "Saison" not in sea.title
+                        and "Season" not in sea.title
+                        and len(series.seasons) == 1):
                     default_season_idx = 0
                     break
 
-    season_idx = select_from_list(
-        [s.title for s in series.seasons],
-        f"{icon('tv')} {t('Select Season:')}",
-        default_index=default_season_idx,
-    )
+        while True:  # ── Season level ──
+            season_idx = select_from_list(
+                [sea.title for sea in series.seasons] + [t("← Back")],
+                f"{icon('tv')} {t('Select Season:')}",
+                default_index=default_season_idx,
+            )
+            if season_idx >= len(series.seasons):
+                break  # → match list
+            selected_season_access = series.seasons[season_idx]
+            if target_season_num is not None:
+                print_info(
+                    f"AniList {t('suggests')} [bold]{t('Season')} {target_season_num}[/bold]."
+                )
+            print_info(f"{t('Loading')} [cyan]{selected_season_access.title}[/cyan]...")
+            try:
+                season = anime_sama.get_season(selected_season_access.url)
+            except Exception as e:
+                print_error(f"{t('Failed to load season (network/source issue):')} {type(e).__name__}")
+                pause()
+                continue
+            if not season.episodes:
+                print_warning(t("No episodes found."))
+                pause()
+                continue
+            tracker.set_anilist_mapping("Anime-Sama", series.title, media_id, season.title)
+            langs = list(season.episodes.keys())
 
-    if target_season_num is not None:
-        print_info(f"AniList {t('suggests')} [bold]{t('Season')} {target_season_num}[/bold].")
+            while True:  # ── Language level ──
+                if len(langs) == 1:
+                    selected_lang = langs[0]
+                else:
+                    lang_idx = select_from_list(
+                        langs + [t("← Back")],
+                        f"{icon('globe')} {t('Select Language:')}",
+                    )
+                    if lang_idx >= len(langs):
+                        break  # → season
+                    selected_lang = langs[lang_idx]
+                episodes = season.episodes[selected_lang]
 
-    selected_season_access = series.seasons[season_idx]
+                start_ep_idx, found = 0, False
+                for i, ep in enumerate(episodes):
+                    m = re.search(r"(\d+)", ep.title)
+                    if m and int(m.group(1)) == next_episode_num:
+                        start_ep_idx, found = i, True
+                        break
+                if not found:
+                    print_warning(
+                        f"{t('Could not automatically find Episode')} {next_episode_num}. "
+                        f"{t('Please select:')}"
+                    )
+                    chosen = select_from_list(
+                        [e.title for e in episodes] + [t("← Back")],
+                        f"{icon('tv')} {t('Select Episode:')}",
+                    )
+                    if chosen >= len(episodes):
+                        break  # → language
+                    start_ep_idx = chosen
+                else:
+                    print_success(
+                        f"{t('Found Episode')} {next_episode_num}: "
+                        f"{episodes[start_ep_idx].title}"
+                    )
 
-    print_info(f"{t('Loading')} [cyan]{selected_season_access.title}[/cyan]...")
-    season = anime_sama.get_season(selected_season_access.url)
+                completed = False
+                ep_idx = start_ep_idx
+                while True:  # ── Episode / play level ──
+                    selected_episode = episodes[ep_idx]
 
-    # Now we have the season and the series, and we know the AniList ID (media_id).
-    # We can safely create the mapping.
-    tracker.set_anilist_mapping("Anime-Sama", series.title, media_id, season.title)
+                    def _anilist_update(ep=selected_episode):
+                        m = re.search(r"(\d+)", ep.title)
+                        if m and anilist_client.update_progress(media_id, int(m.group(1))):
+                            print_success(t("AniList updated!"))
 
-    langs = list(season.episodes.keys())
-    if not langs:
-        print_warning(t("No episodes found."))
-        return
-
-    lang_idx = select_from_list(langs, f"{icon('globe')} {t('Select Language:')}")
-    selected_lang = langs[lang_idx]
-    episodes = season.episodes[selected_lang]
-
-    # Find target episode
-    start_ep_idx = 0
-    # Try to find by number (often title contains number)
-    # This is rough, regex search for next_episode_num
-
-    found = False
-    for i, ep in enumerate(episodes):
-        match = re.search(r"(\d+)", ep.title)
-        if match and int(match.group(1)) == next_episode_num:
-            start_ep_idx = i
-            found = True
-            break
-
-    if not found:
-        print_warning(
-            f"{t('Could not automatically find Episode')} {next_episode_num}. {t('Please select:')}"
-        )
-        start_ep_idx = select_from_list(
-            [e.title for e in episodes], f"{icon('tv')} {t('Select Episode:')}"
-        )
-    else:
-        print_success(
-            f"{t('Found Episode')} {next_episode_num}: {episodes[start_ep_idx].title}"
-        )
-
-    ep_idx = start_ep_idx
-
-    # Reuse the shared playback flow so AniList gets the SAME tech as the normal
-    # sources: quality/bitrate analysis, subtitle search, position-resume, stats.
-    from .playback import play_episode_flow
-
-    while True:
-        selected_episode = episodes[ep_idx]
-
-        def _anilist_update(ep=selected_episode):
-            m = re.search(r"(\d+)", ep.title)
-            if m and anilist_client.update_progress(media_id, int(m.group(1))):
-                print_success(t("AniList updated!"))
-
-        success = play_episode_flow(
-            provider_name="Anime-Sama",
-            series_title=series.title,
-            season_title=season.title,
-            episode=selected_episode,
-            series_url=series.url,
-            season_url=selected_season_access.url,
-            logo_url=series.img,
-            headers={"Referer": anime_sama.website_origin},
-            anilist_callback=_anilist_update,
-        )
-        if not success:
-            break  # Back / failed → leave
-
-        if ep_idx + 1 < len(episodes) and select_from_list(
-            [t("Yes"), t("No")], f"{t('Play next:')} {episodes[ep_idx+1].title} ?"
-        ) == 0:
-            ep_idx += 1
-            continue
-        break
+                    success = play_episode_flow(
+                        provider_name="Anime-Sama",
+                        series_title=series.title,
+                        season_title=season.title,
+                        episode=selected_episode,
+                        series_url=series.url,
+                        season_url=selected_season_access.url,
+                        logo_url=series.img,
+                        headers={"Referer": anime_sama.website_origin},
+                        anilist_callback=_anilist_update,
+                    )
+                    if not success:
+                        break  # → language menu
+                    if ep_idx + 1 < len(episodes) and select_from_list(
+                        [t("Yes"), t("No")],
+                        f"{t('Play next:')} {episodes[ep_idx + 1].title} ?",
+                    ) == 0:
+                        ep_idx += 1
+                        continue
+                    completed = True
+                    break
+                if completed:
+                    return  # playback finished → leave the provider
+                if len(langs) == 1:
+                    break  # single language → season menu

@@ -20,20 +20,8 @@ from . import setup_assistant
 from .tracker import tracker
 from .providers_registry import registry
 from .languages import get_language_display, get_all_languages
-from .player_manager import get_player_display, get_all_players
-from .handlers import (
-    anime_sama,
-    coflix,
-    french_stream,
-    french_manga,
-    papystreaming,
-    anilist,
-    goldenanime,
-    goldenms,
-    hianime,
-    yts as yts_handler,
-    nyaa as nyaa_handler,
-)
+# Heavy modules (handlers, player_manager, scrapers) are imported lazily at
+# their first use — startup only pays for what the home screen actually needs.
 from . import history_ui
 # NB: proxy is imported lazily (on first playback) so Flask stays out of
 # FreeFlix startup — see player_manager.play_video / _stop_proxy_if_running.
@@ -373,8 +361,8 @@ class _LiveStatsLine:
                 for i in range(6, -1, -1)
             ]
             _mx = max(_counts) or 1
-            _levels = "▁▂▃▄▅▆▇"
-            _spark = "".join(_levels[min(6, int(c / _mx * 6))] for c in _counts)
+            _levels = "▁▂▃▄▅▆▇█"
+            _spark = "".join(_levels[min(7, int(c / _mx * 7))] for c in _counts)
             line.append(f"    {t('Week activity')}: ", style=_color("dim"))
             line.append(f"{_spark}", style=_color("accent"))
         except Exception:
@@ -535,13 +523,23 @@ def _theme_settings():
             return
 
 
-def _browse_new_releases(items):
+def _browse_new_releases(items=None):
     """Show the background-fetched new releases with posters (chafa preview
-    pane); selecting one jumps straight into its latest season."""
+    pane); selecting one jumps straight into its latest season. When the silent
+    background feed hasn't landed yet, wait for it (bounded) with a spinner."""
     from .cli_utils import select_with_preview, make_preview, crumb, spinner
     from .scraping import anime_sama
     from .handlers.playback import play_episode_flow
     from .player_manager import episode_badges
+
+    if not items:
+        from . import recent
+        with spinner(t("Checking for new releases...")):
+            items = recent.wait_ready()
+    if not items:
+        print_info(t("No new releases right now."))
+        pause()
+        return
 
     previews = [
         make_preview(
@@ -781,6 +779,23 @@ def check_language_setup(force=False):
 def _register_providers():
     """Register every provider in source-menu order (anime first, then
     movies/series, then torrents). Called once at startup."""
+    # Lazy imports: pulling in every handler (and its scraper) at module load
+    # cost ~100 ms on each launch even though the home screen needs none of
+    # them. They are imported here, during the splash animation, so the cost
+    # is hidden instead of paid up front.
+    from .handlers import (
+        anime_sama,
+        coflix,
+        french_stream,
+        french_manga,
+        papystreaming,
+        goldenanime,
+        goldenms,
+        hianime,
+        yts as yts_handler,
+        nyaa as nyaa_handler,
+    )
+
     _reco = f"  {icon('star')} {t('recommended')}"
     _en = (tracker.get_anime_language() or tracker.get_language() or "en") == "en"
     # ── Anime / Manga sources ──────────────────────────────────
@@ -980,18 +995,19 @@ def main():
     #    Big FreeFlix wordmark with an animated ▰▰▱ loading bar while the
     #    quiet startup work (provider registration) runs underneath.
     from . import progress
-    with progress.LoadingScreen(version=_v) as _ls:
-        # A short, smooth 0 -> 100% sequence so the splash feels intentional
-        # instead of flashing past (~1.9 s total).
-        _ls.status(t("Starting up…"), frac=0.2)
-        time.sleep(0.45)
-        _ls.status(t("Loading providers…"), frac=0.55)
+    with progress.LoadingScreen(version=_v, handoff_alt_screen=True) as _ls:
+        # A short, smooth 0 -> 100% sequence: the work below is genuinely
+        # instant, so the splash is just enough to feel intentional without
+        # delaying launch (total ≈ 0.7 s instead of the old 1.9 s).
+        _ls.status(t("Starting up…"), frac=0.25)
+        time.sleep(0.18)
+        _ls.status(t("Loading providers…"), frac=0.6)
         _register_providers()
-        time.sleep(0.47)
-        _ls.status(t("Preparing the library…"), frac=0.85)
-        time.sleep(0.45)
+        time.sleep(0.22)
+        _ls.status(t("Preparing the library…"), frac=0.9)
+        time.sleep(0.18)
         _ls.status(t("Ready"), frac=1.0)
-        time.sleep(0.53)
+        time.sleep(0.28)
 
     # Check for updates
     if check_update():
@@ -1080,14 +1096,21 @@ def main():
         menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
         providers_idx = len(menu_items) - 1
 
-        # 3b. New releases (only if the background feed found some)
+        # 3b. New releases — present whenever the feed has items OR the user
+        # follows an Anime-Sama series (the background fetch may simply not be
+        # finished yet; opening it then waits, bounded, instead of hiding the
+        # entry until the next home visit).
         from . import recent
         new_releases = recent.get_items()
+        has_anime_history = any(
+            e.get("provider") == "Anime-Sama" for e in tracker.get_history()
+        )
         new_idx = -1
-        if new_releases:
-            menu_items.append(
-                f"{icon('sparkle')} {t('New releases')} ({len(new_releases)})"
-            )
+        if new_releases or has_anime_history:
+            label = f"{icon('sparkle')} {t('New releases')}"
+            if new_releases:
+                label += f" ({len(new_releases)})"
+            menu_items.append(label)
             new_idx = len(menu_items) - 1
 
         # 4. My History
@@ -1125,6 +1148,7 @@ def main():
             continue
 
         if choice_idx == anilist_resume_idx:
+            from .handlers import anilist
             anilist.handle_anilist_continue()
             continue
 
@@ -1208,6 +1232,7 @@ def main():
                 # DNS/TLS failure, timeout…) must show a clean message and
                 # return to the source list — never crash the whole app.
                 try:
+                    clear_screen()  # every provider starts on a clean screen
                     ordered[p_idx]["handler"]()
                 except KeyboardInterrupt:
                     pass  # Ctrl-C inside a source → back to the source list
@@ -1227,6 +1252,7 @@ def main():
 
 
                 lang_display = get_language_display(lang)
+                from .player_manager import get_player_display
                 player_display = t(get_player_display(player))
                 anime_lang = tracker.get_anime_language()
                 anime_lang_display = get_language_display(anime_lang)
@@ -1283,6 +1309,7 @@ def main():
                     _theme_settings()
 
                 def _a_player():
+                    from .player_manager import get_all_players
                     ps = get_all_players()
                     c = _pick([t(p[1]) for p in ps], t("Select default player:"))
                     if c is not None:
@@ -1391,6 +1418,12 @@ def main():
                     tracker.set_analyze_players(new)
                     toast(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
 
+                def _a_motion():
+                    new = not bool(tracker.data.get("reduced_motion", False))
+                    tracker.data["reduced_motion"] = new
+                    tracker._save_data()
+                    toast(f"{t('Reduce motion:')} {'ON' if new else 'OFF'}")
+
                 def _a_subs():
                     new = not tracker.get_subtitle_search()
                     tracker.set_subtitle_search(new)
@@ -1403,7 +1436,9 @@ def main():
 
                 def _a_clear_cache():
                     from . import httpcache
+                    from .scraping import utils as _su
                     n = httpcache.clear()
+                    _su.clear_origin_cache()  # mirrors are re-resolved next time
                     toast(f"{t('HTTP cache cleared')} ({n})")
 
                 def _cache_label():
@@ -1420,6 +1455,7 @@ def main():
                     (PLY, f"{t('Choose default Player')} ({player_display})", _a_player),
                     (PLY, f"{t('Nvidia GPU offload')} ({nv_mode})", _a_nvidia),
                     (PLY, f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})", _a_analyze),
+                    (PLY, f"{t('Reduce motion')} ({'ON' if tracker.data.get('reduced_motion') else 'OFF'})", _a_motion),
                     (PLY, f"{t('Buffer far ahead (disk cache)')} ({'ON' if tracker.get_disk_cache() else 'OFF'})", _a_disk_cache),
                     (DL, f"{t('Download Quality')} ({quality})", _a_quality),
                     (DL, f"{t('Parallel Downloads')} ({par_n})", _a_parallel),
@@ -1461,6 +1497,10 @@ def main():
             continue
 
         # Exit
+        try:
+            console.set_alt_screen(False)  # splash handed it over; restore
+        except Exception:
+            pass
         print_success(t("Goodbye!"))
         _stop_proxy_if_running()
         os._exit(0)
@@ -1470,6 +1510,10 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        try:
+            console.set_alt_screen(False)
+        except Exception:
+            pass
         print(f"\n{t('Goodbye!')}")
         _stop_proxy_if_running()
         os._exit(0)

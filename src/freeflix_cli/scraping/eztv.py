@@ -15,6 +15,8 @@ import urllib.parse
 from curl_cffi import requests as cffi_requests
 from ..net_config import DNS_OPTIONS
 from .config import portals
+from .. import httpcache
+from .utils import clean_text
 
 scraper = cffi_requests.Session(impersonate="chrome", curl_options=DNS_OPTIONS)
 
@@ -61,7 +63,7 @@ def _clean(t: dict) -> dict | None:
         return None
     filename = t.get("filename") or t.get("title") or ""
     return {
-        "title": t.get("title") or filename,
+        "title": clean_text(t.get("title") or filename),
         "filename": filename,
         "quality": "2160p" if "2160p" in filename else (
             "1080p" if "1080p" in filename else (
@@ -83,6 +85,14 @@ def _clean(t: dict) -> dict | None:
 
 def latest(limit: int = 30, max_pages: int = 2) -> list[dict]:
     """Newest episode uploads across all shows (sorted: newest first)."""
+    import json as _json
+    ckey = f"eztv:latest:{max_pages}"
+    cached = httpcache.get(ckey, 120)
+    if cached is not None:
+        try:
+            return _json.loads(cached)[:limit]
+        except ValueError:
+            pass
     bases = [_base()] + [b for b in MIRRORS if b != _base()]
     for base in bases:
         out = []
@@ -107,6 +117,7 @@ def latest(limit: int = 30, max_pages: int = 2) -> list[dict]:
                     break
             if out:
                 out.sort(key=lambda x: x.get("date") or 0, reverse=True)
+                httpcache.store(ckey, _json.dumps(out))
                 return out[:limit]
         except Exception:
             continue

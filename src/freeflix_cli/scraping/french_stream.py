@@ -5,7 +5,7 @@ from .objects import (
     FrenchStreamSeason,
     Episode,
 )
-from .utils import parse_html
+from .utils import cacheable_body, clean_text, parse_html
 
 from curl_cffi import requests as cffi_requests, CurlOpt
 from ..net_config import DNS_OPTIONS
@@ -37,6 +37,7 @@ def _doh_session():
 
 
 from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
+from .. import httpcache  # noqa: E402 (persistent search cache)
 
 
 def _get(url, **kw):
@@ -194,6 +195,10 @@ def search(query: str) -> list[SearchResult]:
         except Exception:
             pass
 
+    ckey = f"french-stream:search:{query.strip().lower()}"
+    body = httpcache.get(ckey, 300)
+    if body is not None:
+        return _parse_search_cards(body)
     try:
         response = _post(
             website_origin + page_search,
@@ -213,13 +218,23 @@ def search(query: str) -> list[SearchResult]:
     elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
         _diag(f"cloudflare challenge page ({len(body)} bytes)")
 
+    if cacheable_body(body):
+        httpcache.store(ckey, body)
+    results = _parse_search_cards(body)
+    if not results:
+        _diag(f"0 results parsed from {len(body)}-byte response "
+              f"(status={getattr(response, 'status_code', '?')})")
+    return results
+
+
+def _parse_search_cards(body: str) -> list[SearchResult]:
     results: list[SearchResult] = []
 
     soup = parse_html(body)
 
     for result in soup.find_all("div", {"class": "search-item"}):
         try:
-            title: str = result.find("div", {"class": "search-title"}).text
+            title: str = clean_text(result.find("div", {"class": "search-title"}).text)
         except AttributeError:
             continue  # carte promo sans titre : on saute, pas tout le reste
 
@@ -240,9 +255,6 @@ def search(query: str) -> list[SearchResult]:
 
         results.append(SearchResult(title, link, img, genres))
 
-    if not results:
-        _diag(f"0 results parsed from {len(body)}-byte response "
-              f"(status={getattr(response, 'status_code', '?')})")
     return results
 
 
@@ -253,7 +265,7 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
     if og and og.attrs.get("content"):
         title = og.attrs["content"]
     else:
-        title = soup.title.get_text(strip=True) if soup.title else url.rstrip("/").split("/")[-1].replace("-", " ").title()
+        title = clean_text(soup.title.get_text(strip=True)) if soup.title else url.rstrip("/").split("/")[-1].replace("-", " ").title()
 
     img: str = ""
     try:

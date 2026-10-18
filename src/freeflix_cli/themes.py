@@ -130,10 +130,31 @@ def list_themes():
     return [(k, v["label"]) for k, v in THEMES.items()]
 
 
+def _terminal_is_light():
+    """True when the terminal reports a LIGHT background via COLORFGBG.
+
+    COLORFGBG is "<fg>;<bg>" with ANSI indices (e.g. "15;0" = light text on
+    black, "0;15" = dark text on white). Background index >= 7 means light.
+    Returns None when unknown."""
+    import os
+    raw = os.environ.get("COLORFGBG", "").strip()
+    if not raw:
+        return None
+    try:
+        bg = int(raw.split(";")[-1])
+    except (ValueError, IndexError):
+        return None
+    return bg >= 7
+
+
 def active_theme() -> dict:
     """
     The user's current theme (falls back to default), with an optional custom
     accent colour overlaid on top (Settings → Appearance → Theme → accent).
+
+    Smart default: when the user never chose a theme and the terminal reports
+    a LIGHT background, use the light palette automatically — a white-on-white
+    UI would otherwise be unreadable. An explicit theme always wins.
     """
     name = DEFAULT_THEME
     accent = None
@@ -143,6 +164,8 @@ def active_theme() -> dict:
         accent = tracker.get_custom_accent()
     except Exception:
         pass
+    if name == DEFAULT_THEME and _terminal_is_light():
+        name = "latte"
     theme = dict(THEMES.get(name, THEMES[DEFAULT_THEME]))
     if accent:
         theme["accent"] = accent

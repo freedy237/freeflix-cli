@@ -412,20 +412,21 @@ def _download(url: str, attempts: int = 3):
     else:
         fetch_urls = [u for u in (_fast_url(src), src) if u]
 
-    # One quick attempt per URL (wsrv CDN first, then the origin). A short 8 s
+    # Up to `attempts` rounds (wsrv CDN first, then the origin). A short 8 s
     # timeout keeps a throttled host from stalling the poster for tens of
     # seconds — a missing cover is far better than a frozen UI.
-    for fetch_url in fetch_urls:
-        try:
-            r = _rq.get(fetch_url, impersonate="chrome", timeout=8)
-            if r.status_code == 200 and r.content:
-                fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(r.content)
-                _img_cache[url] = path
-                return path
-        except Exception:
-            pass
+    for _ in range(max(1, attempts)):
+        for fetch_url in fetch_urls:
+            try:
+                r = _rq.get(fetch_url, impersonate="chrome", timeout=8)
+                if r.status_code == 200 and r.content:
+                    fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(r.content)
+                    _img_cache[url] = path
+                    return path
+            except Exception:
+                pass
     return None
 
 
@@ -623,26 +624,47 @@ def get_cached_text(url: str, cols: int = 30, rows: int = 16):
     return _text_cache.get((url, cols, rows))
 
 
+_last_poster_title = ""
+
+
+def _clean_line(value) -> str:
+    """Collapse whitespace so scraped titles never print double spaces.
+    None / empty values vanish entirely (never print the literal "None")."""
+    if value is None:
+        return ""
+    try:
+        return " ".join(str(value).split()).strip()
+    except Exception:
+        return ""
+
+
 def show_poster(cover_url: str, title: str = None, info_lines=None) -> bool:
     """
     Present an anime : draw its poster (if possible) then print the title
     and a few info lines underneath. Safe to call always — if no cover or
     no chafa, it just prints the text info.
 
+    The title is omitted when the menu that led here ALREADY printed the same
+    title (the usual flow), which used to duplicate it in the scrollback.
+
     Returns True if a poster image was drawn.
     """
+    global _last_poster_title
     drew = render_url(cover_url) if cover_url else False
 
+    title = _clean_line(title)
+    lines = [_clean_line(x) for x in (info_lines or []) if _clean_line(x)]
+
     if _console is not None:
-        if title:
-            _console.print(f"\n[bold cyan]{title}[/bold cyan]")
-        for line in info_lines or []:
-            if line:
-                _console.print(f"  [dim]{line}[/dim]")
+        if title and title != _last_poster_title:
+            _console.print(f"[bold cyan]{title}[/bold cyan]")
+            _last_poster_title = title
+        for line in lines:
+            _console.print(f"  [dim]{line}[/dim]")
     else:  # pragma: no cover
-        if title:
+        if title and title != _last_poster_title:
             print(title)
-        for line in info_lines or []:
-            if line:
-                print("  " + str(line))
+            _last_poster_title = title
+        for line in lines:
+            print("  " + line)
     return drew

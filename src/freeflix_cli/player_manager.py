@@ -347,7 +347,7 @@ def _proxy_request_headers(url: str, player_config: dict, is_direct: bool,
 
 
 def _probe_stream(stream_url: str, headers: dict,
-                  session=None) -> dict:
+                  session=None, timeout: int = 12) -> dict:
     """
     One fetch of the resolved stream that serves two purposes :
       1. detect an upstream block (Cloudflare 403, etc.) so we can warn
@@ -390,13 +390,13 @@ def _probe_stream(stream_url: str, headers: dict,
         # annonce > 2 Mo c'est une vidéo directe sans extension, pas une
         # playlist — on ne la charge pas en RAM.
         try:
-            _h = sess.head(stream_url, headers=headers or {}, timeout=12)
+            _h = sess.head(stream_url, headers=headers or {}, timeout=timeout)
             _cl = _h.headers.get("Content-Length") or _h.headers.get("content-length")
             if _cl is not None and int(_cl) > _PROBE_MAX_BYTES:
                 return result
         except Exception:
             pass
-        r = sess.get(stream_url, headers=headers or {}, timeout=12)
+        r = sess.get(stream_url, headers=headers or {}, timeout=timeout)
         text = r.text or ""
         if len(text) > _PROBE_MAX_BYTES:
             return result
@@ -494,9 +494,12 @@ def _prompt_hls_quality(variants: list):
         mbps = v["bandwidth"] / 1_000_000 if v["bandwidth"] else 0
         opts.append(f"{v['label']}  ({mbps:.1f} Mbps)" if mbps else v["label"])
     opts.append(t("Auto (best)"))
+    opts.append(t("← Back"))
     idx = select_from_list(opts, t("📺 Choisis la qualité :"))
     if idx == len(variants):  # Auto
         return None
+    if idx > len(variants):  # Back → previous level (cancel playback)
+        return False
     return variants[idx]
 
 
@@ -550,7 +553,7 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
     return None
 
 
-def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> dict:
+def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: int = 9) -> dict:
     """
     Resolve a player URL and probe its HLS master, to know — BEFORE playing —
     which resolutions it offers and the bitrate needed for stable playback.
@@ -595,7 +598,7 @@ def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> 
             if not stream_url:
                 return out
             probe_headers = _proxy_request_headers(u, player_config, False, headers)
-        probe = _probe_stream(stream_url, probe_headers)
+        probe = _probe_stream(stream_url, probe_headers, timeout=timeout)
         blocked = probe.get("blocked")
         if blocked == "cloudflare":
             out["blocked"] = True
@@ -623,7 +626,7 @@ def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> 
             # header, and throttled hosts (sendvid serves at ~250 kbit/s with
             # moov-at-end) routinely need 12-18 s. Give it room ; the menu's
             # TOTAL wait stays capped by ANALYSIS_BUDGET in playback.py.
-            q = _ffprobe_quality(stream_url, probe_headers, timeout=20)
+            q = _ffprobe_quality(stream_url, probe_headers, timeout=timeout)
             if q:
                 out["qualities"] = [q]
         # Keep what's needed to estimate episode duration later (one media
@@ -637,6 +640,39 @@ def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> 
         out["ok"] = True
     except Exception:
         return out
+    return out
+
+
+# ─── Player-analysis cache ────────────────────────────────────────
+# The quality menu analyses every player of an episode; without a cache,
+# leaving and re-entering the same episode re-runs the whole extraction
+# (slow hosts: 5-20 s each). Successful results are stable for a while;
+# failures are retried sooner so a recovered host comes back.
+_quality_cache: Dict[tuple, tuple] = {}
+_quality_lock = _threading.Lock()
+_QUALITY_TTL_OK = 600.0
+_QUALITY_TTL_FAIL = 120.0
+
+
+def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> dict:
+    """Cached wrapper around the extractor probe (TTL 10 min / 2 min on fail)."""
+    headers = headers or {}
+    key = (url, headers.get("Referer", ""))
+    now = time.time()
+    with _quality_lock:
+        ent = _quality_cache.get(key)
+    if ent is not None:
+        age = now - ent[1]
+        ttl = _QUALITY_TTL_OK if ent[0].get("ok") else _QUALITY_TTL_FAIL
+        if age < ttl:
+            return dict(ent[0])
+    out = _analyze_stream_quality_uncached(url, headers, timeout=timeout)
+    with _quality_lock:
+        _quality_cache[key] = (dict(out), time.time())
+        if len(_quality_cache) > 300:  # bound memory on long sessions
+            oldest = sorted(_quality_cache.items(), key=lambda kv: kv[1][1])[:100]
+            for k, _ in oldest:
+                _quality_cache.pop(k, None)
     return out
 
 
@@ -1775,6 +1811,8 @@ def play_video(
             _variants = probe.get("variants", [])
             if len(_variants) > 1:
                 chosen = _prompt_hls_quality(_variants)
+                if chosen is False:
+                    return False  # ← Back → previous level (don't play)
                 if chosen and chosen.get("bandwidth"):
                     selected_hls_bitrate = chosen["bandwidth"]
                     selected_quality = chosen.get("height")

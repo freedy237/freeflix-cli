@@ -82,13 +82,16 @@ def bar(frac: float, width: int = 26) -> Text:
     n = int(round(frac * width))
     t = Text()
     try:
-        march = int(_time.monotonic() * 4) % 6
+        from . import motion
+        if motion.reduced():
+            march = None
+        else:
+            march = int(_time.monotonic() * 4) % 6
     except Exception:
         march = 0
     for i in range(n):
-        t.append(FILLED,
-                 style="bold bright_white" if (i + march) % 6 < 2
-                 else color("accent"))
+        hot = march is not None and (i + march) % 6 < 2
+        t.append(FILLED, style="bold bright_white" if hot else color("accent"))
     t.append(EMPTY * (width - n), style=color("dim"))
     return t
 
@@ -125,7 +128,8 @@ class LoadingScreen:
     On a non-tty it's a silent no-op.
     """
 
-    def __init__(self, version: str = "", status: str = "Starting up…"):
+    def __init__(self, version: str = "", status: str = "Starting up…",
+                 handoff_alt_screen: bool = False):
         self.version = version
         self._status = t(status)
         self._target_frac = None   # None -> indeterminate animation
@@ -135,6 +139,9 @@ class LoadingScreen:
         self._thread = None
         self._live = None
         self._active = False
+        # Startup-only: keep the alternate screen active when the splash ends
+        # so the first menu takes over without flashing back to the terminal.
+        self._handoff = handoff_alt_screen
 
     # public API -------------------------------------------------------
     def status(self, text: str = None, frac: float = None):
@@ -165,6 +172,12 @@ class LoadingScreen:
             self._thread.join(timeout=0.5)
         if self._live:
             try:
+                if self._handoff:
+                    # Don't leave the alternate screen here: the very next
+                    # menu repaints ON it. Exiting would reveal the terminal
+                    # for a frame (the flash users saw before the home menu).
+                    self._live._alt_screen = False
+                    self._live.transient = False
                 self._live.stop()
             except Exception:
                 pass
@@ -187,7 +200,7 @@ class LoadingScreen:
                     # Proportional catch-up + a floor, so the bar climbs to the
                     # target within a few frames (visible even during the short
                     # startup splash) instead of crawling.
-                    step = max((tgt - self._disp_frac) * 0.5, 0.06)
+                    step = max((tgt - self._disp_frac) * 0.6, 0.10)
                     self._disp_frac = min(tgt, self._disp_frac + step)
                 elif self._disp_frac > tgt:
                     self._disp_frac = tgt

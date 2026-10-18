@@ -1,5 +1,6 @@
 from ..scraping import anime_sama
 from ..cli_utils import (
+    clear_screen,
     select_from_list,
     select_with_preview,
     make_preview,
@@ -9,6 +10,7 @@ from ..cli_utils import (
     print_error,
     get_user_input,
     pause,
+    plural,
     skeleton,
     spinner,
     crumb,
@@ -124,92 +126,113 @@ def _update_anilist_progress(series, season, selected_episode):
 
 
 def handle_anime_sama():
-    """Handle Anime-Sama provider flow."""
+    """Handle Anime-Sama provider flow.
+
+    Navigation is a strict stack (one Back = one level up, state kept):
+    search → results → seasons → episodes → players. Backing out of a
+    series shows the SAME results again (no refetch); backing out of the
+    results returns to the search prompt (pre-filled), and Esc there
+    leaves the source.
+    """
     anime_sama.get_website_url()
 
-    query = get_user_input(
-        t("Search query (or 'exit' to back)"),
-        header=f"{icon('anime')} Anime-Sama",
-        history=tracker.get_search_history(),
-    )
-    if query and query.lower() != "exit":
-        tracker.add_search_query(query)
-    if not query or query.lower() == "exit":
-        return
-
-    try:
-        with skeleton(f"{t('Searching for')} {query}…"):
-            results = anime_sama.search(query)
-    except Exception as e:
-        print_error(f"{t('Search failed (network/source issue):')} {type(e).__name__}")
-        print_info(t("The source may be down or rate-limiting — try again in a moment."))
-        pause()
-        return
-
-    if not results:
-        print_warning(t("No results found."))
-        pause()
-        return
-
-    # Preview pane : poster + genres beside the result list (type to filter).
-    previews = [
-        make_preview(
-            cover=getattr(r, "img", ""),
-            title=r.title,
-            lines=[", ".join(r.genres)] if r.genres else [],
-            panel_title="Anime-Sama",
+    last_query = ""
+    while True:  # ── Search level ──
+        clear_screen()  # each new search starts clean
+        query = get_user_input(
+            t("Search query (or 'exit' to back)"),
+            default=last_query or None,
+            header=f"{icon('anime')} Anime-Sama",
+            history=tracker.get_search_history(),
         )
-        for r in results
-    ]
-    labels = [r.title for r in results]
-    choice_idx = select_with_preview(
-        labels, f"{icon('tv')} {t('Search Results:')}", previews
-    )
-    if choice_idx >= len(results):  # Esc / Back
-        return
-    selection = results[choice_idx]
-
-    try:
-        with spinner(f"{t('Loading')} {selection.title}…"):
-            series = anime_sama.get_series(selection.url)
-    except Exception as e:
-        print_error(f"{t('Failed to load (network/source issue):')} {type(e).__name__}")
-        print_info(t("The source may be down or rate-limiting — try again in a moment."))
-        pause()
-        return
-
-    if not series.seasons:
-        print_warning(t("No seasons found."))
-        pause()
-        return
-
-    # Anime poster + summary at selection.
-    from .. import terminal_image
-    terminal_image.show_poster(
-        getattr(series, "img", ""),
-        title=series.title,
-        info_lines=[
-            f"{len(series.seasons)} {t('season(s)')}",
-            ", ".join(getattr(series, "genres", []) or []),
-        ],
-    )
-
-    # Check for saved progress for this specific series
-    saved_progress = tracker.get_series_progress("Anime-Sama", series.title)
-    if saved_progress:
-        choice = select_from_list(
-            [
-                f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
-                t("Browse Seasons"),
-            ],
-            f"{t('Found saved progress for')} {series.title} :",
-        )
-        if choice == 0:
-            resume_anime_sama(saved_progress)
+        if not query or query.lower() == "exit":
             return
+        last_query = query
+        tracker.add_search_query(query)
 
-    # Season → Language → Episode, each level with a Back option that steps
-    # UP one level (Back at the season picker leaves the series entirely).
+        try:
+            with skeleton(f"{t('Searching for')} {query}…"):
+                results = anime_sama.search(query)
+        except Exception as e:
+            print_error(f"{t('Search failed (network/source issue):')} {type(e).__name__}")
+            print_info(t("The source may be down or rate-limiting — try again in a moment."))
+            pause()
+            continue
+
+        if not results:
+            print_warning(t("No results found."))
+            pause()
+            continue
+
+        # Preview pane : poster + genres beside the result list (type to filter).
+        previews = [
+            make_preview(
+                cover=getattr(r, "img", ""),
+                title=r.title,
+                lines=[", ".join(r.genres)] if r.genres else [],
+                panel_title="Anime-Sama",
+            )
+            for r in results
+        ]
+        labels = [r.title for r in results]
+
+        while True:  # ── Results level ──
+            choice_idx = select_with_preview(
+                labels, f"{icon('tv')} {t('Search Results:')}", previews
+            )
+            if choice_idx >= len(results):  # Esc / Back → search prompt
+                break
+            selection = results[choice_idx]
+
+            try:
+                with spinner(f"{t('Loading')} {selection.title}…"):
+                    series = anime_sama.get_series(selection.url)
+            except Exception as e:
+                print_error(f"{t('Failed to load (network/source issue):')} {type(e).__name__}")
+                print_info(t("The source may be down or rate-limiting — try again in a moment."))
+                pause()
+                continue
+
+            if not series.seasons:
+                print_warning(t("No seasons found."))
+                pause()
+                continue
+
+            # Anime poster + summary at selection.
+            from .. import terminal_image
+            terminal_image.show_poster(
+                getattr(series, "img", ""),
+                # Title already printed by the selection menu just above.
+                info_lines=[
+                    f"{len(series.seasons)} {plural(len(series.seasons), 'season', 'seasons')}",
+                    ", ".join(getattr(series, "genres", []) or []),
+                ],
+            )
+
+            # Check for saved progress for this specific series
+            saved_progress = tracker.get_series_progress("Anime-Sama", series.title)
+            if saved_progress:
+                choice = select_from_list(
+                    [
+                        f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
+                        t("Browse Seasons"),
+                    ],
+                    f"{t('Found saved progress for')} {series.title} :",
+                )
+                if choice == 0:
+                    resume_anime_sama(saved_progress)
+                    continue  # back to the same results list
+
+            _anime_sama_series_flow(series)
+            continue  # Back at seasons (or finished) → results again
+
+
+def _anime_sama_series_flow(series) -> bool:
+    """Season → language → episode → player flow for one series.
+
+    Returns True when the user is done with the series (so the caller shows
+    the results again), False when Back was pressed at the SEASON level.
+    Every deeper Back goes exactly one level up."""
     back = t("← Back")
     while True:  # ── Season ──
         with crumb(series.title):
@@ -218,7 +241,7 @@ def handle_anime_sama():
                 f"{icon('tv')} {t('Select Season:')}",
             )
         if season_idx >= len(series.seasons):
-            return  # leave the series → back to source menu
+            return False  # back to results
 
         selected_season_access = series.seasons[season_idx]
         print_info(f"{t('Loading')} [cyan]{selected_season_access.title}[/cyan]…")
@@ -230,7 +253,7 @@ def handle_anime_sama():
             pause()
             continue  # back to season picker
 
-        langs = list(season.episodes.keys())  # {lang: [Episode]}
+        langs = list(season.episodes.keys())
         if not langs:
             print_warning(t("No episodes found."))
             pause()
@@ -302,9 +325,6 @@ def handle_anime_sama():
                         from ..player_manager import last_playback_finished_naturally
                         from ..cli_utils import confirm_or_timeout
                         nxt = episodes[ep_idx + 1].title
-                        # Binge : if the episode reached its end (mpv IPC says
-                        # EOF), auto-play the next after a cancelable countdown.
-                        # If the user quit early, just ask (no countdown).
                         if last_playback_finished_naturally():
                             go = confirm_or_timeout(
                                 f"{t('Next episode')}: {nxt}", seconds=6, default=True)
@@ -314,14 +334,11 @@ def handle_anime_sama():
                                 f"{t('Play next episode:')} {nxt}?") == 0
                         if go:
                             ep_idx += 1
-                            continue  # play the next episode
+                            continue
                     break  # declined, or no next → back to episode picker
-                # loop back to the episode picker
 
-            # Back out of the episode picker :
             if len(langs) == 1:
                 break  # single language → step back to the season picker
-            # else: re-show the language picker
 
 
 def resume_anime_sama(data):
@@ -352,7 +369,11 @@ def resume_anime_sama(data):
     if len(langs) == 1:
         selected_lang = langs[0]
     else:
-        lang_idx = select_from_list(langs, t("🌍 Select Language:"))
+        lang_idx = select_from_list(
+            langs + [t("← Back")], t("🌍 Select Language:")
+        )
+        if lang_idx >= len(langs):
+            return  # → history list
         selected_lang = langs[lang_idx]
 
     episodes = season.episodes[selected_lang]

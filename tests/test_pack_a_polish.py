@@ -181,3 +181,5 @@ def test_live_stats_line_ticks_clock():
     c.print(line)
     out = c.export_text()
     assert re.search(r"\d{2}:\d{2}", out)
+
+

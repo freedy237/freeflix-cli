@@ -30,6 +30,17 @@ def get_items() -> list:
     return list(_state["items"])
 
 
+def wait_ready(timeout: float = 8.0) -> list:
+    """Block (bounded) until the background feed has finished, then return its
+    items. Used only when the user explicitly opens 'New releases' before the
+    silent fetch has landed — the home screen itself never waits."""
+    import time as _t
+    end = _t.time() + max(0.0, timeout)
+    while not _state["ready"] and _t.time() < end:
+        _t.sleep(0.1)
+    return list(_state["items"])
+
+
 def _fetch():
     items = []
     try:

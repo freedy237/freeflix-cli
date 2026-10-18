@@ -16,7 +16,7 @@ from urllib.parse import quote_plus, urljoin
 from curl_cffi import requests as cffi_requests
 from ..net_config import shared_session
 from .. import cloudflare
-from .utils import parse_html
+from .utils import clean_text, parse_html
 
 log = logging.getLogger("freeflix.nyaa")
 
@@ -203,7 +203,7 @@ def _fetch_list(url: str, query: str, max_results: int,
         if not name_link:
             continue
 
-        title = name_link.get_text(strip=True)
+        title = clean_text(name_link.get_text(strip=True))
         page_url = urljoin(NYAA_BASE + "/", name_link.get("href", ""))
 
         # Magnet is in tds[2] — second link

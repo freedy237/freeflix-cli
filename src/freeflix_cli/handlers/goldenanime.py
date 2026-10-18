@@ -1,8 +1,11 @@
 from ..scraping.goldenanime import goldenanime
 from ..scraping.subtitles import subtitle_extractor
 from ..cli_utils import (
+    clear_screen,
     select_from_list,
+    plural,
     select_with_preview,
+    crumb,
     make_preview,
     print_info,
     print_warning,
@@ -15,6 +18,7 @@ from ..player_manager import play_video, analyze_stream_quality, format_quality_
 from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
+from ..scraping.utils import clean_text
 from ..languages import get_language_label
 from ..anilist import anilist_client
 from ..scraping import player as player_scraper
@@ -78,7 +82,12 @@ def search_imdb_id(title: str):
 
 
 def handle_goldenanime():
-    """Handle GoldenAnime provider flow."""
+    """Handle GoldenAnime provider flow.
+
+    Back stack : results ← episodes ← streams, one level per Esc.
+    (Also fixes an old crash: searching by AniList ID never initialised
+    ``results``.)
+    """
     mode = select_from_list(
         [f"{icon('new')} {t('Latest uploads')}",
          f"{icon('search')} {t('Search by title')}", t("← Back")],
@@ -86,61 +95,62 @@ def handle_goldenanime():
     )
     if mode == 2:
         return
-    if mode == 0:
-        query = ""
-    else:
-        query = get_user_input(
-            t("Search query (Title or AniList ID) (or 'exit' to back)"),
-            header=f"{icon('sparkle')} GoldenAnime (VO)",
-            history=tracker.get_search_history(),
-        )
-        if query and not query.isdigit() and query.lower() != "exit":
-            tracker.add_search_query(query)
-        if query and query.lower() == "exit":
-            return
+    from_latest = (mode == 0)
+    last_query = ""
 
-    anilist_id = None
-    title = None
-    max_episodes = None
-    cover_url = None
-
-    if query.isdigit():
-        anilist_id = int(query)
-        print_info(f"{t('Fetching AniList data for ID:')} [cyan]{anilist_id}[/cyan]")
-        media = anilist_client.get_media_with_relations(anilist_id)
-        if media:
-            title = media.get("title", {}).get("english") or media.get("title", {}).get(
-                "romaji"
+    while True:  # ── Search level ──
+        clear_screen()  # each new search starts clean
+        if from_latest:
+            query = ""
+        else:
+            query = get_user_input(
+                t("Search query (Title or AniList ID) (or 'exit' to back)"),
+                default=last_query or None,
+                header=f"{icon('sparkle')} GoldenAnime (VO)",
+                history=tracker.get_search_history(),
             )
-            max_episodes = media.get("episodes")
-            cover_url = _cover(media)
-    elif not query:
-        print_info(f"{t('Loading trending anime…')}")
-        results = anilist_client.trending(10)
-        title = None
-    else:
-        title = query
-        print_info(f"{t('Searching AniList by Title:')} [cyan]{title}[/cyan]")
-        results = anilist_client.search_media(title)
-    if not results:
-        print_warning(t("No results found."))
-        pause()
-        return
-    # Preview pane : AniList cover + year/format/episodes/genres.
-    def _ani_lines(m):
-        out = []
-        bits = []
-        if m.get("seasonYear"):
-            bits.append(str(m["seasonYear"]))
-        if m.get("format"):
-            bits.append(str(m["format"]))
-        if m.get("episodes"):
-            bits.append(f"{m['episodes']} {t('eps')}")
-        if bits:
-            out.append(" · ".join(bits))
-        if m.get("genres"):
-            out.append(", ".join(m["genres"][:3]))
-        return out
+            if query and not query.isdigit() and query.lower() != "exit":
+                tracker.add_search_query(query)
+            if not query or query.lower() == "exit":
+                return
+            last_query = query
+
+        results = []
+        if query.isdigit():
+            anilist_id = int(query)
+            print_info(f"{t('Fetching AniList data for ID:')} [cyan]{anilist_id}[/cyan]")
+            media = anilist_client.get_media_with_relations(anilist_id)
+            if media:
+                results = [media]
+        elif not query:
+            print_info(f"{t('Loading trending anime…')}")
+            results = anilist_client.trending(10)
+        else:
+            print_info(f"{t('Searching AniList by Title:')} [cyan]{query}[/cyan]")
+            results = anilist_client.search_media(query)
+
+        if not results:
+            print_warning(t("No results found."))
+            pause()
+            if from_latest:
+                return
+            continue
+
+        # Shared match picker (search + trending).
+        def _ani_lines(m):
+            out = []
+            bits = []
+            if m.get("seasonYear"):
+                bits.append(str(m["seasonYear"]))
+            if m.get("format"):
+                bits.append(str(m["format"]))
+            if m.get("episodes"):
+                bits.append(f"{m['episodes']} {t('eps')}")
+            if bits:
+                out.append(" · ".join(bits))
+            if m.get("genres"):
+                out.append(", ".join(m["genres"][:3]))
+            return out
 
         previews = [
             make_preview(
@@ -156,49 +166,62 @@ def handle_goldenanime():
             f"({m.get('seasonYear', '?')}) - {m.get('episodes', '?')} {t('eps')}"
             for m in results
         ]
-        # Esc / Back falls through to manual input below (skip AniList).
-        m_idx = select_with_preview(
-            labels, f"{icon('sparkle')} {t('Select AniList Match:')}", previews
-        )
-        if m_idx < len(results):
+
+        while True:  # ── Results level ──
+            m_idx = select_with_preview(
+                labels, f"{icon('sparkle')} {t('Select AniList Match:')}", previews
+            )
+            if m_idx >= len(results):
+                break  # → search input (search) / provider menu (latest)
+
             match = results[m_idx]
-            # NOTE: ruff F841 false-positives below (all four ARE read at
-            # show_poster()/episode-loop) — noqa documents the blind spot.
-            anilist_id = match["id"]  # noqa: F841
-            title = match["title"]["english"] or match["title"]["romaji"]  # noqa: F841
-            max_episodes = match.get("episodes")  # noqa: F841
-            cover_url = _cover(match)  # noqa: F841
+            anilist_id = match["id"]
+            title = clean_text(
+                match["title"]["english"] or match["title"]["romaji"]
+            )
+            max_episodes = match.get("episodes")
+            cover_url = _cover(match)
 
-    # Anime poster + summary at selection (cover from AniList).
-    from .. import terminal_image
-    terminal_image.show_poster(
-        cover_url,
-        title=title,
-        info_lines=[f"{max_episodes} {t('episode(s)')}" if max_episodes else ""],
-    )
+            from .. import terminal_image
+            terminal_image.show_poster(
+                cover_url,
+                info_lines=[
+                    f"{max_episodes} {plural(max_episodes, 'episode', 'episodes')}"
+                    if max_episodes else ""
+                ],
+            )
 
-    # Episode Selection
-    episode = 1
-    if max_episodes:
-        ep_options = [f"{t('Episode')} {i}" for i in range(1, max_episodes + 1)] + [
-            t("Manual Input"), t("← Back")
-        ]
-        ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
-        if ep_idx < max_episodes:
-            episode = ep_idx + 1
-        elif ep_idx == max_episodes:
-            ep_input = get_user_input(t("Episode number"))
-            episode = int(ep_input) if ep_input and ep_input.isdigit() else 1
-        else:
-            return  # Back
-    else:
-        ep_input = get_user_input(t("Episode number (default 1)"))
-        episode = int(ep_input) if ep_input and ep_input.isdigit() else 1
+            while True:  # ── Episodes level ──
+                episode = 1
+                if max_episodes:
+                    ep_options = [
+                        f"{t('Episode')} {i}" for i in range(1, max_episodes + 1)
+                    ] + [t("Manual Input"), t("← Back")]
+                    with crumb(title):
+                        ep_idx = select_from_list(
+                            ep_options, f"{icon('tv')} {t('Select Episode:')}"
+                        )
+                    if ep_idx < max_episodes:
+                        episode = ep_idx + 1
+                    elif ep_idx == max_episodes:
+                        ep_input = get_user_input(t("Episode number"))
+                        if not ep_input or not ep_input.isdigit():
+                            continue
+                        episode = int(ep_input)
+                    else:
+                        break  # → results
+                else:
+                    ep_input = get_user_input(t("Episode number (default 1)"))
+                    episode = int(ep_input) if ep_input and ep_input.isdigit() else 1
 
-    # Proceed to episode loop (handles next episode proposal)
-    handle_goldenanime_episode(
-        title=title, anilist_id=anilist_id, start_episode=episode, cover_url=cover_url
-    )
+                handle_goldenanime_episode(
+                    title=title, anilist_id=anilist_id,
+                    start_episode=episode, cover_url=cover_url,
+                )
+                # Back from the stream/next menu → episode list again.
+
+        if from_latest:
+            return  # latest is a single feed: Back leaves the provider
 
 
 def _flow_goldenanime_stream(
@@ -328,6 +351,7 @@ def _flow_goldenanime_stream(
 
         if imdb_id:
             season = None
+            skip_subs = False
             if not is_movie:
                 # Detect season from title for smart default
                 default_season_idx = 0
@@ -340,39 +364,43 @@ def _flow_goldenanime_stream(
                             default_season_idx = detected_season - 1
 
                 season_options = [f"{t('Season')} {i}" for i in range(1, 11)] + [
-                    t("Manual Input")
+                    t("Manual Input"),
+                    t("← Back"),
                 ]
                 s_idx = select_from_list(
                     season_options,
                     t("Select Season (for subtitles mapping):"),
                     default_index=default_season_idx,
                 )
+                skip_subs = False
                 if s_idx < 10:
                     season = s_idx + 1
-                else:
+                elif s_idx == 10:
                     season_input = get_user_input(t("Season number (default 1)"))
                     season = (
                         int(season_input)
                         if season_input and season_input.isdigit()
                         else 1
                     )
+                else:
+                    skip_subs = True  # ← Back : skip subtitle search
 
-            print_info(f"{t('Searching for')} {lang_name} {t('subtitles...')}")
-            subs = subtitle_extractor.search(
-                imdb_id=imdb_id, season=season, episode=episode, lang_filter=user_lang
-            )
-
-            if subs:
-                # Show a shortened list to make it faster
-                sub_choices = [
-                    f"{s['source']} - {s.get('lang', lang_name)}" for s in subs[:5]
-                ] + [t("None")]
-                sub_idx = select_from_list(sub_choices, f"📝 {t('Select Subtitle:')}")
-                if sub_idx < len(sub_choices) - 1:
-                    subtitle_url = subs[sub_idx]["url"]
-                    print_info(f"{t('Selected subtitle from:')} {subs[sub_idx]['source']}")
-            else:
-                print_warning(f"{t('No')} {lang_name} {t('subtitles found.')}")
+            if not skip_subs:
+                print_info(f"{t('Searching for')} {lang_name} {t('subtitles...')}")
+                subs = subtitle_extractor.search(
+                    imdb_id=imdb_id, season=season, episode=episode, lang_filter=user_lang
+                )
+                if subs:
+                    # Show a shortened list to make it faster
+                    sub_choices = [
+                        f"{s['source']} - {s.get('lang', lang_name)}" for s in subs[:5]
+                    ] + [t("None")]
+                    sub_idx = select_from_list(sub_choices, f"📝 {t('Select Subtitle:')}")
+                    if sub_idx < len(sub_choices) - 1:
+                        subtitle_url = subs[sub_idx]["url"]
+                        print_info(f"{t('Selected subtitle from:')} {subs[sub_idx]['source']}")
+                else:
+                    print_warning(f"{t('No')} {lang_name} {t('subtitles found.')}")
 
     print_info(f"{t('Loading stream from')} [cyan]{selection['source']}[/cyan]...")
 

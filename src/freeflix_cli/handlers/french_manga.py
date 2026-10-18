@@ -2,6 +2,7 @@
 
 from ..scraping import french_manga
 from ..cli_utils import (
+    clear_screen,
     select_from_list,
     select_with_preview,
     make_preview,
@@ -10,6 +11,7 @@ from ..cli_utils import (
     pause,
     skeleton,
     spinner,
+    crumb,
 )
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 from ..i18n import t
@@ -67,103 +69,131 @@ def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx, co
 
 
 def handle_french_manga():
-    """French-Manga provider flow : search → series → lang → episode → play."""
-    query = get_user_input(
-        t("Search query (or 'exit' to back)"),
-        header=f"{icon('manga')} French-Manga",
-        history=tracker.get_search_history(),
-    )
-    if not query or query.lower() == "exit":
-        return
-    tracker.add_search_query(query)
+    """French-Manga provider flow : search → series → lang → episode → play.
 
-    with skeleton(f"{t('Searching for')} {query}…"):
-        results = french_manga.search(query)
-    if not results:
-        print_warning(t("No results found."))
-        pause()
-        return
-
-    # Preview pane : poster (TMDB thumbnail) beside the result list.
-    previews = [
-        make_preview(
-            cover=getattr(r, "img", ""),
-            title=r.title,
-            panel_title="French-Manga",
+    Back stack : results ← languages ← episodes ← players, one level per Esc.
+    """
+    last_query = ""
+    while True:  # ── Search level ──
+        clear_screen()  # each new search starts clean
+        query = get_user_input(
+            t("Search query (or 'exit' to back)"),
+            default=last_query or None,
+            header=f"{icon('manga')} French-Manga",
+            history=tracker.get_search_history(),
         )
-        for r in results
-    ]
-    choice = select_with_preview(
-        [r.title for r in results], f"{icon('tv')} {t('Search Results:')}", previews
-    )
-    if choice >= len(results):  # Esc / Back
-        return
-    selection = results[choice]
+        if not query or query.lower() == "exit":
+            return
+        last_query = query
+        tracker.add_search_query(query)
 
-    with spinner(f"{t('Loading')} {selection.title}…"):
-        data = french_manga.get_episodes(selection.url)
-
-    # Languages that actually have episodes
-    langs = [lng for lng in ("vf", "vostfr") if data.get(lng)]
-    if not langs:
-        print_warning(t("No episodes found."))
-        pause()
-        return
-
-    # Show the anime poster + a quick summary at selection.
-    from .. import terminal_image
-    title_disp = data.get("title") or selection.title
-    terminal_image.show_poster(
-        data.get("cover"),
-        title=title_disp,
-        info_lines=[f"{t('Languages')}: {', '.join(lg.upper() for lg in langs)}"],
-    )
-
-    while True:  # ── Language ──
-        if len(langs) == 1:
-            selected_lang = langs[0]
-        else:
-            lang_idx = select_from_list(
-                langs + [t("← Back")], f"{icon('globe')} {t('Select Language:')}"
-            )
-            if lang_idx >= len(langs):
-                return  # back → source menu
-            selected_lang = langs[lang_idx]
-
-        episodes = data[selected_lang]
-        ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
-
-        ep_options = [f"{t('Episode')} {n}" for n in ep_nums] + [f"{icon('download')} {t('Download')}", t("← Back")]
-        ep_idx = select_from_list(ep_options, f"{icon('tv')} {t('Select Episode:')}")
-        if ep_idx == len(ep_nums):  # Download ALL
-            ep_objects = [_Ep(f"{t('Episode')} {n}", episodes[n], selection.url) for n in ep_nums]
-            preferred = _pick_player_for_batch(ep_objects, {"Referer": french_manga.website_origin + "/"})
-            if preferred is None:
-                continue
-            download_episodes_batch(
-                provider_name="French-Manga",
-                series_title=data.get("title") or selection.title,
-                season_title=selected_lang.upper(),
-                episodes=ep_objects,
-                series_url=selection.url,
-                season_url=selection.url,
-                logo_url=data.get("cover", ""),
-                headers={"Referer": french_manga.website_origin + "/"},
-                preferred_player=preferred,
-            )
+        with skeleton(f"{t('Searching for')} {query}…"):
+            results = french_manga.search(query)
+        if not results:
+            print_warning(t("No results found."))
+            pause()
             continue
-        if ep_idx > len(ep_nums):
-            if len(langs) == 1:
-                return  # single language → back exits the handler
-            continue  # back to the language picker
-        break
 
-    title = data.get("title") or selection.title
+        # Preview pane : poster (TMDB thumbnail) beside the result list.
+        previews = [
+            make_preview(
+                cover=getattr(r, "img", ""),
+                title=r.title,
+                panel_title="French-Manga",
+            )
+            for r in results
+        ]
 
-    _play_episodes(
-        title, selection.url, selected_lang, episodes, ep_nums, ep_idx,
-        cover=data.get("cover", ""),
-    )
+        while True:  # ── Results level ──
+            choice = select_with_preview(
+                [r.title for r in results],
+                f"{icon('tv')} {t('Search Results:')}", previews,
+            )
+            if choice >= len(results):
+                break  # → search input
+            selection = results[choice]
+
+            try:
+                with spinner(f"{t('Loading')} {selection.title}…"):
+                    data = french_manga.get_episodes(selection.url)
+            except Exception:
+                print_warning(t("Failed to load (network/source issue)."))
+                pause()
+                continue
+
+            langs = [lng for lng in ("vf", "vostfr") if data.get(lng)]
+            if not langs:
+                print_warning(t("No episodes found."))
+                pause()
+                continue
+
+            from .. import terminal_image
+            terminal_image.show_poster(
+                data.get("cover"),
+                info_lines=[f"{t('Languages')}: {', '.join(lg.upper() for lg in langs)}"],
+            )
+
+            while True:  # ── Language level ──
+                if len(langs) == 1:
+                    selected_lang = langs[0]
+                else:
+                    with crumb(selection.title):
+                        lang_idx = select_from_list(
+                            langs + [t("← Back")],
+                            f"{icon('globe')} {t('Select Language:')}",
+                        )
+                    if lang_idx >= len(langs):
+                        break  # → results
+                    selected_lang = langs[lang_idx]
+
+                episodes = data[selected_lang]
+                ep_nums = sorted(episodes.keys(), key=_episode_sort_key)
+                ep_idx = 0
+
+                while True:  # ── Episodes level ──
+                    ep_options = [
+                        f"{t('Episode')} {n}" for n in ep_nums
+                    ] + [f"{icon('download')} {t('Download')}", t("← Back")]
+                    with crumb(selection.title), crumb(selected_lang.upper()):
+                        ep_idx = select_from_list(
+                            ep_options, f"{icon('tv')} {t('Select Episode:')}",
+                            default_index=min(ep_idx, len(ep_nums) - 1),
+                        )
+                    if ep_idx == len(ep_nums):  # Download ALL
+                        ep_objects = [
+                            _Ep(f"{t('Episode')} {n}", episodes[n], selection.url)
+                            for n in ep_nums
+                        ]
+                        preferred = _pick_player_for_batch(
+                            ep_objects,
+                            {"Referer": french_manga.website_origin + "/"},
+                        )
+                        if preferred is None:
+                            continue
+                        download_episodes_batch(
+                            provider_name="French-Manga",
+                            series_title=data.get("title") or selection.title,
+                            season_title=selected_lang.upper(),
+                            episodes=ep_objects,
+                            series_url=selection.url,
+                            season_url=selection.url,
+                            logo_url=data.get("cover", ""),
+                            headers={"Referer": french_manga.website_origin + "/"},
+                            preferred_player=preferred,
+                        )
+                        continue
+                    if ep_idx > len(ep_nums):
+                        break  # → language (or results when single-language)
+
+                    _play_episodes(
+                        data.get("title") or selection.title,
+                        selection.url, selected_lang, episodes, ep_nums, ep_idx,
+                        cover=data.get("cover", ""),
+                    )
+                    # Back from players → episodes list again.
+
+                if len(langs) == 1:
+                    break  # → results
 
 
 def resume_french_manga(data):

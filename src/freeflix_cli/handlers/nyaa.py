@@ -13,6 +13,7 @@ import subprocess
 import time
 
 from ..cli_utils import (
+    clear_screen,
     select_from_list,
     select_multiple,
     print_header,
@@ -230,7 +231,11 @@ def _download_and_watch(magnet: str, title: str) -> bool:
 
 
 def handle_nyaa():
-    """Provider handler — registered from main.py."""
+    """Provider handler — registered from main.py.
+
+    Back stack : mode → results → actions (search input between results
+    and mode), one level per Esc.
+    """
     print_header(t("🌊 Nyaa.si Torrents"))
 
     if not _aria2c_path():
@@ -247,61 +252,85 @@ def handle_nyaa():
         return
     _label, category, trusted_only = SCOPES[scope_idx]
 
-    mode = select_from_list(
-        [f"{icon('new')} {t('Latest uploads')}",
-         f"{icon('search')} {t('Search by title')}", t("← Back")],
-        f"{icon('wave')} Nyaa",
-    )
-    if mode == 1:
-        query = get_user_input(
-            t("Search query (or 'exit' to back)"),
-            header=f"{icon('wave')} Nyaa",
-            history=tracker.get_search_history(),
+    last_query = ""
+    while True:  # ── Mode level ──
+        mode = select_from_list(
+            [f"{icon('new')} {t('Latest uploads')}",
+             f"{icon('search')} {t('Search by title')}", t("← Back")],
+            f"{icon('wave')} Nyaa",
         )
-        if query and query.lower() != "exit":
-            tracker.add_search_query(query)
-        if not query or query.lower() == "exit":
+        if mode == 2:
             return
-        print_info(f"{t('Searching nyaa.si for')} [cyan]{query}[/cyan] ...")
-        results = nyaa.search(query, max_results=20, category=category,
-                              trusted_only=trusted_only)
-    elif mode == 0:
-        with skeleton(f"{t('Loading latest torrents…')}"):
-            results = nyaa.latest(category, max_results=20)
-    else:
-        return
 
-    if not results:
-        if nyaa.last_error:
-            print_warning(f"{t('Search failed:')} {nyaa.last_error}")
-        else:
-            print_warning(t("No results."))
-        pause()
-        return
+        if mode == 0:
+            with skeleton(f"{t('Loading latest torrents…')}"):
+                results = nyaa.latest(category, max_results=20)
+            if not results:
+                print_warning(t("No results."))
+                pause()
+                continue
+            _nyaa_results_flow(results)  # Back → mode menu
+            continue
 
+        # Search mode: results Back → search input (not the mode menu).
+        while True:
+            clear_screen()  # each new search starts clean
+            query = get_user_input(
+                t("Search query (or 'exit' to back)"),
+                default=last_query or None,
+                header=f"{icon('wave')} Nyaa",
+                history=tracker.get_search_history(),
+            )
+            if not query or query.lower() == "exit":
+                break  # → mode menu
+            last_query = query
+            tracker.add_search_query(query)
+            print_info(f"{t('Searching nyaa.si for')} [cyan]{query}[/cyan] ...")
+            results = nyaa.search(query, max_results=20, category=category,
+                                  trusted_only=trusted_only)
+            if not results:
+                if nyaa.last_error:
+                    print_warning(f"{t('Search failed:')} {nyaa.last_error}")
+                else:
+                    print_warning(t("No results."))
+                pause()
+                continue
+            _nyaa_results_flow(results)  # Back → search input again
+
+
+def _nyaa_results_flow(results: list) -> None:
+    """Results → actions loop. Returns on Back at the results list."""
     labels = [_format_row(r) for r in results] + [t("← Back")]
-    idx = select_from_list(labels, t("Pick a torrent:"))
-    if idx >= len(results):
-        return
+    while True:  # ── Results level ──
+        idx = select_from_list(labels, t("Pick a torrent:"))
+        if idx >= len(results):
+            return
+        chosen = results[idx]
+        if not chosen.get("seeders"):
+            print_warning(t("Warning: 0 seeders — this torrent may never complete."))
 
-    chosen = results[idx]
-    if not chosen.get("seeders"):
-        print_warning(t("Warning: 0 seeders — this torrent may never complete."))
-    actions = [f"{icon('play')} {t('Stream')}", f"{icon('download')} {t('Download')}", f"{icon('play')} {t('Download + Watch')}",
-               f"{icon('list')} {t('Batch download (multi-select)')}", t("← Back")]
-    act = select_from_list(actions, chosen["title"][:60])
-    if act == 0:
-        from .yts import _stream_via_goldenanime
-        _stream_via_goldenanime(chosen["title"])
-    elif act == 1:
-        _download_torrent(chosen["magnet"], chosen["title"], watch=False)
-    elif act == 2:
-        _download_and_watch(chosen["magnet"], chosen["title"])
-    elif act == 3:
-        _batch_download(results)
-    else:
-        return
-    pause()
+        while True:  # ── Actions level ──
+            actions = [
+                f"{icon('play')} {t('Stream')}",
+                f"{icon('download')} {t('Download')}",
+                f"{icon('play')} {t('Download + Watch')}",
+                f"{icon('list')} {t('Batch download (multi-select)')}",
+                t("← Back"),
+            ]
+            act = select_from_list(actions, chosen["title"][:60])
+            if act == 4:
+                break  # → results
+            if act == 0:
+                from .yts import _stream_via_goldenanime
+                _stream_via_goldenanime(chosen["title"])
+            elif act == 1:
+                _download_torrent(chosen["magnet"], chosen["title"], watch=False)
+            elif act == 2:
+                _download_and_watch(chosen["magnet"], chosen["title"])
+            elif act == 3:
+                _batch_download(results)
+            pause()
+            break  # action done → results
 
 
 def _batch_download(results: list) -> None:
