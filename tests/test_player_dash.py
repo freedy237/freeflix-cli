@@ -1,5 +1,8 @@
 """DASH playback path (Vidlink): mpv must receive the signed CDN headers."""
 
+import subprocess as _sp
+from types import SimpleNamespace
+
 from freeflix_cli import player_manager as pm
 
 
@@ -11,9 +14,15 @@ def test_dash_mpv_forwards_signed_headers(monkeypatch):
     monkeypatch.setattr(pm, "_mpv_position_args", lambda title: ([], "", ""))
     monkeypatch.setattr(pm, "_mpv_ipc_args", lambda key: ([], None))
     monkeypatch.setattr(pm, "_save_mpv_position", lambda *a, **k: None)
+    # Replace only player_manager's reference: patching the global
+    # subprocess.run would also capture background probes (lspci, …) on a
+    # busy CI runner.
     monkeypatch.setattr(
-        pm.subprocess, "run",
-        lambda cmd, **kw: captured.setdefault("cmd", cmd),
+        pm, "subprocess",
+        SimpleNamespace(
+            run=lambda cmd, **kw: captured.setdefault("cmd", cmd),
+            CalledProcessError=_sp.CalledProcessError,
+        ),
     )
 
     headers = {
