@@ -495,7 +495,9 @@ def _prompt_hls_quality(variants: list):
         opts.append(f"{v['label']}  ({mbps:.1f} Mbps)" if mbps else v["label"])
     opts.append(t("Auto (best)"))
     opts.append(t("← Back"))
-    idx = select_from_list(opts, t("📺 Choisis la qualité :"))
+    idx = select_from_list(
+        opts, t("📺 Choisis la qualité :"), clear_on_back=False
+    )
     if idx == len(variants):  # Auto
         return None
     if idx > len(variants):  # Back → previous level (cancel playback)
@@ -2003,7 +2005,8 @@ def play_video(
                         t("← Back"),
                     ]
                 player_choice = select_from_list(
-                    player_labels, t("🎮 Select video player:")
+                    player_labels, t("🎮 Select video player:"),
+                    clear_on_back=False,  # Back → source player menu
                 )
 
                 if player_choice == len(player_values):  # Back

@@ -1,6 +1,9 @@
 """Player-menu quality badges for the providers that build their own list."""
 
-from freeflix_cli.handlers import goldenms, hianime
+from types import SimpleNamespace
+
+from freeflix_cli import player_manager as pm
+from freeflix_cli.handlers import goldenms, hianime, playback
 from freeflix_cli.handlers.playback import quality_suffix
 
 
@@ -52,3 +55,30 @@ def test_labels_keep_static_quality_when_analysis_fails():
                 "url": "https://cdn/master.m3u8"}]
     labels = hianime._stream_labels(streams, {"https://cdn/master.m3u8": "✗"})
     assert labels == ["HiAnime (DUB - HD-1) [Multi]"]
+
+
+def test_player_back_returns_to_episode_without_clearing(monkeypatch):
+    """Back from the source-player menu is still inside the series view."""
+    captured = {}
+    episode = SimpleNamespace(
+        players=[SimpleNamespace(name="vidmoly", url="https://vidmoly/e/x")],
+        title="Episode 1",
+    )
+    monkeypatch.setattr(playback.player, "is_supported", lambda url: True)
+    monkeypatch.setattr(playback, "_dedup_players", lambda ps: ps)
+    monkeypatch.setattr(playback.tracker, "get_analyze_players", lambda: False)
+    monkeypatch.setattr(playback.tracker, "get_subtitle_search", lambda: False)
+    monkeypatch.setattr(playback.tracker, "get_last_server", lambda: "")
+    monkeypatch.setattr(pm, "prefetch_stream", lambda *a, **k: None)
+    monkeypatch.setattr(
+        playback, "select_from_list",
+        lambda opts, prompt, **kw: (
+            captured.update(kw) or len(opts) - 1
+        ),
+    )
+
+    assert playback.play_episode_flow(
+        "Anime-Sama", "Dragon Ball Super", "Saison 1", episode,
+        "https://x/catalogue/dbs", "https://x/dbs/saison1/vostfr", headers={},
+    ) is False
+    assert captured.get("clear_on_back") is False

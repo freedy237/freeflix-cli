@@ -1290,12 +1290,16 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     # final option), and falls back to the leading "←" — so a film literally
     # named "Back to the Future" no longer wipes the screen when picked, and a
     # translated "Annuler"/"Retour" without the arrow still does.
-    if clear_on_back and _looks_like_leave(label, result, len(options)):
+    leaving = _looks_like_leave(label, result, len(options))
+    if leaving and clear_on_back:
         clear_screen()
-    console.print(
-        f"\n[bold {color('accent')}]❯ {iconify(prompt)}[/bold {color('accent')}] "
-        f"[{color('success')}]{iconify(options[result])}[/{color('success')}]"
-    )
+    # Internal Back (clear_on_back=False) returns silently to the parent menu:
+    # printing "❯ prompt ← Retour" would leave a stray line above the poster.
+    if not leaving or clear_on_back:
+        console.print(
+            f"\n[bold {color('accent')}]❯ {iconify(prompt)}[/bold {color('accent')}] "
+            f"[{color('success')}]{iconify(options[result])}[/{color('success')}]"
+        )
     return result
 
 

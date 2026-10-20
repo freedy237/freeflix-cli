@@ -272,6 +272,7 @@ def play_episode_flow(
             player_options,
             t("🎮 Select Player:"),
             default_index=default_idx,
+            clear_on_back=False,  # Back → episode list, same series view
         )
 
         if player_idx == len(supported_players):  # Back selected

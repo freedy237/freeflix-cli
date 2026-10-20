@@ -88,19 +88,24 @@ def test_back_option_detection_via_last_index():
 def test_select_from_list_can_keep_screen_on_back(monkeypatch):
     """Sub-menus inside a series keep the poster/context visible on Back."""
     cleared = []
+    printed = []
     monkeypatch.setattr(cu, "Live", _DummyLive)
     monkeypatch.setattr(cu, "flush_input_settled", lambda: None)
     monkeypatch.setattr(cu, "clear_screen", lambda: cleared.append(True))
+    monkeypatch.setattr(cu.console, "print", lambda *a, **k: printed.append(a))
     monkeypatch.setattr(cu, "_read_menu_key", lambda: readchar.key.ESC)
 
     opts = ["Saison 1", "← Retour"]
     assert cu.select_from_list(opts, "Choisis la saison :",
                                clear_on_back=False) == 1
     assert cleared == []
+    # Internal Back returns silently: no stray "❯ prompt ← Retour" line.
+    assert not any("Retour" in str(x) for x in printed)
 
-    # The default still wipes when leaving a level.
+    # The default still wipes + echoes when leaving a level.
     assert cu.select_from_list(opts, "Choisis la saison :") == 1
     assert cleared == [True]
+    assert any("Retour" in str(x) for x in printed)
 
 
 class _DummyLive:
