@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.13.3
+
+- **Navigation Anime-Sama** : dans une série, les retours langues ↔ épisodes
+  ↔ saisons ne vident plus l'écran ; l'affiche et le contexte restent visibles
+  jusqu'au retour aux résultats de recherche.
+- **Affiches sixel sous Konsole** : le nettoyage d'écran supprime aussi le
+  calque graphique sixel (bascule temporaire de l'écran alterné), au lieu de
+  laisser l'ancienne affiche sous le menu suivant.
+- **Tests** : 343 tests au vert, ruff OK.
+
 ## 1.13.2
 
 - **Anime-Sama — fausses saisons sur les nouveautés** : les fiches récentes
