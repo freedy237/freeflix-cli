@@ -81,3 +81,65 @@ def test_anime_sama_search_parses_with_defaults(monkeypatch):
     titles = [r.title for r in results]
     assert "One Piece" in titles
     assert "Scan Only" not in titles  # scan-only entries are skipped
+
+
+def test_anime_sama_series_ignores_commented_seasons(monkeypatch):
+    """New anime pages keep Saison 1 active but comment the template's other
+    rows. Those placeholders must not become real seasons."""
+    from freeflix_cli.scraping import anime_sama as a
+
+    html = """
+    <html><head><meta property="og:image" content="https://cdn/dreamland.jpg"></head>
+    <body><h1>Dreamland</h1>
+    <script>
+    /*panneauAnime("nom", "url");*/
+    panneauAnime("Saison 1", "saison1/vostfr");
+    /*panneauAnime("Saison 2", "saison2/vostfr");
+    panneauAnime("Saison 3", "saison3/vostfr");
+    panneauAnime("Saison 10", "saison10/vostfr");
+    panneauAnime("Film", "film/vostfr");
+    panneauAnime("OAV", "oav/vostfr");*/
+    </script></body></html>
+    """
+
+    class _Resp:
+        text = html
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(a, "website_origin", "https://x")
+    monkeypatch.setattr(a, "_get", lambda *args, **kw: _Resp())
+
+    series = a.get_series("https://x/catalogue/dreamland")
+    assert [s.title for s in series.seasons] == ["Saison 1"]
+    assert series.seasons[0].url == "https://x/catalogue/dreamland/saison1/vostfr"
+
+
+def test_anime_sama_series_keeps_active_seasons_after_comments(monkeypatch):
+    """A comment between real calls must not hide the active seasons after it."""
+    from freeflix_cli.scraping import anime_sama as a
+
+    html = """
+    <html><body><h1>Dandadan</h1>
+    <script>
+    panneauAnime("Saison 1", "saison1/vostfr");
+    /* panneauAnime("Film", "film/vostfr"); */
+    panneauAnime("Saison 2", "saison2/vostfr");
+    // panneauAnime("OAV", "oav/vostfr");
+    </script></body></html>
+    """
+
+    class _Resp:
+        text = html
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(a, "website_origin", "https://x")
+    monkeypatch.setattr(a, "_get", lambda *args, **kw: _Resp())
+
+    series = a.get_series("https://x/catalogue/dandadan")
+    assert [s.title for s in series.seasons] == ["Saison 1", "Saison 2"]

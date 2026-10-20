@@ -297,9 +297,16 @@ def get_series(url: str) -> SamaSeries:
     # block. The old split+break parser stopped early and missed later seasons
     # (e.g. Dr Stone's "Saison 4 Partie 2/3"). Match ALL calls across the whole
     # page instead, skipping the template call panneauAnime("nom", "url").
+    #
+    # The template ships Saison 1 active and seasons 2→10 + Film/OAV commented
+    # out inside /* ... */. Matching the raw HTML counted those placeholders:
+    # a brand-new anime (Dreamland, The Exiled…) advertised 12 seasons even
+    # though only Saison 1 exists. Strip JS comments first.
+    script = re.sub(r"/\*.*?\*/", "", response.text, flags=re.S)
+    script = re.sub(r"(?m)^\s*//[^\n]*", "", script)
     base = url.rstrip("/")
     seen_urls = set()
-    for name, path in re.findall(r'panneauAnime\("([^"]*)",\s*"([^"]*)"\)', response.text):
+    for name, path in re.findall(r'panneauAnime\("([^"]*)",\s*"([^"]*)"\)', script):
         name = name.strip()
         path = path.strip()
         if not name or not path or name.lower() == "nom" or path.lower() == "url":
