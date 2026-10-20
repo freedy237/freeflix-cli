@@ -1619,6 +1619,96 @@ def _refresh_stream_url(u: str, h: dict):
         return None
 
 
+_DIRECT_MEDIA_EXTS = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")
+
+
+def _proxy_endpoint(stream_url: str, player_config: dict, is_mp4: bool) -> str:
+    """Choose the local proxy endpoint for a resolved stream.
+
+    Direct media MUST use /video (raw byte + Range passthrough); only real HLS
+    playlists may use /stream (manifest rewriting). The test is done on the URL
+    PATH: a signed CDN URL like ``.../abc.mp4?sign=...&t=...`` is a direct file
+    even when no player config matched the CDN host and the resolver did not set
+    ``is_mp4``. Previously such a URL fell through to /stream, whose rewrite
+    answered an unplayable playlist (mpv: "Failed to open").
+    """
+    try:
+        path = urllib.parse.urlparse(stream_url).path.lower()
+    except Exception:
+        path = str(stream_url).lower().split("?")[0]
+    if path.endswith(".m3u8") or path.endswith(".txt") or ".m3u8" in path:
+        return "stream"
+    if path.endswith(_DIRECT_MEDIA_EXTS):
+        return "video"
+    if is_mp4 or (player_config.get("ext") == "mp4"):
+        return "video"
+    return "stream"
+
+
+
+def _play_dash_mpv(player_executable, stream_url, headers, title,
+                   subtitle_path=None):
+    """Play a DASH manifest with mpv, forwarding the signed CDN headers.
+
+    Vidlink's DASH manifest lives on CloudFront and needs the signed Cookie on
+    the manifest AND on every segment. The local proxy only rewrites HLS, so
+    DASH goes straight to mpv with --http-header-fields: mpv applies those
+    headers to all HTTP requests it makes for the stream.
+    """
+    fields = []
+    for k, v in (headers or {}).items():
+        if not v:
+            continue
+        if str(k).lower() in (
+            "connection", "accept-encoding", "transfer-encoding",
+            "host", "content-length",
+        ):
+            continue
+        sv = str(v).replace("\r", " ").replace("\n", " ")
+        if "," in sv:
+            # mpv splits this option on commas; a comma inside a value would
+            # corrupt the header list. Current CDN cookies never contain one.
+            continue
+        fields.append(f"{k}: {sv}")
+    header_arg = ",".join(fields)
+
+    cmd = [
+        player_executable,
+        *_mpv_config_args(),
+        *_mpv_resilience_args(),
+        f"--title={title}",
+        f"--http-header-fields={header_arg}",
+    ]
+    if subtitle_path:
+        cmd.append(f"--sub-files={subtitle_path}")
+
+    pos_args, pos_file, pos_key = _mpv_position_args(title)
+    cmd.extend(pos_args)
+    ipc_args, ipc_monitor = _mpv_ipc_args(pos_key)
+    cmd.extend(ipc_args)
+    cmd.append(stream_url)
+
+    if ipc_monitor:
+        _chain_title_updater(ipc_monitor, title)
+        ipc_monitor.start()
+    try:
+        subprocess.run(cmd, check=True, env=_nvidia_env())
+        _save_mpv_position(pos_file, pos_key)
+        print_success(t("Playback completed successfully!"))
+        return True
+    except subprocess.CalledProcessError as e:
+        print_error(f"{t('Error running player:')} {e}")
+        return False
+    except Exception as e:
+        print_error(f"{t('An unexpected error occurred:')} {e}")
+        return False
+    finally:
+        if ipc_monitor:
+            ipc_monitor.stop()
+            _LAST_PLAYBACK["finished"] = ipc_monitor.finished_naturally()
+        _set_term_title("FreeFlix CLI")
+
+
 def play_video(
     url: str,
     headers: dict,
@@ -1626,6 +1716,7 @@ def play_video(
     subtitle_url: str = None,
     is_direct: bool = False,
     is_mp4: bool = False,
+    is_dash: bool = False,
     force_player: str = None,
     _with_ui: bool = True,
     batch_view=None,
@@ -1792,7 +1883,7 @@ def play_video(
     # Also doubles as a Cloudflare-block probe. Skipped for batch.
     selected_hls_bitrate = None
     selected_quality = None  # height for yt-dlp download (e.g. 1080)
-    if not force_player:
+    if not force_player and not is_dash:
         try:
             probe_headers = _proxy_request_headers(
                 url, player_config, is_direct, headers
@@ -1912,6 +2003,21 @@ def play_video(
                 force_manual_mode = True
                 continue
 
+        if is_dash:
+            if player_name != "mpv":
+                print_warning(t(
+                    "DASH streams require mpv. Choose mpv (recommended) or "
+                    "another source."
+                ))
+                return False
+            return _play_dash_mpv(
+                player_executable=player_executable,
+                stream_url=stream_url,
+                headers=headers,
+                title=title,
+                subtitle_path=local_subtitle_path,
+            )
+
         if player_name == "download":
             success = _download_stream(
                 stream_url=stream_url,
@@ -1973,12 +2079,7 @@ def play_video(
                 print_error(t("Proxy server not initialized."))
                 return False
 
-            is_hls_stream = ".m3u8" in stream_url.lower() or ".txt" in stream_url.lower()
-            endpoint = "stream"
-            if not is_hls_stream and (
-                ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4
-            ):
-                endpoint = "video"
+            endpoint = _proxy_endpoint(stream_url, player_config, is_mp4)
             local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
 
             if not platform_android.available():
@@ -2039,16 +2140,7 @@ def play_video(
                 print_error(t("Proxy server not initialized."))
                 return False
 
-            endpoint = "stream"
-            # /video is for direct MP4 (range seeking). But if the resolved
-            # stream is actually an HLS playlist (e.g. uqload now returns
-            # m3u8 despite an ext:mp4 config), force /stream so segments get
-            # proxied/rewritten.
-            is_hls_stream = ".m3u8" in stream_url.lower() or ".txt" in stream_url.lower()
-            if not is_hls_stream and (
-                ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4
-            ):
-                endpoint = "video"
+            endpoint = _proxy_endpoint(stream_url, player_config, is_mp4)
 
             local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
 
@@ -2136,16 +2228,7 @@ def play_video(
                 print_error(t("Proxy server not initialized."))
                 return False
 
-            endpoint = "stream"
-            # /video is for direct MP4 (range seeking). But if the resolved
-            # stream is actually an HLS playlist (e.g. uqload now returns
-            # m3u8 despite an ext:mp4 config), force /stream so segments get
-            # proxied/rewritten.
-            is_hls_stream = ".m3u8" in stream_url.lower() or ".txt" in stream_url.lower()
-            if not is_hls_stream and (
-                ("ext" in player_config and player_config["ext"] == "mp4") or is_mp4
-            ):
-                endpoint = "video"
+            endpoint = _proxy_endpoint(stream_url, player_config, is_mp4)
 
             local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
 

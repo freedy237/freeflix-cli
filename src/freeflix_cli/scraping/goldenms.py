@@ -174,25 +174,49 @@ class MediaExtractor:
                 "Connection": "keep-alive",
                 "Referer": f"{self.vidlink_api}/",
                 "Origin": self.vidlink_api,
+                # Ask for the DASH delivery. The direct MP4 files served by
+                # bcdn.hakunaymatata.com are behind an aggressive per-IP rate
+                # limiter (HTTP 429) and fail in mpv; the DASH manifest on
+                # sacdn comes with signed CloudFront cookies and plays fine.
+                "X-Playback-Environment": "dash-hevc",
             }
 
             if season is None:
-                url = f"{self.vidlink_api}/api/b/movie/{enc_data}"
+                url = f"{self.vidlink_api}/api/b/movie/{enc_data}?multiLang=1"
             else:
-                url = f"{self.vidlink_api}/api/b/tv/{enc_data}/{season}/{episode}"
+                url = f"{self.vidlink_api}/api/b/tv/{enc_data}/{season}/{episode}?multiLang=1"
 
             r = _get(url, headers=headers, timeout=10)
             data = r.json()
             stream = data.get("stream") or {}
-            # Legacy shape : a single HLS playlist.
-            m3u8_url = stream.get("playlist")
+            playlist = stream.get("playlist")
+            delivery = str(stream.get("deliveryType") or "").lower()
 
-            if m3u8_url:
+            if playlist:
+                if delivery == "dash" or ".mpd" in str(playlist).lower():
+                    # The manifest needs the CloudFront cookies carried by
+                    # playlistHeaders on EVERY request (manifest + segments).
+                    # mpv handles that with --http-header-fields (see
+                    # player_manager._play_dash_mpv).
+                    ph = stream.get("playlistHeaders") or {}
+                    merged = dict(headers)
+                    if isinstance(ph, dict):
+                        merged.update({k: v for k, v in ph.items() if v})
+                    return [
+                        {
+                            "source": "Vidlink",
+                            "quality": "Multi",
+                            "url": playlist,
+                            "type": "DASH",
+                            "headers": merged,
+                        }
+                    ]
+                # Legacy shape : a single HLS playlist.
                 return [
                     {
                         "source": "Vidlink",
                         "quality": "Multi",
-                        "url": m3u8_url,
+                        "url": playlist,
                         "type": "M3U8",
                         "headers": headers,
                     }

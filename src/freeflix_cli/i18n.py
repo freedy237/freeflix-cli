@@ -469,6 +469,8 @@ _FR = {
     "No episodes found in season.": "Aucun épisode trouvé dans la saison.",
     "No local player found (tried mpv, vlc). Install one with: sudo dnf install mpv":
         "Aucun lecteur local trouvé (mpv, vlc testés). Installe-en un avec : sudo dnf install mpv",
+    "DASH streams require mpv. Choose mpv (recommended) or another source.":
+        "Les flux DASH nécessitent mpv. Choisis mpv (recommandé) ou une autre source.",
     "No results found on Anime-Sama.": "Aucun résultat trouvé sur Anime-Sama.",
     "No results.": "Aucun résultat.",
     "Playback completed successfully!": "Lecture terminée avec succès !",

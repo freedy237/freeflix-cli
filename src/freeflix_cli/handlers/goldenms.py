@@ -84,7 +84,9 @@ def _is_valid(r):
         type_ == "M3U8"
         or type_ == "VIDEO"
         or type_ == "MP4"
+        or type_ == "DASH"
         or ".m3u8" in url
+        or ".mpd" in url
         or "master" in url.lower()
         or player_scraper.is_supported(url)
     )
@@ -381,8 +383,10 @@ def _flow_goldenms_stream(
     final_url = selection["url"]
     type_ = selection["type"].upper()
 
+    is_dash = type_ == "DASH" or ".mpd" in final_url.lower()
     is_direct = (
-        ".m3u8" in final_url.lower()
+        is_dash
+        or ".m3u8" in final_url.lower()
         or ".mp4" in final_url.lower()
         or type_ == "MP4"
         or type_ == "M3U8"
@@ -441,6 +445,7 @@ def _flow_goldenms_stream(
         title=display_title,
         subtitle_url=subtitle_url,
         is_direct=is_direct,
+        is_dash=is_dash,
     )
 
     if success:

@@ -44,7 +44,7 @@ class _Upstream(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers(); self.wfile.write(body)
-        elif path == "/movie.mp4":
+        elif path in ("/movie.mp4", "/movie.bin"):
             rng = self.headers.get("Range")
             start = 0
             if rng:
@@ -54,6 +54,9 @@ class _Upstream(http.server.BaseHTTPRequestHandler):
             self.send_response(206 if start else 200)
             if start:
                 self.send_header("Content-Range", f"bytes {start}-{len(MP4)-1}/{len(MP4)}")
+            # /movie.bin exercises the content sniffing fallback: a direct
+            # media file whose URL has no extension.
+            self.send_header("Content-Type", "video/mp4")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers(); self.wfile.write(body)
         else:
@@ -104,6 +107,24 @@ def test_mp4_range(upstream, running_proxy):
     with urllib.request.urlopen(req, timeout=10) as r:
         data = r.read()
     assert data == MP4[1000:]
+
+
+def test_stream_direct_mp4_falls_back_to_video(upstream, running_proxy):
+    """A .mp4 opened through /stream must be served raw, not as a playlist."""
+    import urllib.parse as up
+    url = f"{running_proxy}/stream?url={up.quote(upstream + '/movie.mp4')}&headers=%7B%7D"
+    st, body = _get(url)
+    assert st == 200
+    assert body == MP4
+
+
+def test_stream_extensionless_direct_media_falls_back(upstream, running_proxy):
+    """Content sniffing protects mislabelled/extensionless direct media too."""
+    import urllib.parse as up
+    url = f"{running_proxy}/stream?url={up.quote(upstream + '/movie.bin')}&headers=%7B%7D"
+    st, body = _get(url)
+    assert st == 200
+    assert body == MP4
 
 
 def test_player_html_and_heartbeat(running_proxy):

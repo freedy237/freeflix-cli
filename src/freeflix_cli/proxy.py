@@ -446,14 +446,45 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3,
 
 
 # ── m3u8 manifest rewriting ───────────────────────────────────────────
+_NOT_A_PLAYLIST = object()
+
+
 def _rewrite_manifest(target_url, headers):
     """Fetch a master/media playlist and rewrite its segment / key / variant
     URLs to go back through this proxy (so they're fetched with the right
-    headers). Returns the rewritten text, or None on a hard fetch error."""
-    resp = fetch_with_retry(target_url, headers)
+    headers). Returns the rewritten text, ``_NOT_A_PLAYLIST`` when the target
+    is actually a direct media file (so the caller can switch to /video without
+    buffering the whole video), or None on a hard fetch error."""
+    resp = fetch_with_retry(target_url, headers, stream=True)
     if not resp or resp.status_code not in (200, 206):
         return None
-    content = resp.text
+    try:
+        ctype = (resp.headers.get("content-type") or "").lower()
+        playlist_type = "mpegurl" in ctype or "m3u" in ctype
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content():
+            if not chunk:
+                continue
+            if not chunks and not playlist_type and b"#EXTM3U" not in chunk[:4096]:
+                # Direct MP4/MKV/... mislabelled as a playlist: do NOT read
+                # the body here (it can be gigabytes). The caller re-opens it
+                # through the binary passthrough.
+                return _NOT_A_PLAYLIST
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > 16 * 1024 * 1024:
+                break
+        content = b"".join(chunks).decode("utf-8", "ignore")
+    except Exception:
+        return None
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+    if "#EXTM3U" not in content[:4096]:
+        return _NOT_A_PLAYLIST
     base_uri = get_base_url(target_url)
 
     try:
@@ -709,10 +740,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if not target_url:
             self._send_bytes(400, "Missing URL parameter")
             return
+        # Fast path: a direct media URL must never be read as a playlist (that
+        # would buffer the whole video just to return garbage). Serve it through
+        # the binary passthrough.
+        try:
+            _path = urllib.parse.urlparse(target_url).path.lower()
+        except Exception:
+            _path = str(target_url).lower().split("?")[0]
+        if _path.endswith((".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")):
+            self._h_video(args)
+            return
         headers = self._parse_headers_arg(args)
         new_content = _rewrite_manifest(target_url, headers)
         if new_content is None:
             self._send_bytes(502, "Error fetching upstream m3u8")
+            return
+        # Safety net: if a DIRECT media file is opened through /stream (a
+        # mislabelled source or a player config that no longer matches), serve
+        # it through the binary passthrough instead of an empty playlist that
+        # the player reports as "Failed to open".
+        if new_content is _NOT_A_PLAYLIST or "#EXTM3U" not in new_content[:4096]:
+            self._h_video(args)
             return
         self._send_bytes(200, new_content, "application/vnd.apple.mpegurl",
                          {"Access-Control-Allow-Origin": "*"})

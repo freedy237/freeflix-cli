@@ -113,6 +113,64 @@ def test_vidlink_legacy_playlist_still_works(monkeypatch):
     ]
 
 
+def test_vidlink_dash_shape_and_signed_headers(monkeypatch):
+    """The API's DASH delivery is the only Vidlink stream that works.
+
+    The direct MP4 qualities are rate-limited (HTTP 429) on bcdn; the DASH
+    manifest on sacdn is signed with CloudFront cookies which must travel
+    with the source (mpv forwards them to the manifest and every segment).
+    """
+    from freeflix_cli.scraping import goldenms as G
+
+    calls = []
+
+    class _E:
+        def json(self):
+            return {"result": "enc"}
+
+    class _R:
+        def json(self):
+            return {
+                "stream": {
+                    "type": "file",
+                    "deliveryType": "dash",
+                    "requiresProxy": True,
+                    "playlist": "https://sacdn.example.com/dash/1/index_web.mpd",
+                    "playlistHeaders": {
+                        "Cookie": "CloudFront-Policy=x;CloudFront-Signature=y"
+                    },
+                }
+            }
+
+    def _route(url, **kw):
+        calls.append((url, kw.get("headers") or {}))
+        return _E() if "enc-vidlink" in url else _R()
+
+    monkeypatch.setattr(G, "_get", _route)
+    out = G.MediaExtractor().search_vidlink(1396)
+
+    assert len(out) == 1
+    src = out[0]
+    assert src["source"] == "Vidlink"
+    assert src["type"] == "DASH"
+    assert src["quality"] == "Multi"
+    assert src["url"].endswith("index_web.mpd")
+    assert src["headers"]["Cookie"].startswith("CloudFront-Policy=")
+    assert src["headers"]["X-Playback-Environment"] == "dash-hevc"
+    # The API call must request DASH and the multi-language payload.
+    api_calls = [(u, h) for u, h in calls if "/api/b/" in u]
+    assert api_calls
+    assert "multiLang=1" in api_calls[-1][0]
+    assert api_calls[-1][1]["X-Playback-Environment"] == "dash-hevc"
+
+
+def test_dash_source_is_valid():
+    from freeflix_cli.handlers.goldenms import _is_valid
+
+    assert _is_valid({"url": "https://x.example/index_web.mpd", "type": "DASH"})
+    assert _is_valid({"url": "https://x.example/video.mp4", "type": "VIDEO"})
+
+
 def test_nyaa_size_detected_by_content():
     # Simulates the real nyaa row : header mapping lands on the date cell,
     # the size must still be recovered from the "9.7 GiB" cell.
