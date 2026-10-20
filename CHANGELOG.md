@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.13.1
+
+- **Vidlink réparé** : les MP4 directs de `bcdn.hakunaymatata.com` répondent
+  désormais **HTTP 429** (limitation côté CDN). Le lecteur demande donc le
+  flux **DASH signé** (`X-Playback-Environment: dash-hevc`) et transmet le
+  cookie CloudFront à mpv pour le manifeste **et** les segments. La source
+  apparaît comme « Vidlink - Multi (DASH) ». Le DASH nécessite mpv ; VLC et
+  le navigateur affichent un message explicite et invitent à choisir mpv ou
+  une autre source.
+- **Routage proxy des fichiers directs** : une URL `.mp4` signée va sur
+  `/video` (octets bruts + Range) au lieu de `/stream` (playlist vide), ce qui
+  corrige le « Failed to open » de mpv. `/stream` détecte aussi le contenu
+  lorsqu'une source directe n'a pas d'extension et bascule vers `/video` sans
+  charger toute la vidéo en mémoire.
+- **Tests** : couverture DASH (forme de l'API + en-têtes mpv) et intégration
+  proxy des fichiers directs ; 337 tests au vert, ruff OK.
+
 ## 1.13.0
 
 - **Performances** : `lxml` devient une dépendance par défaut (parsing HTML
