@@ -284,14 +284,14 @@ def _flow_goldenanime_stream(
             ThreadPoolExecutor, as_completed, TimeoutError as _FT,
         )
 
-        ex = ThreadPoolExecutor(max_workers=8)
+        ex = ThreadPoolExecutor(max_workers=min(16, max(1, len(valid_results))))
         futs = {
-            ex.submit(analyze_stream_quality, r["url"], _ga_headers(r)): i
+            ex.submit(analyze_stream_quality, r["url"], _ga_headers(r), 25): i
             for i, r in enumerate(valid_results)
         }
         with spinner(t("Analyzing streams (resolutions, bitrate)…")):
             try:
-                for fut in as_completed(futs, timeout=14):
+                for fut in as_completed(futs, timeout=40):
                     i = futs[fut]
                     try:
                         quality_map[i] = format_quality_label(fut.result())

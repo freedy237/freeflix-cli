@@ -89,6 +89,56 @@ def _search_subtitle(series_title, season_title, episode_title):
     return None
 
 
+def quality_suffix(label: str) -> str:
+    """Suffix for a menu row when the probe found real resolution/bitrate.
+
+    ``✓`` means "resolved but no resolution/bitrate", ``✗`` means "failed";
+    neither adds useful information to the row, so both are skipped.
+    """
+    return f"  —  {label}" if label and label not in ("✓", "✗") else ""
+
+
+def analyze_stream_choices(streams, budget: int = 40, timeout: int = 25) -> dict:
+    """Probe every stream dict's URL in parallel and return ``{url: label}``.
+
+    Used by the providers that build their own stream menu (HiAnime, GoldenMS)
+    instead of going through ``play_episode_flow``. The caller decides whether
+    analysis is enabled (``tracker.get_analyze_players()``).
+
+    Generous budget: throttled direct MP4s can take 15–20 s to expose their
+    moov atom; cutting them at 5–6 s left players without any quality/bitrate.
+    """
+    if not streams:
+        return {}
+    from concurrent.futures import (
+        ThreadPoolExecutor, as_completed, TimeoutError as _FTimeout,
+    )
+
+    ex = ThreadPoolExecutor(max_workers=min(16, max(1, len(streams))))
+    futs = {
+        ex.submit(
+            analyze_stream_quality, s["url"], s.get("headers") or {}, timeout
+        ): s["url"]
+        for s in streams if s.get("url")
+    }
+    if not futs:
+        ex.shutdown(wait=False)
+        return {}
+    out = {}
+    with spinner(t("Analyzing streams (resolutions, bitrate)…")):
+        try:
+            for fut in as_completed(futs, timeout=budget):
+                url = futs[fut]
+                try:
+                    out[url] = format_quality_label(fut.result())
+                except Exception:
+                    out[url] = "✗"
+        except _FTimeout:
+            pass
+    ex.shutdown(wait=False)
+    return out
+
+
 def _player_label(name: str, host: str, quality: str) -> str:
     """Player-menu label with language + quality badges, e.g.
     ``premium : sibnet  —  1080p  [VF]``."""
@@ -161,17 +211,16 @@ def play_episode_flow(
         )
 
         # Hard TOTAL budget : a single slow/hanging host (some embeds take
-        # 25 s+) must not stall the whole menu. Collect what's done within
-        # the budget ; stragglers just get no annotation, and we DON'T wait
-        # for them on exit (shutdown(wait=False)).
-        # 7 s total: cached analyses return instantly; uncached hosts get a
-        # 5 s per-player budget (HLS master parsing is fast — only throttled
-        # direct MP4s used to need 15-20 s, and they now fail fast instead of
-        # stalling the whole menu).
-        ANALYSIS_BUDGET = 6
-        ex = ThreadPoolExecutor(max_workers=8)
+        # 25 s+) must not stall the whole menu forever. The budget is now
+        # generous enough for throttled MP4s (15-20 s to read the moov atom);
+        # cached analyses still return instantly. Stragglers after the budget
+        # keep the static quality badge, and we DON'T wait for them on exit.
+        ANALYSIS_BUDGET = 40
+        ex = ThreadPoolExecutor(
+            max_workers=min(16, max(1, len(supported_players)))
+        )
         futs = {
-            ex.submit(analyze_stream_quality, p.url, headers, 5): p
+            ex.submit(analyze_stream_quality, p.url, headers, 25): p
             for p in supported_players
         }
         with spinner(t("Analyzing players (resolutions, bitrate)…")):
@@ -323,10 +372,13 @@ def _pick_player_for_batch(
     from concurrent.futures import (
         ThreadPoolExecutor, as_completed, TimeoutError as _FTimeout,
     )
-    ANALYSIS_BUDGET = 26  # resolve + throttled ffprobe (sendvid ≈ 15-18 s) + margin
+    ANALYSIS_BUDGET = 60  # resolve + throttled ffprobe (sendvid ≈ 15-25 s) + margin
     infos: dict[str, dict] = {}
-    ex = ThreadPoolExecutor(max_workers=8)
-    futs = {ex.submit(analyze_stream_quality, p.url, headers): p for p in supported}
+    ex = ThreadPoolExecutor(max_workers=min(16, max(1, len(supported))))
+    futs = {
+        ex.submit(analyze_stream_quality, p.url, headers, 25): p
+        for p in supported
+    }
     with spinner(t("Analyzing available qualities…")):
         try:
             for fut in as_completed(futs, timeout=ANALYSIS_BUDGET):

@@ -15,6 +15,7 @@ from ..cli_utils import (
     spinner,
 )
 from ..player_manager import play_video
+from .playback import analyze_stream_choices, quality_suffix
 from ..tracker import tracker
 from ..languages import get_language_label
 from ..scraping import player as player_scraper
@@ -90,6 +91,15 @@ def _is_valid(r):
         or "master" in url.lower()
         or player_scraper.is_supported(url)
     )
+
+
+def _stream_labels(results, quality_map):
+    """GoldenMS/Papystreaming rows + the probed resolution/bitrate badge."""
+    return [
+        f"{r['source']} - {r['quality']} ({r['type']})"
+        + quality_suffix(quality_map.get(r.get("url", ""), ""))
+        for r in results
+    ]
 
 
 def handle_goldenms():
@@ -332,9 +342,13 @@ def _flow_goldenms_stream(
         skipped = len(results) - len(valid_results)
         print_info(f"[dim]{t('Skipped')} {skipped} {t('unsupported stream(s).')}[/dim]")
 
+    quality_map = (
+        analyze_stream_choices(valid_results)
+        if tracker.get_analyze_players() else {}
+    )
+    stream_labels = _stream_labels(valid_results, quality_map)
     choice_idx = select_from_list(
-        [f"{r['source']} - {r['quality']} ({r['type']})" for r in valid_results]
-        + [t("← Back")],
+        stream_labels + [t("← Back")],
         f"{icon('tv')} {t('Select Stream:')}",
     )
 

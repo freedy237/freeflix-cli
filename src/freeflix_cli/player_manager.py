@@ -369,7 +369,7 @@ def _probe_stream(stream_url: str, headers: dict,
     # less / .urlset name (e.g. Smoothpre's '…/master.txt'), so we detect
     # HLS by content (#EXTM3U) instead.
     path_lower = stream_url.split("?")[0].lower()
-    if path_lower.endswith((".mp4", ".mkv", ".avi", ".webm", ".mov")):
+    if path_lower.endswith((".mp4", ".mkv", ".avi", ".webm", ".mov", ".mpd")):
         return result
     sess = None
     owned = False
@@ -503,27 +503,79 @@ def _prompt_hls_quality(variants: list):
     return variants[idx]
 
 
+def _probe_dash(stream_url: str, headers: dict, timeout: int = 12) -> list:
+    """Parse a DASH manifest for resolution + bandwidth pairs.
+
+    HLS has ``_probe_stream``; DASH (Vidlink, etc.) is XML — no ffprobe needed,
+    and signed CloudFront cookies/headers are forwarded by the shared session.
+    Returns ``[{"height": 1080, "mbps": 5.3}, …]``.
+    """
+    try:
+        import xml.etree.ElementTree as ET
+
+        text = _safe_probe_text(
+            shared_session(), stream_url, headers or {}, timeout=timeout
+        )
+        if not text or "<mpd" not in text[:1000].lower():
+            return []
+        root = ET.fromstring(text)
+        best = {}
+        for parent in root.iter():
+            for child in list(parent):
+                if child.tag.rsplit("}", 1)[-1] != "Representation":
+                    continue
+                h = child.attrib.get("height") or parent.attrib.get("height")
+                try:
+                    h = int(h)
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    bw = int(child.attrib.get("bandwidth") or 0)
+                except (TypeError, ValueError):
+                    bw = 0
+                if h not in best or bw > best[h]:
+                    best[h] = bw
+        return [
+            {"height": h, "mbps": round(best[h] / 1_000_000, 1)}
+            for h in sorted(best, reverse=True)
+        ]
+    except Exception:
+        return []
+
+
 def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
     """
-    Fallback for single-quality / non-master streams (media playlist or
-    direct mp4) : use ffprobe to read the actual resolution + bitrate.
+    Fallback for single-quality / non-master streams (media playlist,
+    direct mp4, DASH) : use ffprobe to read the actual resolution + bitrate.
     Returns {"height":h, "mbps":m} or None.
     """
     ff = shutil.which("ffprobe")
     if not ff:
         return None
-    hdr = ""
-    referer = headers.get("Referer", "")
-    if referer:
-        hdr += f"Referer: {referer}\r\n"
-        origin = "/".join(referer.split("/")[:3])
-        hdr += f"Origin: {origin}\r\n"
-    ua = headers.get("User-Agent") or (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-    hdr += f"User-Agent: {ua}\r\n"
+    # Forward every useful header (Cookie for signed CDNs, X-Playback-*…),
+    # not just Referer/Origin/UA — otherwise Vidlink's DASH probe gets 403.
+    supplied = {}
+    for key, val in (headers or {}).items():
+        if not val or str(key).lower() in (
+            "host", "content-length", "connection", "accept-encoding",
+        ):
+            continue
+        supplied[str(key)] = str(val).replace("\r", " ").replace("\n", " ")
+    low = {k.lower() for k in supplied}
+    referer = supplied.get("Referer") or (headers or {}).get("Referer") or ""
+    if referer and "referer" not in low:
+        supplied["Referer"] = referer
+        low.add("referer")
+    if referer and "origin" not in low:
+        supplied["Origin"] = "/".join(str(referer).split("/")[:3])
+        low.add("origin")
+    if "user-agent" not in low:
+        supplied["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    hdr = "".join(f"{k}: {v}\r\n" for k, v in supplied.items())
     cmd = [ff, "-v", "quiet", "-print_format", "json",
            "-show_entries", "stream=width,height,bit_rate:format=bit_rate"]
     if hdr:
@@ -582,8 +634,10 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
         # stream URL may itself contain a player name, so is_supported is not
         # reliable here ; player embeds are /embed-…html, /e/… etc.).
         low = u.split("?")[0].lower()
+        is_dash = low.endswith(".mpd") or ".mpd" in low
         is_direct_stream = (
-            low.endswith((".m3u8", ".mp4", ".mkv", ".txt"))
+            is_dash
+            or low.endswith((".m3u8", ".mp4", ".mkv", ".txt"))
             or ".m3u8" in low
             or "master" in low
             or "/api/streams" in low
@@ -598,6 +652,9 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
             if not stream_url:
                 return out
             probe_headers = _proxy_request_headers(u, player_config, False, headers)
+            # A player embed can resolve to a DASH manifest even when the
+            # embed URL itself didn't contain ".mpd".
+            is_dash = is_dash or ".mpd" in stream_url.split("?")[0].lower()
         probe = _probe_stream(stream_url, probe_headers, timeout=timeout)
         blocked = probe.get("blocked")
         if blocked == "cloudflare":
@@ -622,13 +679,18 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
         # was access-blocked (e.g. vidmoly's CDN 403 anti-leech) — ffprobe
         # would 403 too, so don't burn the timeout.
         if not out["qualities"] and not blocked:
-            # Direct MP4s have no HLS fast path — ffprobe must read the file
-            # header, and throttled hosts (sendvid serves at ~250 kbit/s with
-            # moov-at-end) routinely need 12-18 s. Give it room ; the menu's
-            # TOTAL wait stays capped by ANALYSIS_BUDGET in playback.py.
-            q = _ffprobe_quality(stream_url, probe_headers, timeout=timeout)
-            if q:
-                out["qualities"] = [q]
+            # DASH manifests are XML: parse resolution/bandwidth directly,
+            # forwarding the signed cookies (Vidlink). HLS/direct MP4 still
+            # fall back to ffprobe (throttled hosts may need 12-18 s; the
+            # menu's TOTAL wait is capped by the caller's analysis budget).
+            if is_dash:
+                out["qualities"] = _probe_dash(
+                    stream_url, probe_headers, timeout=timeout
+                )
+            if not out["qualities"]:
+                q = _ffprobe_quality(stream_url, probe_headers, timeout=timeout)
+                if q:
+                    out["qualities"] = [q]
         # Keep what's needed to estimate episode duration later (one media
         # playlist holds the same EXTINF total for every variant), so the
         # batch-download menu can show an approximate size per episode without
@@ -654,7 +716,7 @@ _QUALITY_TTL_OK = 600.0
 _QUALITY_TTL_FAIL = 120.0
 
 
-def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 9) -> dict:
+def analyze_stream_quality(url: str, headers: dict = None, timeout: int = 20) -> dict:
     """Cached wrapper around the extractor probe (TTL 10 min / 2 min on fail)."""
     headers = headers or {}
     key = (url, headers.get("Referer", ""))

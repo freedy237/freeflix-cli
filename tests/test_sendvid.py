@@ -94,9 +94,9 @@ def test_dedup_players_drops_duplicate_urls():
 
 
 def test_analyze_ffprobe_timeout_is_bounded(monkeypatch):
-    """The quality menu must not stall on a throttled MP4: ffprobe now gets
-    the caller's bounded timeout (default 9 s, 5 s from the menu) instead of
-    the old fixed 20 s."""
+    """The quality menu must not stall forever on a throttled MP4, but it is
+    patient enough to let slow hosts report their bitrate (default 20 s, 25 s
+    from the menu)."""
     from freeflix_cli import player_manager as pm
 
     seen = {}
@@ -112,7 +112,7 @@ def test_analyze_ffprobe_timeout_is_bounded(monkeypatch):
     )
     out = pm.analyze_stream_quality("https://sendvid.com/embed/x", {})
     assert out["qualities"] == [{"height": 720, "mbps": 1.4}]
-    assert 0 < seen["timeout"] <= 9
+    assert 0 < seen["timeout"] <= 25
     assert pm.format_quality_label(out) == "720p ~1.4 Mbps"
 
 
