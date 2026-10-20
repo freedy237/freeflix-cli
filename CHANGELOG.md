@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.13.4
+
+- **Analyse des lecteurs partout** : HiAnime (section anglaise) et
+  GoldenMS/Papystreaming affichent désormais la résolution et le débit moyen
+  de chaque stream, comme les autres sources.
+- **Délais d'analyse augmentés** : budget total 40 s (60 s pour le
+  téléchargement en lot) et 25 s par lecteur, pour laisser aux MP4 directs
+  lents le temps de lire leur en-tête. Les analyses réussies restent en cache
+  10 min, donc les passages suivants sont instantanés.
+- **DASH** : les manifests `.mpd` (Vidlink) sont lus directement pour la
+  résolution/bande passante, avec les en-têtes et cookies signés transmis à
+  ffprobe.
+- **Tests** : 350 tests au vert, ruff OK.
+
 ## 1.13.3
 
 - **Navigation Anime-Sama** : dans une série, les retours langues ↔ épisodes
