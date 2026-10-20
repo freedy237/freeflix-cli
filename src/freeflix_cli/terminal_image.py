@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from .tracker import tracker
@@ -47,6 +48,11 @@ except Exception:  # pragma: no cover
 
 # Cache the chafa lookup so we don't hit the filesystem every call.
 _CHAFA_PATH = None
+
+# True once show_poster() has painted real pixels on the NORMAL screen. Konsole
+# keeps sixel in a separate graphics layer that console.clear()/ED does not
+# erase, so clear_screen() must explicitly drop it (see clear_graphics).
+_pixel_image_visible = False
 
 
 def chafa_available() -> bool:
@@ -476,6 +482,7 @@ def render_url(url: str, width: int = None, height: int = None) -> bool:
     Returns True if something was actually drawn, False otherwise (so the
     caller can decide whether to print a text-only fallback).
     """
+    global _pixel_image_visible
     mode = (tracker.get_poster_mode() or "auto").lower()
     if mode == "off" or not chafa_available():
         return False
@@ -508,9 +515,45 @@ def render_url(url: str, width: int = None, height: int = None) -> bool:
         # With stdin closed there are no replies at all ; geometry still
         # comes from ioctl, output is unchanged.
         subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
+        if fmt in ("sixels", "kitty", "iterm"):
+            _pixel_image_visible = True
         return True
     except Exception:
         return False
+
+
+def clear_graphics() -> bool:
+    """Erase a full-screen pixel poster before the text screen is cleared.
+
+    Konsole stores sixel images in a separate graphics layer: ``console.clear``
+    (ED) removes the text but leaves the poster pixels, so the next menu is
+    drawn on top of the old image. Toggling the alternate screen buffer drops
+    that layer on Konsole. Kitty graphics have an explicit delete command; the
+    other protocols are plain text (blocks) or are erased by the text clear.
+    """
+    global _pixel_image_visible
+    if not _pixel_image_visible:
+        return False
+    try:
+        proto = detect_image_protocol()
+        if proto == "sixel" and os.environ.get("KONSOLE_VERSION"):
+            # Enter+leave the alternate screen: Konsole discards its graphics
+            # layer on the switch. console.clear() then wipes the restored
+            # normal-screen text.
+            sys.stdout.write("\x1b[?1049h\x1b[2J\x1b[H\x1b[?1049l")
+            sys.stdout.flush()
+            _pixel_image_visible = False
+            return True
+        if proto == "kitty":
+            sys.stdout.write("\x1b_Ga=d\x1b\\")
+            sys.stdout.flush()
+            _pixel_image_visible = False
+            return True
+    except Exception:
+        return False
+    # Blocks / sixel on terminals that erase images with text: nothing extra.
+    _pixel_image_visible = False
+    return False
 
 
 _text_cache = {}

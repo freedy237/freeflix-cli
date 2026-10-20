@@ -85,6 +85,24 @@ def test_back_option_detection_via_last_index():
         assert opts[len(opts) - 1] in ("← Back", "Exit")
 
 
+def test_select_from_list_can_keep_screen_on_back(monkeypatch):
+    """Sub-menus inside a series keep the poster/context visible on Back."""
+    cleared = []
+    monkeypatch.setattr(cu, "Live", _DummyLive)
+    monkeypatch.setattr(cu, "flush_input_settled", lambda: None)
+    monkeypatch.setattr(cu, "clear_screen", lambda: cleared.append(True))
+    monkeypatch.setattr(cu, "_read_menu_key", lambda: readchar.key.ESC)
+
+    opts = ["Saison 1", "← Retour"]
+    assert cu.select_from_list(opts, "Choisis la saison :",
+                               clear_on_back=False) == 1
+    assert cleared == []
+
+    # The default still wipes when leaving a level.
+    assert cu.select_from_list(opts, "Choisis la saison :") == 1
+    assert cleared == [True]
+
+
 class _DummyLive:
     """Remplace Live : rend sans terminal, capture les frames."""
 

@@ -265,7 +265,8 @@ def _anime_sama_series_flow(series) -> bool:
             else:
                 with crumb(series.title), crumb(season.title):
                     lang_idx = select_from_list(
-                        langs + [back], f"{icon('globe')} {t('Select Language:')}"
+                        langs + [back], f"{icon('globe')} {t('Select Language:')}",
+                        clear_on_back=False,  # stay inside the series view
                     )
                 if lang_idx >= len(langs):
                     break  # back to season picker
@@ -283,6 +284,7 @@ def _anime_sama_series_flow(series) -> bool:
                         ep_labels + [f"{icon('download')} {t('Download')}", back],
                         f"{icon('tv')} {t('Select Episode:')}",
                         default_index=min(ep_idx, len(episodes) - 1),
+                        clear_on_back=False,  # stay inside the series view
                     )
                 if ep_idx == len(episodes):  # Download ALL
                     preferred = _pick_player_for_batch(episodes, {"Referer": anime_sama.website_origin})

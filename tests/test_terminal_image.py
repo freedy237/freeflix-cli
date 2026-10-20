@@ -108,6 +108,50 @@ def test_sixel_off_falls_back_to_blocks(monkeypatch):
     assert ti._render_format("auto") is None
 
 
+class _FakeOut:
+    def __init__(self):
+        self.data = ""
+
+    def write(self, text):
+        self.data += text
+
+    def flush(self):
+        pass
+
+
+def test_clear_graphics_konsole_drops_sixel_layer(monkeypatch):
+    """Konsole keeps sixel in a separate layer; clear_graphics toggles the
+    alternate screen so the old poster cannot sit under the next menu."""
+    monkeypatch.setenv("KONSOLE_VERSION", "260801")
+    monkeypatch.setattr(ti, "detect_image_protocol", lambda: "sixel")
+    monkeypatch.setattr(ti, "_pixel_image_visible", True)
+    out = _FakeOut()
+    monkeypatch.setattr(ti.sys, "stdout", out)
+
+    assert ti.clear_graphics() is True
+    assert out.data == "\x1b[?1049h\x1b[2J\x1b[H\x1b[?1049l"
+    assert ti._pixel_image_visible is False
+
+
+def test_clear_graphics_kitty_delete(monkeypatch):
+    monkeypatch.setattr(ti, "detect_image_protocol", lambda: "kitty")
+    monkeypatch.setattr(ti, "_pixel_image_visible", True)
+    out = _FakeOut()
+    monkeypatch.setattr(ti.sys, "stdout", out)
+
+    assert ti.clear_graphics() is True
+    assert out.data == "\x1b_Ga=d\x1b\\"
+
+
+def test_clear_graphics_noop_without_a_pixel_poster(monkeypatch):
+    monkeypatch.setattr(ti, "_pixel_image_visible", False)
+    out = _FakeOut()
+    monkeypatch.setattr(ti.sys, "stdout", out)
+
+    assert ti.clear_graphics() is False
+    assert out.data == ""
+
+
 def test_sixel_needs_chafa_1_4(monkeypatch):
     _ver(monkeypatch, (1, 2))          # too old for sixel
     _sixel(monkeypatch, True)

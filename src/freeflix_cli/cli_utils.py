@@ -71,12 +71,19 @@ def _current_toast():
 
 
 def clear_screen():
-    """Clear the terminal screen.
+    """Clear the terminal screen, including pixel posters.
 
     Uses Rich's console.clear() (an ANSI escape) instead of shelling out to
     `clear`/`cls` : no subprocess per clear, and it can't be hijacked by a
-    `clear`/`cls` binary earlier on PATH.
+    `clear`/`cls` binary earlier on PATH. Konsole keeps sixel images in a
+    separate layer that ED does not erase — terminal_image.clear_graphics()
+    drops it first so the next menu never lands on top of an old poster.
     """
+    try:
+        from . import terminal_image
+        terminal_image.clear_graphics()
+    except Exception:
+        pass
     console.clear()
 
 
@@ -1039,7 +1046,8 @@ def _looks_like_leave(label: str, index: int, total: int) -> bool:
 def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                      header: str = None, group_headers: dict = None,
                      top=None, flush_input: bool = False,
-                     esc_selects_last: bool = True) -> int:
+                     esc_selects_last: bool = True,
+                     clear_on_back: bool = True) -> int:
     """
     Display an interactive menu where users can navigate with arrow keys.
 
@@ -1056,6 +1064,10 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             list reads as grouped sections (e.g. Anime / Manga, then Films &
             Series). Headers are purely visual — navigation and the returned
             index still refer to the real items.
+        clear_on_back: Wipe the screen when a Back/Cancel/Exit row is chosen
+            (default). Set False for a sub-menu that returns to its parent
+            inside the same detail view (seasons → languages → episodes), so
+            the poster and context stay on screen until the series is left.
 
     Returns:
         Index of the selected option (0-based)
@@ -1278,7 +1290,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     # final option), and falls back to the leading "←" — so a film literally
     # named "Back to the Future" no longer wipes the screen when picked, and a
     # translated "Annuler"/"Retour" without the arrow still does.
-    if _looks_like_leave(label, result, len(options)):
+    if clear_on_back and _looks_like_leave(label, result, len(options)):
         clear_screen()
     console.print(
         f"\n[bold {color('accent')}]❯ {iconify(prompt)}[/bold {color('accent')}] "
