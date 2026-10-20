@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.13.2
+
+- **Anime-Sama — fausses saisons sur les nouveautés** : les fiches récentes
+  gardent la `Saison 1` active et commentent le reste du modèle
+  (`Saison 2`…`Saison 10`, `Film`, `OAV`) dans un bloc `/* ... */`. Le parseur
+  comptait ces lignes commentées et affichait **12 saisons** pour un anime qui
+  n'en a qu'une (Dreamland, The Exiled…). Les commentaires JS sont désormais
+  retirés avant l'extraction ; les saisons actives restent détectées.
+- **Tests** : régression sur pages récentes et sur saisons multiples réelles ;
+  339 tests au vert, ruff OK.
+
 ## 1.13.1
 
 - **Vidlink réparé** : les MP4 directs de `bcdn.hakunaymatata.com` répondent
