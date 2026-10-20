@@ -19,7 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Pin 22.04: ubuntu-latest moved to 26.04, where setup-python no
+        # longer provides 3.9. Keep Ubuntu 22.04 for the oldest supported
+        # Python so the compatibility job stays meaningful.
+        os: [ubuntu-22.04, windows-latest]
         python-version: ['3.9', '3.12']
     steps:
       - name: Checkout
