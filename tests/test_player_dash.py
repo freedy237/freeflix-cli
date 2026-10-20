@@ -14,6 +14,9 @@ def test_dash_mpv_forwards_signed_headers(monkeypatch):
     monkeypatch.setattr(pm, "_mpv_position_args", lambda title: ([], "", ""))
     monkeypatch.setattr(pm, "_mpv_ipc_args", lambda key: ([], None))
     monkeypatch.setattr(pm, "_save_mpv_position", lambda *a, **k: None)
+    # _nvidia_env() probes the GPU with lspci/nvidia-smi; keep it out of the
+    # capture (and out of CI runners that have no GPU).
+    monkeypatch.setattr(pm, "_nvidia_env", lambda: {})
     # Replace only player_manager's reference: patching the global
     # subprocess.run would also capture background probes (lspci, …) on a
     # busy CI runner.
