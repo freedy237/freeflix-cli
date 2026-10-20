@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.13.5
+
+- **Retour lecteur → épisodes** : le menu des lecteurs (ainsi que les menus
+  qualité / lecteur vidéo) ne vide plus l'écran et ne laisse plus de ligne
+  `❯ Choisis le lecteur : ← Retour`. Le nettoyage complet ne se fait qu'au
+  retour aux résultats de recherche ; l'affiche reste en place, sans texte
+  superposé.
+- **Tests** : 351 tests au vert, ruff OK.
+
 ## 1.13.4
 
 - **Analyse des lecteurs partout** : HiAnime (section anglaise) et
