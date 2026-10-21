@@ -7,6 +7,7 @@ from ..net_config import DNS_OPTIONS
 from ..defaults import DEFAULT_PLAYERS, DEFAULT_NEW_URL, DEFAULT_KAKAFLIX_PLAYERS
 import re
 import base64
+import time
 import urllib.parse
 
 import json
@@ -31,6 +32,30 @@ def _scraper():
 
 # Main-thread session kept under the old name for any external reference.
 scraper = _scraper()
+
+# Extra headers learned while resolving a stream (e.g. Vidzy's gate cookie).
+# get_hls_link() only returns a URL, so playback/download merges these in.
+_resolved_headers = {}
+_resolved_headers_lock = _threading.Lock()
+
+
+def set_stream_headers(url: str, headers: dict) -> None:
+    with _resolved_headers_lock:
+        _resolved_headers[url] = (dict(headers or {}), time.time())
+        # Bound the cache on long sessions.
+        if len(_resolved_headers) > 200:
+            oldest = sorted(_resolved_headers.items(),
+                            key=lambda kv: kv[1][1])[:50]
+            for key, _ in oldest:
+                _resolved_headers.pop(key, None)
+
+
+def get_stream_headers(url: str) -> dict:
+    with _resolved_headers_lock:
+        ent = _resolved_headers.get(url)
+    if not ent or time.time() - ent[1] > 3600:
+        return {}
+    return dict(ent[0])
 
 
 from .. import cloudflare  # noqa: E402 (deliberate late import — order matters)
@@ -908,7 +933,37 @@ def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
         host = url.split("/")[2]
     except Exception:
         host = "fsvid.lol"
-    return _fsvid_decode(code, host)
+    stream_url = _fsvid_decode(code, host)
+    if not stream_url:
+        return None
+
+    # Vidzy's player runs a browser "gate" that returns a short-lived gk and
+    # sets a vz_ok cookie. Without it the CDN answers 403 to mpv/yt-dlp even
+    # though the decoded master URL looks valid. Reproduce the gate with the
+    # same per-thread session, then append gk and remember the Cookie for
+    # playback AND download.
+    try:
+        base_domain = ".".join(host.split(".")[-2:])
+        gate = f"https://v6.{base_domain}/gate.php?" + urllib.parse.urlencode({
+            "v": "p1",
+            "cw": "100", "cw2": "100", "wg": "1", "dpr": "1",
+            "sw": "1920", "hw": "8", "ft": "TOP", "rf": host,
+        })
+        gh = dict(h)
+        gh.setdefault("Origin", f"https://{host}")
+        gr = _get(gate, headers=gh, impersonate="chrome")
+        gk = (gr.json() or {}).get("gk") if gr.status_code == 200 else None
+        if gk:
+            sep = "&" if "?" in stream_url else "?"
+            stream_url += f"{sep}gk={urllib.parse.quote(gk)}"
+            set_stream_headers(stream_url, {
+                "Cookie": f"vz_ok={gk}",
+                "Referer": f"https://{host}/",
+                "Origin": f"https://{host}",
+            })
+    except Exception:
+        pass
+    return stream_url
 
 
 def _fsvid_decode(code: str, hostname: str = "fsvid.lol"):

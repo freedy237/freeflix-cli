@@ -103,3 +103,35 @@ def test_decode_missing_returns_none():
 
 def test_troll_still_rejected_as_decoy():
     assert player._is_decoy_stream("https://s1.fsvid.lol/troll/master.m3u8") is True
+
+
+def test_vidzy_gate_appends_gk_and_remembers_cookie(monkeypatch):
+    """Vidzy's CDN 403s without the browser gate cookie; mpv/yt-dlp need it."""
+    real = (
+        "https://u14.vidzy.cc/hls2/08/00057/abc_n/master.m3u8"
+        "?t=TOKEN&s=1&e=14400"
+    )
+    monkeypatch.setattr(player, "_fsvid_decode", lambda code, host: real)
+
+    class _Resp:
+        status_code = 200
+        text = "embed"
+        url = "https://vidzy.cc/embed-test.html"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": 1, "gk": "GATE123"}
+
+    monkeypatch.setattr(player, "_get", lambda *a, **k: _Resp())
+
+    out = player.get_hls_link_fsvid(
+        "https://vidzy.cc/embed-test.html", {"Referer": "https://vidzy.cc/"}
+    )
+    assert out == real + "&gk=GATE123"
+    assert player.get_stream_headers(out) == {
+        "Cookie": "vz_ok=GATE123",
+        "Referer": "https://vidzy.cc/",
+        "Origin": "https://vidzy.cc",
+    }

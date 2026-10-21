@@ -657,6 +657,12 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
             # A player embed can resolve to a DASH manifest even when the
             # embed URL itself didn't contain ".mpd".
             is_dash = is_dash or ".mpd" in stream_url.split("?")[0].lower()
+        # Merge resolver-learned headers (Vidzy gate cookie, etc.).
+        try:
+            probe_headers = {**probe_headers,
+                             **player.get_stream_headers(stream_url)}
+        except Exception:
+            pass
         probe = _probe_stream(stream_url, probe_headers, timeout=timeout)
         blocked = probe.get("blocked")
         if blocked == "cloudflare":
@@ -1915,6 +1921,15 @@ def play_video(
             print_error(t("Could not resolve stream URL."))
         return False
 
+    # Merge headers learned by the resolver (Vidzy's gate Cookie/Referer).
+    # Without this, mpv/yt-dlp get HTTP 403 while the browser player works.
+    try:
+        resolver_headers = player.get_stream_headers(stream_url)
+        if resolver_headers:
+            headers = {**headers, **resolver_headers}
+    except Exception:
+        pass
+
     # Register a refresher so the proxy can RE-RESOLVE this stream if the CDN
     # token expires mid-playback (403/410) — playback recovers instead of dying.
     if not is_direct:
@@ -2145,8 +2160,32 @@ def play_video(
             )
 
         if player_name == "download":
+            # Vidzy/fsvid nginx rejects yt-dlp's TLS fingerprint even with the
+            # gate cookie; playing through our curl_cffi proxy works. Use that
+            # same local endpoint for the download (yt-dlp then talks to
+            # localhost, and the proxy fetches with a browser TLS fingerprint).
+            dl_url = stream_url
+            try:
+                from urllib.parse import urlparse, quote
+                dl_host = (urlparse(stream_url).hostname or "").lower()
+                if ".m3u8" in stream_url.lower() and (
+                    player_config.get("type") == "fsvid"
+                    or "vidzy" in dl_host or "fsvid" in dl_host
+                ):
+                    proxy.ensure_started()
+                    if proxy.PROXY_URL:
+                        endpoint = _proxy_endpoint(
+                            stream_url, player_config, bool(is_mp4)
+                        )
+                        dl_url = (
+                            f"{proxy.PROXY_URL}/{endpoint}"
+                            f"?url={quote(stream_url)}"
+                            f"&headers={quote(json.dumps(headers))}"
+                        )
+            except Exception:
+                dl_url = stream_url
             success = _download_stream(
-                stream_url=stream_url,
+                stream_url=dl_url,
                 referer=referer,
                 user_agent=user_agent,
                 title=title,
