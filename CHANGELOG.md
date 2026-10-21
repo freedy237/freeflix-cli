@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.13.6
+
+- **Nightborn / GoldenMS** : la qualité et le débit analysés passent en tête
+  des libellés (plus de troncature sur les petites largeurs), et l'extraction
+  Videasy est bornée à 8 s pour éviter un blocage de plusieurs minutes.
+- **Téléchargements signés** : yt-dlp et aria2c reçoivent désormais tous les
+  en-têtes utiles (Cookie CloudFront, X-Playback-Environment, Referer…), y
+  compris lors d'une reprise. Les shims yt-dlp cassés sont détectés avant le
+  téléchargement, avec une commande d'installation adaptée à Windows
+  (`winget`), macOS (`brew`) ou Linux (`dnf`/`apt`).
+- **Multi-systèmes** : Doctor vérifie que les binaires s'exécutent réellement
+  (pas seulement qu'ils existent) ; CI Ubuntu/Windows, Python 3.9 et 3.12.
+- **Tests** : 355 tests au vert, ruff OK.
+
 ## 1.13.5
 
 - **Retour lecteur → épisodes** : le menu des lecteurs (ainsi que les menus
