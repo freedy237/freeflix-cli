@@ -1,4 +1,5 @@
 from curl_cffi import requests as cffi_requests
+import time
 import urllib.parse
 import re
 from typing import Optional
@@ -104,7 +105,14 @@ class MediaExtractor:
         enc_title = self._quote(self._quote(title))
         media_type = "movie" if season is None else "tv"
 
+        # Videasy tries 8 servers sequentially; a dead one can otherwise stall
+        # the whole GoldenMS extraction for minutes (Nightborn, 2026). Bound
+        # the whole loop and let the other sources (Vidlink/Xpass) return.
+        deadline = time.monotonic() + 20
         for server in servers:
+            remaining = deadline - time.monotonic()
+            if remaining <= 1:
+                break
             try:
                 url = f"{self.videasy_api}/{server}/sources-with-title?title={enc_title}&mediaType={media_type}"
                 if year:
@@ -118,15 +126,19 @@ class MediaExtractor:
                 if episode:
                     url += f"&episodeId={episode}"
 
-                r = _get(url, headers=headers, timeout=10)
+                r = _get(url, headers=headers, timeout=min(10, remaining))
                 if r.status_code != 200:
                     continue
                 enc_data = r.text
 
                 # Decryption via multi-decrypt (passing tmdbId as 'id')
                 payload = {"text": enc_data, "id": tmdb_id}
+                remaining = deadline - time.monotonic()
+                if remaining <= 1:
+                    break
                 r_dec = scraper.post(
-                    f"{self.multi_decrypt_api}/dec-videasy", json=payload, timeout=10
+                    f"{self.multi_decrypt_api}/dec-videasy", json=payload,
+                    timeout=min(10, remaining),
                 )
 
                 if r_dec.status_code == 200:
@@ -554,9 +566,28 @@ class MediaExtractor:
             results.extend(self.search_mapple(tmdb_id, season, episode))
 
         if title:
-            results.extend(
-                self.search_videasy(title, tmdb_id, imdb_id, year, season, episode)
-            )
+            # Videasy is best-effort. Its upstream can hang far beyond the
+            # per-request timeout (cf_get retries + DoH), which used to keep
+            # the whole GoldenMS menu blocked for minutes. Run it in a daemon
+            # thread with a hard wall-clock cap; Vidlink/Xpass already have
+            # results by then.
+            import threading
+
+            box = []
+
+            def _videasy():
+                try:
+                    box.append(self.search_videasy(
+                        title, tmdb_id, imdb_id, year, season, episode
+                    ))
+                except Exception:
+                    pass
+
+            worker = threading.Thread(target=_videasy, daemon=True)
+            worker.start()
+            worker.join(8)
+            if box:
+                results.extend(box[0])
 
         # Deduplication by URL
         unique = {}

@@ -52,9 +52,11 @@ def _check_binary(label: str, *names: str) -> tuple[str, str, str]:
                     [n, "--version"], capture_output=True, text=True, timeout=10
                 )
                 ver = (out.stdout or out.stderr or "").splitlines()[0].strip()
+                # An existing shim can still be broken (stale uv/pip env).
+                status = "OK" if out.returncode == 0 and ver else "BROKEN"
             except Exception:
-                ver = "✓"
-            return ("OK", ver, path)
+                ver, status = "—", "BROKEN"
+            return (status, ver, path)
     return ("MISSING", "—", "—")
 
 

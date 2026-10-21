@@ -303,10 +303,13 @@ def _flow_goldenanime_stream(
 
     stream_labels = []
     for i, r in enumerate(valid_results):
-        base = f"{r['source']} - {r['quality']} ({r['type']})"
         q = quality_map.get(i)
-        if q and q != "✓":
-            base += f"  —  {q}"
+        if q and q not in ("✓", "✗"):
+            # Quality first: menu rows are truncated, and the old suffix at
+            # the end could disappear on narrow terminals.
+            base = f"{r['source']}  —  {q} ({r['type']})"
+        else:
+            base = f"{r['source']} - {r['quality']} ({r['type']})"
         stream_labels.append(base)
 
     choice_idx = select_from_list(

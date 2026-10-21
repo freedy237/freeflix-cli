@@ -21,7 +21,7 @@ from ..cli_utils import (
     crumb,
 )
 from ..player_manager import play_video
-from .playback import analyze_stream_choices, quality_suffix
+from .playback import analyze_stream_choices
 from ..tracker import tracker
 from ..icons import icon
 from ..i18n import t
@@ -60,13 +60,17 @@ def _play_stream(provider_title, slug, episode, stream, cover_url):
 
 def _stream_labels(streams, quality_map):
     """Player rows with the same resolution/bitrate badge as other sources."""
-    return [
-        f"{s['source']} [{s['quality']}]"
-        + quality_suffix(quality_map.get(s.get("url", ""), ""))
-        + (f"  ·  {len(s.get('subtitles') or [])} subs"
-           if s.get("subtitles") else "")
-        for s in streams
-    ]
+    labels = []
+    for s in streams:
+        q = quality_map.get(s.get("url", ""), "")
+        if q and q not in ("✓", "✗"):
+            label = f"{s['source']}  —  {q}"
+        else:
+            label = f"{s['source']} [{s['quality']}]"
+        if s.get("subtitles"):
+            label += f"  ·  {len(s['subtitles'])} subs"
+        labels.append(label)
+    return labels
 
 
 def handle_hianime_episode(title, slug, start_episode, cover_url=None,

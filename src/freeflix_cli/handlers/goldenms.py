@@ -15,7 +15,7 @@ from ..cli_utils import (
     spinner,
 )
 from ..player_manager import play_video
-from .playback import analyze_stream_choices, quality_suffix
+from .playback import analyze_stream_choices
 from ..tracker import tracker
 from ..languages import get_language_label
 from ..scraping import player as player_scraper
@@ -94,12 +94,21 @@ def _is_valid(r):
 
 
 def _stream_labels(results, quality_map):
-    """GoldenMS/Papystreaming rows + the probed resolution/bitrate badge."""
-    return [
-        f"{r['source']} - {r['quality']} ({r['type']})"
-        + quality_suffix(quality_map.get(r.get("url", ""), ""))
-        for r in results
-    ]
+    """GoldenMS/Papystreaming rows + the probed resolution/bitrate badge.
+
+    Put the analysed quality FIRST once available: rows are truncated to the
+    terminal width, and the old "source - Multi (DASH) — 1080p…" layout could
+    hide the very numbers the analysis was run for.
+    """
+    labels = []
+    for r in results:
+        q = quality_map.get(r.get("url", ""), "")
+        if q and q not in ("✓", "✗"):
+            label = f"{r['source']}  —  {q} ({r['type']})"
+        else:
+            label = f"{r['source']} - {r['quality']} ({r['type']})"
+        labels.append(label)
+    return labels
 
 
 def handle_goldenms():

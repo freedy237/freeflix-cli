@@ -28,7 +28,7 @@ def test_hianime_labels_show_probed_resolution_and_bitrate():
         {"https://cdn/master.m3u8": "1080p ~5.3 · 720p ~3.0 Mbps"},
     )
     assert labels == [
-        "HiAnime (SUB - ZokoAnime) [Multi]"
+        "HiAnime (SUB - ZokoAnime)"
         "  —  1080p ~5.3 · 720p ~3.0 Mbps  ·  1 subs"
     ]
 
@@ -46,7 +46,7 @@ def test_goldenms_labels_show_probed_resolution_and_bitrate():
         results, {"https://sacdn/master.mpd": "1080p ~5.3 Mbps"}
     )
     assert labels == [
-        "Vidlink - Multi (DASH)  —  1080p ~5.3 Mbps"
+        "Vidlink  —  1080p ~5.3 Mbps (DASH)"
     ]
 
 
@@ -55,6 +55,60 @@ def test_labels_keep_static_quality_when_analysis_fails():
                 "url": "https://cdn/master.m3u8"}]
     labels = hianime._stream_labels(streams, {"https://cdn/master.m3u8": "✗"})
     assert labels == ["HiAnime (DUB - HD-1) [Multi]"]
+
+
+def test_download_headers_forward_signed_tokens():
+    from freeflix_cli.player_manager import _download_headers
+
+    out = _download_headers({
+        "Referer": "https://vidlink.pro/",
+        "Cookie": "CloudFront-Policy=x;CloudFront-Signature=y",
+        "X-Playback-Environment": "dash-hevc",
+        "Connection": "keep-alive",
+        "Accept-Encoding": "gzip",
+        "Range": "bytes=0-1024",
+    })
+    assert out["Cookie"] == "CloudFront-Policy=x;CloudFront-Signature=y"
+    assert out["X-Playback-Environment"] == "dash-hevc"
+    assert out["Referer"] == "https://vidlink.pro/"
+    assert "Connection" not in out
+    assert "Accept-Encoding" not in out
+    assert "Range" not in out
+
+
+def test_tool_works_rejects_broken_shim(monkeypatch):
+    class _R:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    monkeypatch.setattr(pm.subprocess, "run", lambda *a, **k: _R(1))
+    assert pm._tool_works("/broken/yt-dlp") is False
+    monkeypatch.setattr(pm.subprocess, "run", lambda *a, **k: _R(0))
+    assert pm._tool_works("/working/yt-dlp") is True
+    assert pm._tool_works("") is False
+
+
+def test_install_hint_is_platform_specific(monkeypatch):
+    monkeypatch.setattr(pm.os, "name", "nt")
+    assert "winget install yt-dlp.yt-dlp" in pm._install_hint("yt-dlp")
+    monkeypatch.setattr(pm.os, "name", "posix")
+    monkeypatch.setattr(pm.sys, "platform", "darwin")
+    assert pm._install_hint("yt-dlp").startswith("brew install")
+    monkeypatch.setattr(pm.sys, "platform", "linux")
+    assert pm._install_hint("yt-dlp").startswith("sudo dnf install")
+
+
+def test_resume_download_reuses_signed_headers(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        pm, "_download_stream",
+        lambda **kw: (captured.update(kw) or True),
+    )
+    assert pm.resume_download({
+        "stream_url": "https://sacdn/master.mpd",
+        "headers": {"Cookie": "CloudFront-Policy=x"},
+    }) is True
+    assert captured["headers"] == {"Cookie": "CloudFront-Policy=x"}
 
 
 def test_player_back_returns_to_episode_without_clearing(monkeypatch):

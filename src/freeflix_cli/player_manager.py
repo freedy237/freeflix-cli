@@ -1148,6 +1148,7 @@ def resume_download(meta: dict) -> bool:
         is_mp4=meta.get("is_mp4", False),
         quality=meta.get("quality"),
         subfolder=meta.get("subfolder"),
+        headers=meta.get("headers") or {},
     )
 
 
@@ -1379,6 +1380,59 @@ def _sweep_download_litter():
         pass
 
 
+# Headers that must not be forwarded to a downloader: they describe the
+# probe request (Range/Content-Length/Connection) and would break a full file.
+_DOWNLOAD_SKIP_HEADERS = {
+    "host", "content-length", "connection", "accept-encoding",
+    "range", "if-range",
+}
+
+
+def _tool_works(path: str) -> bool:
+    """True when a downloader binary actually runs (`--version`), not just
+    exists on PATH. Windows users can end up with a stale/broken yt-dlp shim;
+    checking first turns a cryptic download failure into a clear install hint."""
+    if not path:
+        return False
+    try:
+        return subprocess.run(
+            [path, "--version"], capture_output=True, timeout=8
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+def _install_hint(*tools: str) -> str:
+    """Platform-appropriate installer command for a missing downloader."""
+    if os.name == "nt":
+        ids = {
+            "yt-dlp": "yt-dlp.yt-dlp",
+            "ffmpeg": "Gyan.FFmpeg",
+            "aria2": "aria2.aria2",
+            "aria2c": "aria2.aria2",
+        }
+        return "winget install " + " ".join(ids.get(x, x) for x in tools)
+    if sys.platform == "darwin":
+        return "brew install " + " ".join(tools)
+    return "sudo dnf install " + " ".join(tools) + "  (ou apt/pacman)"
+
+
+def _download_headers(headers: dict, referer: str = "",
+                      user_agent: str = "") -> dict:
+    """Sanitised headers for yt-dlp/aria2c (cookies, signed-CDN tokens…)."""
+    out = {}
+    for key, val in (headers or {}).items():
+        if not val or str(key).lower() in _DOWNLOAD_SKIP_HEADERS:
+            continue
+        out[str(key)] = str(val).replace("\r", " ").replace("\n", " ")
+    low = {k.lower() for k in out}
+    if referer and "referer" not in low:
+        out["Referer"] = referer
+    if user_agent and "user-agent" not in low:
+        out["User-Agent"] = user_agent
+    return out
+
+
 def _download_stream(
     stream_url: str,
     referer: str,
@@ -1391,6 +1445,7 @@ def _download_stream(
     batch_view=None,
     subfolder: str = None,
     batch_label: str = None,
+    headers: dict = None,
 ) -> bool:
     """
     Download a resolved stream to ~/Downloads/FreeFlix/ (or a `subfolder` of it,
@@ -1432,12 +1487,17 @@ def _download_stream(
             f"bv*[height<={quality_str}]+ba/b[height<={quality_str}]/bv*+ba/b"
         )
 
+    # Signed CDNs (Vidlink → CloudFront) require Cookie/X-Playback-Environment
+    # on the manifest AND every segment. Passing only Referer/UA yielded 403s
+    # in yt-dlp/aria2c even though playback (mpv) worked.
+    dl_headers = _download_headers(headers, referer, user_agent)
+
     if is_hls:
         ytdlp = shutil.which("yt-dlp")
-        if not ytdlp:
+        if not _tool_works(ytdlp):
             print_error(
                 f"{t('yt-dlp is required for HLS streams but is not installed.')} "
-                f"{t('Install with:')} sudo dnf install yt-dlp"
+                f"{t('Install with:')} {_install_hint('yt-dlp')}"
             )
             return False
         # For HLS we MUST use yt-dlp's NATIVE downloader with parallel fragments,
@@ -1467,19 +1527,19 @@ def _download_stream(
             "--fragment-retries", "50",
             "--retries", "10",
             "--retry-sleep", "2",
-            "--add-header", f"Referer:{referer}",
-            "--add-header", f"User-Agent:{user_agent}",
             "--merge-output-format", "mp4",
             "-P", f"home:{out_dir}",
             "-P", f"temp:{frag_tmp}",
             "-o", f"{safe_title}.%(ext)s",
         ]
+        for key, val in dl_headers.items():
+            cmd += ["--add-header", f"{key}:{val}"]
         if format_arg:
             cmd.extend(["-f", format_arg])
         cmd.append(stream_url)
     else:
         aria = shutil.which("aria2c")
-        if aria:
+        if aria and _tool_works(aria):
             backend_name = "aria2c"
             # Download into the hidden temp dir, NOT straight into Downloads, so a
             # dropped connection never leaves a half-finished .mp4 in the user's
@@ -1496,19 +1556,19 @@ def _download_stream(
                 "--auto-file-renaming=false",
                 "--summary-interval=1",
                 "--console-log-level=notice",
-                f"--header=Referer: {referer}",
-                f"--header=User-Agent: {user_agent}",
                 f"--dir={frag_tmp}",
                 f"--out={safe_title}.mp4",
-                stream_url,
             ]
+            for key, val in dl_headers.items():
+                cmd.append(f"--header={key}: {val}")
+            cmd.append(stream_url)
         else:
             print_info(t("aria2c not found, falling back to yt-dlp."))
             ytdlp = shutil.which("yt-dlp")
-            if not ytdlp:
+            if not _tool_works(ytdlp):
                 print_error(
                     f"{t('Neither aria2c nor yt-dlp is installed.')} "
-                    f"{t('Install with:')} sudo dnf install aria2 yt-dlp"
+                    f"{t('Install with:')} {_install_hint('aria2', 'yt-dlp')}"
                 )
                 return False
             backend_name = "yt-dlp"
@@ -1526,12 +1586,12 @@ def _download_stream(
                 "--fragment-retries", "50",
                 "--retries", "10",
                 "--retry-sleep", "2",
-                "--add-header", f"Referer:{referer}",
-                "--add-header", f"User-Agent:{user_agent}",
                 "-P", f"home:{out_dir}",
                 "-P", f"temp:{frag_tmp}",
                 "-o", f"{safe_title}.%(ext)s",
             ]
+            for key, val in dl_headers.items():
+                cmd += ["--add-header", f"{key}:{val}"]
             if format_arg:
                 cmd.extend(["-f", format_arg])
             cmd.append(stream_url)
@@ -1542,6 +1602,7 @@ def _download_stream(
             frag_tmp,
             stream_url=stream_url, referer=referer, user_agent=user_agent,
             title=title, is_mp4=is_mp4, quality=quality, subfolder=subfolder,
+            headers=dl_headers,
         )
 
     output_suppressed = getattr(_suppress_print, "active", False)
@@ -2096,6 +2157,7 @@ def play_video(
                 batch_view=batch_view,
                 subfolder=subfolder,
                 batch_label=batch_label,
+                headers=headers,
             )
             if success:
                 return True
