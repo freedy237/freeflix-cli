@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.13.7
+
+- **Vidzy / fsvid — téléchargement réparé** : le CDN rejette le fingerprint TLS
+  de yt-dlp (HTTP 403) même avec les bons cookies. Le lecteur reproduit
+  maintenant le « gate » navigateur (cookie `vz_ok`, paramètre `gk`), et les
+  téléchargements Vidzy passent par le proxy local curl_cffi (même chemin que
+  la lecture). Nightborn (2026) se télécharge désormais.
+- **Analyse** : les flux Vidzy reçoivent aussi le cookie de gate, donc la
+  résolution/débit reste lisible (`468p ~0.8 Mbps`).
+- **Tests** : 356 tests au vert, ruff OK.
+
 ## 1.13.6
 
 - **Nightborn / GoldenMS** : la qualité et le débit analysés passent en tête
