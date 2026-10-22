@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.13.8
+
+- **Audit complet des sources** : nouvelle commande
+  `python tools/audit_providers.py` (miroir → recherche → contenu → lecteurs →
+  résolution → qualité/débit). Dernier passage : **27/28 contrôles OK**.
+- **Voe réparé** : le domaine `voe.sx` redirige vers un miroir tournant dont
+  la configuration JSON est doublement obfusquée. Les flux Voe (French-Stream)
+  sont à nouveau lus, avec leur qualité (`720p ~1.2 Mbps`).
+- **GoldenMS** : les sources (Vidlink, Hexa, Xpass, Mapple, Videasy) sont
+  interrogées **en parallèle** avec un délai borné — plus de menu réduit à un
+  seul lecteur parce qu'une source lente bloquait les autres.
+- **French-Stream** : les embeds identiques listés sous `default/vostfr/vff`
+  ne font plus de doublons, et les embeds temporairement bannis (page ne
+  contenant que le faux flux `/troll/`) sont retirés au lieu d'échouer à la
+  lecture.
+- **Papystreaming** : message explicite quand le miroir répond un défi
+  Cloudflare (limite côté site).
+- **Tests** : 362 tests au vert, ruff OK.
+
 ## 1.13.7
 
 - **Vidzy / fsvid — téléchargement réparé** : le CDN rejette le fingerprint TLS
