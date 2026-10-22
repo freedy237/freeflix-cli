@@ -1,4 +1,5 @@
 import json
+import time
 import urllib.parse
 from curl_cffi import requests
 from ..scraping.goldenms import goldenms_extractor
@@ -27,17 +28,33 @@ import re
 
 def _cinemeta_json(url: str, ttl: int):
     """GET a Cinemeta JSON endpoint, served from the persistent cache when
-    fresh (metadata for films/series barely changes — repeat lookups instant)."""
+    fresh (metadata for films/series barely changes — repeat lookups instant).
+
+    Cinemeta is sometimes slow/unreachable: retry with backoff and a generous
+    read timeout, and fall back to the stale cache entry if one exists —
+    otherwise the whole GoldenMS source looked "empty" (0 results).
+    """
     from .. import httpcache
 
     hit = httpcache.get(url, ttl)
     if hit is not None:
         return json.loads(hit)
-    r = requests.get(url, timeout=10, impersonate="chrome")
-    text = r.text or ""
-    data = json.loads(text)
-    httpcache.store(url, text)
-    return data
+    last_exc = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=(6, 20), impersonate="chrome")
+            r.raise_for_status()
+            text = r.text or ""
+            data = json.loads(text)
+            httpcache.store(url, text)
+            return data
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            time.sleep(0.6 * (attempt + 1))
+    stale = httpcache.get(url, ttl * 24 * 7)  # any archived body, 7× TTL
+    if stale is not None:
+        return json.loads(stale)
+    raise last_exc
 
 
 def search_cinemeta(title: str, is_movie: bool):

@@ -76,6 +76,34 @@ def test_download_headers_forward_signed_tokens():
     assert "Range" not in out
 
 
+def test_cinemeta_retries_then_uses_stale_cache(monkeypatch):
+    """A flaky Cinemeta used to blank the whole GoldenMS provider."""
+    from freeflix_cli import httpcache
+    from freeflix_cli.handlers import goldenms as H
+
+    calls = {"n": 0}
+
+    def fake_get(url, **kw):
+        calls["n"] += 1
+        raise RuntimeError("curl: (28) timed out")
+
+    monkeypatch.setattr(H.requests, "get", fake_get)
+    monkeypatch.setattr(H.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(httpcache, "get", lambda key, ttl=0: None)
+    try:
+        H._cinemeta_json("https://v3-cinemeta.strem.io/x.json", 60)
+        raise AssertionError("should have raised")
+    except RuntimeError:
+        pass
+    assert calls["n"] == 3
+
+    monkeypatch.setattr(
+        httpcache, "get",
+        lambda key, ttl=0: '{"metas": [{"name": "Nightborn"}]}',
+    )
+    assert H._cinemeta_json("https://x/y.json", 60)["metas"][0]["name"] == "Nightborn"
+
+
 def test_goldenms_extract_does_not_wait_for_slow_sources(monkeypatch):
     """A hanging upstream must not hide the fast sources' players."""
     import time

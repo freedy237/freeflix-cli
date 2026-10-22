@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.13.9
+
+- **GoldenMS / Cinemeta** : Cinemeta répond parfois par un timeout (curl 28).
+  La recherche réessaie 3 fois (avec backoff, timeout de lecture 20 s) puis
+  utilise la dernière réponse en cache au lieu d'afficher « aucun résultat »
+  et de masquer toute la source.
+- **Tests** : 363 tests au vert, ruff OK.
+
 ## 1.13.8
 
 - **Audit complet des sources** : nouvelle commande
