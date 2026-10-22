@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 from ..cli_utils import (
@@ -334,18 +335,43 @@ def play_episode_flow(
             # Loop continues to select list
 
 
+_LANG_SUFFIXES = re.compile(r"\s+(default|vostfr|vff|vfq|vf|vo)$", re.I)
+
+
 def _dedup_players(players_list):
-    """Drop duplicate player URLs (some Anime-Sama episodes list the same
-    embed twice, e.g. ansembed as Lecteur 1 AND 2). Order preserved."""
-    seen = set()
+    """Drop duplicate players. Order preserved.
+
+    Two flavours, both common in the wild:
+      * exact same URL (Anime-Sama lists ansembed as Lecteur 1 AND 2);
+      * same HOST+embed listed under different language tags (French-Stream
+        shows "voe default / voe vostfr / voe vff" for the same file).
+    Different embeds of the same host (voe vostfr vs voe vff) are kept.
+    """
+    def _base_name(name):
+        return _LANG_SUFFIXES.sub("", (name or "").strip().lower())
+
+    seen_urls = set()
+    seen_hosts = set()
     out = []
     for p in players_list:
-        u = getattr(p, "url", "")
-        if u in seen:
+        url = getattr(p, "url", "") or ""
+        if url in seen_urls:
             continue
-        seen.add(u)
+        seen_urls.add(url)
+        host_key = (_base_name(getattr(p, "name", "")), _url_host(url))
+        if host_key[1] and host_key in seen_hosts:
+            continue
+        seen_hosts.add(host_key)
         out.append(p)
     return out
+
+
+def _url_host(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
 
 
 def _pick_player_for_batch(

@@ -555,39 +555,68 @@ class MediaExtractor:
         season=None,
         episode=None,
     ):
-        """Main search method."""
-        results = []
+        """Main search method.
 
-        # Priority: Vidlink, Hexa, Xpass, Mapple, Videasy
+        Sources run IN PARALLEL: sequentially, one slow/hanging upstream
+        (Videasy took minutes, Mapple retries tokens…) delayed every other
+        source, so the player menu sometimes showed a single provider even
+        though the others had results. Each source is independently capped.
+        """
+        import threading
+
+        box = {"results": []}
+        lock = threading.Lock()
+        jobs = []
         if tmdb_id:
-            results.extend(self.search_vidlink(tmdb_id, season, episode))
-            results.extend(self.search_hexa(tmdb_id, season, episode))
-            results.extend(self.search_xpass(tmdb_id, season, episode))
-            results.extend(self.search_mapple(tmdb_id, season, episode))
-
+            jobs = [
+                ("vidlink", lambda: self.search_vidlink(tmdb_id, season, episode)),
+                ("hexa", lambda: self.search_hexa(tmdb_id, season, episode)),
+                ("xpass", lambda: self.search_xpass(tmdb_id, season, episode)),
+                ("mapple", lambda: self.search_mapple(tmdb_id, season, episode)),
+            ]
         if title:
-            # Videasy is best-effort. Its upstream can hang far beyond the
-            # per-request timeout (cf_get retries + DoH), which used to keep
-            # the whole GoldenMS menu blocked for minutes. Run it in a daemon
-            # thread with a hard wall-clock cap; Vidlink/Xpass already have
-            # results by then.
-            import threading
+            jobs.append((
+                "videasy",
+                lambda: self.search_videasy(
+                    title, tmdb_id, imdb_id, year, season, episode
+                ),
+            ))
 
-            box = []
+        # Wait for the FAST sources, then a bounded grace period for the rest:
+        # the menu opens with everything that answered quickly, and no single
+        # hanging provider can stall it for a full cap.
+        hard_cap = 18 if len(jobs) > 1 else 25
+        grace = 2.5
 
-            def _videasy():
-                try:
-                    box.append(self.search_videasy(
-                        title, tmdb_id, imdb_id, year, season, episode
-                    ))
-                except Exception:
-                    pass
+        def _run(fn):
+            try:
+                got = fn() or []
+            except Exception:
+                return
+            with lock:
+                box["results"].extend(got)
+                box["done"] = box.get("done", 0) + 1
 
-            worker = threading.Thread(target=_videasy, daemon=True)
-            worker.start()
-            worker.join(8)
-            if box:
-                results.extend(box[0])
+        box["done"] = 0
+        threads = []
+        for _name, fn in jobs:
+            th = threading.Thread(target=_run, args=(fn,), daemon=True)
+            th.start()
+            threads.append(th)
+
+        deadline = time.monotonic() + hard_cap
+        fast_deadline = None
+        while time.monotonic() < deadline:
+            done = box.get("done", 0)
+            if fast_deadline is None and done >= max(1, len(threads) // 2):
+                fast_deadline = time.monotonic() + grace
+            if fast_deadline is not None and time.monotonic() >= fast_deadline:
+                break
+            if done >= len(threads):
+                break
+            time.sleep(0.05)
+
+        results = box["results"]
 
         # Deduplication by URL
         unique = {}

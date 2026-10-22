@@ -76,6 +76,92 @@ def test_download_headers_forward_signed_tokens():
     assert "Range" not in out
 
 
+def test_goldenms_extract_does_not_wait_for_slow_sources(monkeypatch):
+    """A hanging upstream must not hide the fast sources' players."""
+    import time
+
+    from freeflix_cli.scraping.goldenms import goldenms_extractor as x
+
+    def slow(*a, **k):
+        time.sleep(5)
+        return []
+
+    def fast(*a, **k):
+        return [{"source": "Vidlink", "quality": "Multi", "type": "DASH",
+                 "url": "https://cdn/master.mpd"}]
+
+    monkeypatch.setattr(x, "search_vidlink", fast)
+    monkeypatch.setattr(x, "search_xpass", fast)
+    monkeypatch.setattr(x, "search_hexa", slow)
+    monkeypatch.setattr(x, "search_mapple", slow)
+    monkeypatch.setattr(x, "search_videasy", slow)
+
+    started = time.monotonic()
+    out = x.extract(title="Nightborn", tmdb_id=964849, year="2026")
+    # Fast sources are returned long before the slow ones finish.
+    assert time.monotonic() - started < 4.0
+    assert len(out) == 1 and out[0]["source"] == "Vidlink"
+
+
+def test_dedup_players_ignores_language_suffix_duplicates():
+    """French-Stream lists the same embed as 'voe default/vostfr/vff'."""
+    from types import SimpleNamespace
+
+    from freeflix_cli.handlers.playback import _dedup_players
+
+    def P(name, url):
+        return SimpleNamespace(name=name, url=url)
+
+    same = "https://voe.sx/e/garmrwf0shom"
+    other = "https://voe.sx/e/w7hhkc7y5a2f"
+    out = _dedup_players([
+        P("voe default", same),
+        P("voe vostfr", other),
+        P("voe vff", same),
+        P("vidzy default", "https://vidzy.cc/embed-a.html"),
+        P("vidzy vostfr", "https://vidzy.cc/embed-a.html"),
+    ])
+    # Same host+name collapsed (voe vff == voe default), different embeds kept.
+    assert [p.name for p in out] == ["voe default", "vidzy default"]
+
+
+def test_french_stream_dedups_same_embed_across_languages(monkeypatch):
+    from freeflix_cli.scraping import french_stream as fs
+
+    html = '<html><head><meta property="og:title" content="Nightborn"></head></html>'
+    body = {
+        "players": {
+            "vidzy": {"default": "https://vidzy.cc/embed-a.html",
+                      "vostfr": "https://vidzy.cc/embed-a.html"},
+            "voe": {"default": "https://voe.sx/e/aaa",
+                    "vostfr": "https://voe.sx/e/bbb",
+                    "vff": "https://voe.sx/e/aaa"},
+        }
+    }
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return body
+
+    monkeypatch.setattr(fs, "_get", lambda *a, **k: _Resp())
+    # Embed-liveness check (vidzy/fsvid) is network: pretend they answer.
+    from freeflix_cli.scraping import player as _pl
+    monkeypatch.setattr(
+        _pl, "get_hls_link", lambda url, headers=None: "https://cdn/master.m3u8"
+    )
+    movie = fs.get_movie("https://french-stream.net/1-nightborn.html", html)
+    assert [(p.name, p.url) for p in movie.players] == [
+        ("vidzy default", "https://vidzy.cc/embed-a.html"),
+        ("voe default", "https://voe.sx/e/aaa"),
+        ("voe vostfr", "https://voe.sx/e/bbb"),
+    ]
+
+
 def test_tool_works_rejects_broken_shim(monkeypatch):
     class _R:
         def __init__(self, rc):

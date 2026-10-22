@@ -105,6 +105,92 @@ def test_troll_still_rejected_as_decoy():
     assert player._is_decoy_stream("https://s1.fsvid.lol/troll/master.m3u8") is True
 
 
+def test_voe_redirect_and_config_decode(monkeypatch):
+    """2026 voe: stub page → rotating mirror → doubly-obfuscated JSON config."""
+    import base64
+    import json
+
+    from freeflix_cli.scraping import player as pl
+
+    payload = json.dumps({
+        "source": "https://cdn.example/hls2/01/x_.urlset/master.m3u8?t=1",
+        "fallback": [{"file": "https://cdn.example/mp4/x.mp4"}],
+    })
+    # Exact inverse of _voe_decode_config:
+    # json → b64 → reverse → +3 → b64 → "_" → markers → ROT13.
+    step = base64.b64encode(payload.encode()).decode()[::-1]
+    step = "".join(chr(ord(c) + 3) for c in step)
+    step = base64.b64encode(step.encode("latin-1")).decode()
+    step = step.replace("_", "@$")
+    cur = step.translate(pl._VOE_ROT13)
+    page_html = (
+        "<html><body><script>window.location.href="
+        "'https://mirror.example/e/abc';</script>"
+        '<script type="application/json">' + cur + "</script></body></html>"
+    )
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(url)
+        if "voe" in url:
+            return _Resp(page_html)
+        return _Resp(page_html)
+
+    monkeypatch.setattr(pl, "_get", fake_get)
+    got = pl.get_hls_link_voe("https://voe.sx/e/abc", {})
+    assert got == "https://cdn.example/hls2/01/x_.urlset/master.m3u8?t=1"
+    assert any("mirror.example" in u for u in calls)
+
+
+def test_banned_embed_decoy_is_reported_as_unavailable(monkeypatch):
+    """A mirror that only serves the /troll/ decoy must not be listed as a
+    working player (it used to show up, then fail on play/download)."""
+
+    class _Resp:
+        status_code = 200
+        text = (
+            '<script>var _fsvHls="https://v6.vidzy.cc/troll/master.m3u8";'
+            'var player=videojs("vjsplayer",{});</script>'
+        )
+        url = "https://vidzy.cc/embed-x.html"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(player, "_get", lambda *a, **k: _Resp())
+    assert player.get_hls_link_fsvid(
+        "https://vidzy.cc/embed-x.html", {"Referer": "https://vidzy.cc/"}
+    ) is None
+
+
+def test_healthy_embed_is_not_mistaken_for_decoy(monkeypatch):
+    payload = base64.b64encode(b"x" * 80).decode()
+
+    class _Resp:
+        status_code = 200
+        text = (
+            'var decoy="https://v6.vidzy.cc/troll/master.m3u8";'
+            'sources: [{src: (function(s){...})("' + payload + '")}]'
+        )
+        url = "https://vidzy.cc/embed-x.html"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(player, "_get", lambda *a, **k: _Resp())
+    assert player._has_real_player_payload(_Resp.text) is True
+
+
 def test_vidzy_gate_appends_gk_and_remembers_cookie(monkeypatch):
     """Vidzy's CDN 403s without the browser gate cookie; mpv/yt-dlp need it."""
     real = (

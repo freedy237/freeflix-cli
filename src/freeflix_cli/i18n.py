@@ -869,6 +869,9 @@ _FR = {
     'EN sub + dub': 'EN sub + dub',
     'Papystreaming is Cloudflare-protected right now.':
         'Papystreaming est protégé par Cloudflare pour le moment.',
+    'Papystreaming is Cloudflare-protected (this mirror answers a challenge). Try Papystreaming later, or use GoldenMS/French-Stream/Coflix for this title.':
+        'Papystreaming est protégé par Cloudflare (ce miroir répond un défi). '
+        'Réessaie plus tard, ou utilise GoldenMS/French-Stream/Coflix pour ce titre.',
     'Settings → Cloudflare token : paste your cf_clearance cookie (+ User-Agent) to unlock it.':
         'Réglages → jeton Cloudflare : colle ton cookie cf_clearance (+ User-Agent) pour le débloquer.',
     'Loading stream from HiAnime…': 'Chargement du flux HiAnime…',

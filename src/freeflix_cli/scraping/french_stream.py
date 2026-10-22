@@ -303,6 +303,20 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
         for lang, link in player_links.items():
             if not _is_usable_player_link(link):
                 continue  # dead host (trakx/netu) or non-URL code
+            # dedup: most films expose the SAME embed under default/vostfr/vff,
+            # which used to show 3 indistinguishable rows.
+            if any(p.url == link for p in players):
+                continue
+            # Drop embeds that are temporarily "banned" (vidzy/fsvid answers
+            # 200 with only the /troll/ decoy): they used to appear in the
+            # list, then fail on play AND download.
+            if "vidzy" in link.lower() or "fsvid" in link.lower():
+                try:
+                    from . import player as _player
+                    if not _player.get_hls_link(link, {"Referer": link}):
+                        continue
+                except Exception:
+                    pass  # network hiccup → keep it (don't hide the source)
             players.append(Player(player_name + " " + lang, link))
 
     return FrenchStreamMovie(title, url, img, genres, players)

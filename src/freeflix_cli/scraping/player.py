@@ -834,13 +834,44 @@ def _voe_substitution_decode(payload: str, radix: int, table: list) -> str:
     return p
 
 
+_VOE_ROT13 = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm",
+)
+
+
+def _voe_decode_config(text: str) -> str | None:
+    """Decode voe's 2026 JSON config blob (see get_hls_link_voe)."""
+    s = (text or "").strip().translate(_VOE_ROT13)
+    for marker in ("@$", "^^", "~@", "%?", "*~", "!!", "#&"):
+        s = s.replace(marker, "_")
+    s = s.replace("_", "")
+    try:
+        step1 = base64.b64decode(s + "=" * (-len(s) % 4))
+    except Exception:
+        return None
+    try:
+        step2 = "".join(chr(b - 3) for b in step1)
+    except Exception:
+        return None
+    step3 = step2[::-1]
+    try:
+        step4 = base64.b64decode(step3 + "=" * (-len(step3) % 4))
+    except Exception:
+        return None
+    return step4.decode("utf-8", "ignore")
+
+
 def get_hls_link_voe(url: str, headers: dict) -> str | None:
     """
-    Voe mirrors (luluvdo.com, reached via french-stream's kokoflix proxy).
+    Voe mirrors (voe.sx, luluvdo.com, reached via french-stream's kokoflix).
 
-    The /e/ page ships the JWPlayer setup with the stream URL hidden behind
-    a word-substitution packer (``eval(function(p,a,c,k,e,d){while(c--)…})``).
-    Decode it and pull the m3u8/mp4 out of the ``sources`` block.
+    Two generations are supported:
+      * 2024/25 — the JWPlayer setup hides the URL behind a word-substitution
+        packer (``eval(function(p,a,c,k,e,d){while(c--)…})``);
+      * 2026 — ``/e/<code>`` is a stub redirecting to a rotating mirror whose
+        <script type="application/json"> config is doubly obfuscated and
+        carries the HLS URL in ``source`` (mp4 in ``fallback``).
     """
     h = dict(headers or {})
     try:
@@ -854,6 +885,54 @@ def get_hls_link_voe(url: str, headers: dict) -> str | None:
     except Exception:
         return None
     body = resp.text or ""
+
+    # 2026 voe: /e/<code> is now a stub that redirects to a rotating mirror
+    # (derricknationtop.com, …) which ships a plain jwplayer config
+    # (`sources: [{file: "…"}]`) instead of the old packed JS.
+    m_red = re.search(r"window\.location\.href\s*=\s*['\"](https?://[^'\"]+)['\"]",
+                      body[:4000])
+    if m_red:
+        nxt = m_red.group(1)
+        try:
+            r2 = _get(nxt, headers={**h, "Referer": url}, impersonate="chrome")
+            r2.raise_for_status()
+            body = r2.text or ""
+        except Exception:
+            return None
+
+    # Current voe embeds ship a doubly-obfuscated <script
+    # type="application/json"> config: ROT13 → strip "@$^^~@%?*~!!#&" → remove
+    # "_" → base64 → shift chars by -3 → reverse → base64 → JSON.
+    m_cfg = re.search(
+        r'<script[^>]*type=["\']application/json["\'][^>]*>(.*?)</script>',
+        body, re.S,
+    )
+    if m_cfg:
+        try:
+            raw = _voe_decode_config(m_cfg.group(1))
+            if raw:
+                data = json.loads(raw)
+                item = data[0] if isinstance(data, list) else data
+                for src in (item.get("sources") or []):
+                    f = src.get("file") if isinstance(src, dict) else None
+                    if f and f.startswith("http"):
+                        return f
+                for fld in ("source", "file", "url", "src"):
+                    f = item.get(fld) if isinstance(item, dict) else None
+                    if isinstance(f, str) and f.startswith("http"):
+                        return f
+                for fb in (item.get("fallback") or []):
+                    f = fb.get("file") if isinstance(fb, dict) else None
+                    if f and f.startswith("http"):
+                        return f
+        except Exception:
+            pass
+
+    m_file = re.search(
+        r"""['"]file['"]\s*:\s*['"]([^'"]+\.(?:m3u8|mp4)[^'"]*)['"]""", body
+    )
+    if m_file:
+        return m_file.group(1)
     i = body.find("eval(function(p,a,c,k,e,d)")
     if i < 0:
         return extract_hls_url(body)
@@ -922,6 +1001,13 @@ def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
     resp = _get(url, headers=h, impersonate="chrome")
     resp.raise_for_status()
 
+    # Some mirrors (vidzy) answer 200 with EVERY embed link pointing at a
+    # /troll/ decoy when they don't like the request (temporary ban, foreign
+    # IP…). Surface it instead of returning the decoy as a real stream.
+    body = resp.text or ""
+    if "/troll/" in body and not _has_real_player_payload(body):
+        return None
+
     try:
         code = deobfuscate(resp.text)
     except Exception:
@@ -964,6 +1050,15 @@ def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
     except Exception:
         pass
     return stream_url
+
+
+def _has_real_player_payload(body: str) -> bool:
+    """True when the embed actually carries the obfuscated player payload.
+
+    A healthy fsvid/vidzy embed ships a base64 ``sources.src`` IIFE; the
+    "banned" variant only has the decoy /troll/ URL.
+    """
+    return bool(re.search(r"\}\)\(\\?\"[A-Za-z0-9+/=]{40,}\\?\"\)", body or ""))
 
 
 def _fsvid_decode(code: str, hostname: str = "fsvid.lol"):

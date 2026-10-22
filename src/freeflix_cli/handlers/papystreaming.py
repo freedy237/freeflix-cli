@@ -103,6 +103,7 @@ def handle_papystreaming():
                 print_warning(t("Papystreaming is Cloudflare-protected right now."))
                 print_info(t("Settings → Cloudflare token : paste your cf_clearance "
                              "cookie (+ User-Agent) to unlock it."))
+                print_info(t("Papystreaming is Cloudflare-protected (this mirror answers a challenge). Try Papystreaming later, or use GoldenMS/French-Stream/Coflix for this title."))
             else:
                 print_warning(t("No results found."))
             pause()
