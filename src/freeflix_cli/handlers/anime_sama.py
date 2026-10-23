@@ -148,9 +148,10 @@ def _planning_menu() -> None:
 def handle_anime_sama_planning() -> None:
     """Live weekly planning: day → anime (poster preview) → series actions.
 
-    The grid is fetched from Anime-Sama on every visit (5-minute cache), never
-    hard-coded. Only animes are listed (scans/webtoons dropped), and each entry
-    shows its day, hour and whether it is already out.
+    The grid and its live release state (``sorties.php``) are fetched from
+    Anime-Sama on every visit, never cached and never hard-coded. Only animes
+    are listed (scans/webtoons dropped), and each entry shows its day, hour and
+    whether it is already out. Only poster files stay cached between visits.
     """
     from ..scraping import anime_sama_planning as planning
 

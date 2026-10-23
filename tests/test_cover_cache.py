@@ -105,6 +105,25 @@ def test_refresh_cover_replaces_the_file(tmp_path, monkeypatch):
         assert f.read() == b"new!"
 
 
+def test_cleanup_keeps_persistent_covers(tmp_path, monkeypatch):
+    """Exiting must not delete the persistent poster cache.
+
+    ``_img_cache`` also holds session temp files; only those are removed.
+    """
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(ti._rq, "get", lambda url, **k: _R(b"cover"))
+    url = "https://cdn/keep.jpg"
+    kept = ti._download(url)
+
+    temp = tmp_path.parent / (tmp_path.name + "-session.jpg")
+    temp.write_bytes(b"temp")
+    ti._img_cache["https://cdn/temp.jpg"] = str(temp)
+
+    ti._cleanup_images()
+    assert os.path.exists(kept)
+    assert not os.path.exists(temp)
+
+
 def test_prefetch_many_warms_every_cover(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     seen = []

@@ -713,8 +713,21 @@ def refresh_cover(url: str) -> bool:
 
 
 def _cleanup_images():
-    for p in _img_cache.values():
+    """Remove session temp files, but NEVER the persistent cover cache.
+
+    ``_img_cache`` holds both one-off temp renders and files from the
+    persistent cover directory. Deleting everything at exit defeated the
+    poster cache (the index survived, but every file was gone), so the grid
+    re-downloaded all posters on each launch. Persistent cover paths stay on
+    disk; only actual temp files are removed.
+    """
+    cover_dir = _cover_dir()
+    cover_dir = os.path.normcase(os.path.abspath(cover_dir)) if cover_dir else ""
+    for p in list(_img_cache.values()):
         try:
+            parent = os.path.normcase(os.path.abspath(os.path.dirname(p)))
+            if cover_dir and parent == cover_dir:
+                continue
             os.remove(p)
         except OSError:
             pass

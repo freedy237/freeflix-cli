@@ -1,6 +1,7 @@
 """Anime-Sama weekly planning: live parser + provider menu integration."""
 
 from freeflix_cli.handlers import anime_sama as H
+from freeflix_cli.i18n import t
 from freeflix_cli.scraping import anime_sama_planning as P
 
 # Trimmed-down real grid: anime VOSTFR (out), anime VF (upcoming), a scan tile
@@ -29,7 +30,7 @@ PLANNING_HTML = """
     <div class="as-carte as-carte-anime planning-card Anime VF"
          data-url="/catalogue/xyz/" data-nom="Xyz VF"
          data-img="https://img/xyz.jpg" data-release-ts="1792500000"
-         data-lien="/catalogue/xyz/saison2/vf/">
+         data-lien="/catalogue/xyz/saison2/vf/" data-debut="1792490000">
       <a href="/catalogue/xyz/"><h3>Xyz VF</h3></a>
     </div>
     <div class="as-carte as-carte-anime planning-card Anime"
@@ -77,6 +78,64 @@ def test_parse_planning_language_filter(monkeypatch):
     assert [e.title for e in only_vf] == ["Xyz VF", "No Hour"]
 
 
+def test_sorties_endpoint_marks_an_uploaded_episode_released(monkeypatch):
+    """The server HTML is only a snapshot: planning.js reads sorties.php.
+
+    Link Click / JoJo can be uploaded while their card still lacks
+    ``pl-sorti`` in the HTML. The live endpoint must flip them to "Sorti".
+    """
+    monkeypatch.setattr(P.anime_sama, "website_origin", "https://anime-sama.to")
+    entries = P.parse_planning(PLANNING_HTML)
+    xyz = next(e for e in entries if e.title == "Xyz VF")
+    assert xyz.released is False and xyz.started_ts == 1792490000
+
+    # Upload before the planning day starts does not count as this release.
+    P.apply_release_status(entries, {"/catalogue/xyz/saison2/vf/": 1792480000})
+    assert xyz.released is False
+    P.apply_release_status(entries, {"/catalogue/xyz/saison2/vf/": 1792500001})
+    assert xyz.released is True
+
+
+def test_sorties_endpoint_keeps_postponed_state(monkeypatch):
+    monkeypatch.setattr(P.anime_sama, "website_origin", "https://anime-sama.to")
+    html = PLANNING_HTML.replace(
+        'planning-card Anime VF"\n         data-url="/catalogue/xyz/"',
+        'planning-card Anime VF" data-etat-db="Reporté"\n'
+        '         data-url="/catalogue/xyz/"',
+    )
+    xyz = next(e for e in P.parse_planning(html) if e.title == "Xyz VF")
+    P.apply_release_status([xyz], {"/catalogue/xyz/saison2/vf/": 1792500001})
+    assert xyz.released is False
+
+
+def test_get_planning_refreshes_every_document(monkeypatch):
+    """No HTTP cache: entering the planning must always re-read release state."""
+    monkeypatch.setattr(P.anime_sama, "website_origin", "https://anime-sama.to")
+    monkeypatch.setattr(P.anime_sama, "get_website_url", lambda: None)
+    calls = []
+
+    class _Resp:
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, cache_ttl=0, **kw):
+        calls.append((url, cache_ttl, kw.get("headers") or {}))
+        if url.endswith("/planning/sorties.php"):
+            return _Resp('{"\\/catalogue\\/xyz\\/saison2\\/vf\\/": 1792500001}')
+        return _Resp(PLANNING_HTML)
+
+    monkeypatch.setattr(P.anime_sama, "_get", fake_get)
+    entries = P.get_planning()
+    assert len(calls) == 2
+    assert all(ttl == 0 for _url, ttl, _h in calls)
+    assert all(h.get("Cache-Control") == "no-cache" for _u, _t, h in calls)
+    xyz = next(e for e in entries if e.title == "Xyz VF")
+    assert xyz.released is True
+
+
 def test_group_by_day_orders_by_hour(monkeypatch):
     monkeypatch.setattr(P.anime_sama, "website_origin", "https://anime-sama.to")
     groups = P.group_by_day(P.parse_planning(PLANNING_HTML))
@@ -98,8 +157,8 @@ def test_planning_menu_offers_planning_and_search():
     finally:
         H.select_from_list = orig
     assert len(calls["opts"]) == 3
-    assert "planning" in calls["opts"][0].lower()
-    assert "recherche" in calls["opts"][1].lower()
+    assert t("Weekly planning").lower() in calls["opts"][0].lower()
+    assert t("Search an anime").lower() in calls["opts"][1].lower()
 
 
 def test_planning_entry_actions_offer_follow_and_browse(monkeypatch):
@@ -116,7 +175,8 @@ def test_planning_entry_actions_offer_follow_and_browse(monkeypatch):
     H._planning_entry_actions(entry, "Lundi", "19/10")
     assert len(picked["opts"]) == 3
     joined = " ".join(picked["opts"]).lower()
-    assert "suivre" in joined and "saisons" in joined
+    assert t("Follow the latest released episode").lower() in joined
+    assert t("Browse seasons").lower() in joined
 
 
 def test_planning_day_list_shows_release_count(monkeypatch):
