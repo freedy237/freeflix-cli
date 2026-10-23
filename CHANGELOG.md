@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.14.1
+
+- **Planning Anime-Sama — statut en direct** : le statut « Sorti » ne dépend
+  plus du HTML mis en cache. FreeFlix lit maintenant `planning/sorties.php`,
+  exactement comme le site, à chaque ouverture du planning (aucun cache HTTP).
+  Un épisode uploadé passe donc en « Sorti » même si la carte serveur est
+  encore marquée « pas encore sorti » ou « retardé ».
+- **Affiches** : le cache persistant des posters n'est plus vidé à la fermeture
+  de FreeFlix ; seules les images temporaires de session sont supprimées. Les
+  affiches restent instantanées d'un lancement à l'autre quand le planning
+  n'a pas changé.
+- **CI** : assertions d'interface indépendantes de la langue (français/anglais).
+- **Tests** : 433 tests au vert, ruff OK.
+
 ## 1.14.0
 
 - **Anime-Sama — planning hebdomadaire** : nouveau menu à l'entrée de la
