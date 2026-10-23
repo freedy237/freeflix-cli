@@ -49,6 +49,11 @@ _EMOJI = {
     "movie_clap": "🎬",
     "loading": "⏳",
     "offline": "⚠",
+    # Planning / release states
+    "calendar": "🗓",
+    "clock": "🕒",
+    "check": "✅",
+    "hourglass": "⏳",
     # Actions (torrent / download flows)
     "new": "🆕",
     "list": "☰",
@@ -101,6 +106,10 @@ _NERD = {
     "movie_clap": chr(0xF008),  # film
     "loading": chr(0xF252),   # hourglass
     "offline": chr(0xF071),   # exclamation-triangle
+    "calendar": chr(0xF073),  # calendar
+    "clock": chr(0xF017),     # clock
+    "check": chr(0xF058),     # check-circle
+    "hourglass": chr(0xF254),  # hourglass-half
     # Actions (torrent / download flows)
     "new": chr(0xF0F3),       # bell
     "list": chr(0xF0CA),      # list-ul

@@ -195,7 +195,8 @@ def test_nyaa_size_detected_by_content():
 
 
 def _hianime_payload(url="https://cdn.example.com/master.m3u8"):
-    import base64, json
+    import base64
+    import json
     data = json.dumps({"src": url, "subtitles": [
         {"label": "English", "src": "https://cdn.example.com/en.vtt"}]})
     raw = data.encode()
@@ -224,7 +225,6 @@ def test_hianime_full_chain(monkeypatch):
         ' data-server-name="ZokoAnime"'
         ' data-hash="aHR0cHM6Ly9lbWJlZC5leGFtcGxlL2Q="></div>'
     )
-    import base64
     payload = _hianime_payload()
 
     class _R:

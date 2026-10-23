@@ -258,10 +258,16 @@ def get_freeflix_mpv_config_dir() -> str:
 def _mpv_resilience_args() -> list:
     """
     mpv flags that let playback ride out a flaky connection : a big read-ahead
-    cache so mpv plays from buffer while the proxy reconnects/re-resolves, and a
-    generous per-read network timeout so mpv waits instead of aborting during a
-    proxy stall (the proxy itself resumes via HTTP Range).
+    cache so mpv plays from buffer while the proxy reconnects/re-resolves, and
+    NO network timeout so a Wi-Fi/operator switch (or a long outage) does not
+    make mpv abort: it simply waits for the proxy, which keeps retrying the
+    exact byte range until the player closes or the network returns.
     """
+    # reconnect=1 + reconnect_streamed=1: applies to the proxy's HTTP stream;
+    # ffmpeg reconnects instead of ending the demuxer on a dropped connection.
+    stream_opts = (
+        "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5"
+    )
     if tracker.get_disk_cache():
         # Aggressive DISK cache : buffer FAR ahead (up to ~30 min / 2 GiB) onto
         # disk, not RAM — so "leave the video buffering" works and a network
@@ -274,7 +280,8 @@ def _mpv_resilience_args() -> list:
             "--demuxer-readahead-secs=1800",  # read far ahead
             "--demuxer-max-bytes=2GiB",
             "--demuxer-max-back-bytes=300MiB",
-            "--network-timeout=120",
+            "--network-timeout=0",            # never give up while proxy retries
+            stream_opts,
         ]
     # Modest RAM cache (kept for anyone who turns disk cache off in Settings).
     return [
@@ -283,7 +290,8 @@ def _mpv_resilience_args() -> list:
         "--demuxer-max-bytes=200MiB",
         "--demuxer-max-back-bytes=50MiB",
         "--demuxer-readahead-secs=120",
-        "--network-timeout=120",       # tolerate long proxy stalls
+        "--network-timeout=0",         # survive a long outage / network switch
+        stream_opts,
     ]
 
 
@@ -1423,6 +1431,295 @@ def _install_hint(*tools: str) -> str:
     return "sudo dnf install " + " ".join(tools) + "  (ou apt/pacman)"
 
 
+def _resolve_tool(name: str) -> str | None:
+    """PATH first, then FreeFlix's self-managed bin dir (Windows installs often
+    live outside PATH; the setup gate already considers them installed)."""
+    found = shutil.which(name)
+    if found:
+        return found
+    try:
+        from .setup_assistant import _managed_bin
+        cand = _managed_bin(name)
+        if cand.is_file():
+            return str(cand)
+    except Exception:
+        pass
+    return None
+
+
+def _expected_hls_info(stream_url: str, headers: dict = None,
+                       timeout: int = 12):
+    """``(expected_duration, shortest_segment)`` for a VOD HLS stream.
+
+    The shortest segment gives the verification tolerance: a tolerance smaller
+    than one segment is what makes a *missing* segment detectable. Returns
+    ``(None, None)`` for live playlists, direct files, or probe failures.
+    """
+    if not stream_url:
+        return (None, None)
+    try:
+        import m3u8 as _m3u8
+
+        sess = shared_session()
+        text = _safe_probe_text(sess, stream_url, headers or {}, timeout=timeout)
+        if not text or "#EXTM3U" not in text[:4096]:
+            return (None, None)
+        obj = _m3u8.loads(text, uri=stream_url)
+        if obj.playlists:
+            # Duration is identical across variants; use the richest one to
+            # avoid an I-frame-only / audio-description playlist.
+            variants = sorted(
+                obj.playlists,
+                key=lambda p: (p.stream_info.bandwidth or 0),
+                reverse=True,
+            )
+            text = None
+            for p in variants[:4]:
+                try:
+                    media = p.absolute_uri
+                except Exception:
+                    media = p.uri
+                t2 = _safe_probe_text(sess, media, headers or {},
+                                      timeout=timeout)
+                if t2 and "#EXTINF" in t2:
+                    text = t2
+                    obj = _m3u8.loads(t2, uri=media)
+                    break
+            if text is None:
+                return (None, None)
+        is_vod = bool(getattr(obj, "is_endlist", False)) or (
+            (getattr(obj, "playlist_type", "") or "").upper() == "VOD"
+        )
+        if not is_vod:
+            return (None, None)
+        total = 0.0
+        shortest = None
+        for seg in getattr(obj, "segments", []) or []:
+            try:
+                dur = float(seg.duration or 0)
+            except (TypeError, ValueError):
+                continue
+            if dur <= 0:
+                continue
+            total += dur
+            if shortest is None or dur < shortest:
+                shortest = dur
+        if total <= 1.0:
+            return (None, None)
+        return (total, shortest)
+    except Exception:
+        return (None, None)
+
+
+def _expected_hls_seconds(stream_url: str, headers: dict = None,
+                          timeout: int = 12):
+    """Expected duration of a VOD HLS stream (sum of ``#EXTINF``), or None."""
+    return _expected_hls_info(stream_url, headers, timeout)[0]
+
+
+def _remote_size(url: str, headers: dict = None, timeout: int = 12):
+    """Announced size of a direct media file (HEAD, then a 1-byte Range GET)."""
+    if not url or not str(url).lower().startswith(("http://", "https://")):
+        return None
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+        if host in ("127.0.0.1", "localhost", "::1"):
+            # Local proxy endpoint: its Content-Length reflects the player's
+            # Range, not the real file size. Let the ffprobe check decide.
+            return None
+    except Exception:
+        pass
+    hdrs = dict(headers or {})
+    try:
+        sess = shared_session()
+        r = sess.head(url, headers=hdrs, timeout=timeout)
+        try:
+            cl = r.headers.get("Content-Length") or r.headers.get("content-length")
+            if r.status_code in (200, 206) and cl and str(cl).isdigit():
+                size = int(cl)
+                if size > 0:
+                    return size
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        h2 = dict(hdrs)
+        h2["Range"] = "bytes=0-0"
+        r = shared_session().get(url, headers=h2, timeout=timeout)
+        try:
+            cr = r.headers.get("Content-Range") or r.headers.get("content-range")
+            if cr and "/" in cr:
+                grand = cr.rsplit("/", 1)[-1].strip()
+                if grand.isdigit() and int(grand) > 0:
+                    return int(grand)
+            cl = r.headers.get("Content-Length") or r.headers.get("content-length")
+            if r.status_code == 200 and cl and str(cl).isdigit():
+                return int(cl) or None
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
+def _ffprobe_file_info(path: str, timeout: int = 45):
+    """(duration_seconds, size_bytes) read locally by ffprobe, or (None, size)."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return (None, None)
+    ff = _resolve_tool("ffprobe")
+    if not ff:
+        return (None, size)
+    cmd = [
+        ff, "-v", "error", "-show_entries", "format=duration,size",
+        "-of", "json", path,
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        data = json.loads(r.stdout or "{}")
+        fmt = data.get("format") or {}
+        dur = fmt.get("duration")
+        duration = float(dur) if dur not in (None, "N/A") else None
+        fsize = fmt.get("size")
+        if fsize not in (None, "N/A"):
+            try:
+                size = int(fsize)
+            except (TypeError, ValueError):
+                pass
+        return (duration, size)
+    except Exception:
+        return (None, size)
+
+
+def _verify_download(path: str, expected_duration=None,
+                     expected_size=None, tolerance=None) -> tuple:
+    """Return ``(ok, reason)`` for a staged media file.
+
+    Catches the two failure modes that make a video "jump":
+      • missing HLS segments → duration shorter than the playlist;
+      • interrupted multi-connection MP4 → file shorter than Content-Length.
+    Also refuses unreadable/empty files. ffprobe absence is not fatal (we
+    cannot invent a duration), but a present-and-short duration always is.
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False, "missing"
+    if size <= 0:
+        return False, "empty"
+
+    if expected_size:
+        try:
+            if size < int(expected_size):
+                return False, "size"
+        except (TypeError, ValueError):
+            pass
+
+    duration, probed_size = _ffprobe_file_info(path)
+    if probed_size and size < probed_size:
+        return False, "size"
+    if duration is None:
+        # ffprobe missing or container unreadable. If ffprobe exists, the file
+        # is genuinely unreadable; otherwise accept on size alone.
+        if _resolve_tool("ffprobe"):
+            return False, "unreadable"
+        return True, "ok"
+    if duration <= 0:
+        return False, "unreadable"
+    if expected_duration:
+        # Playlist rounding is normally tiny. The tolerance must stay SMALLER
+        # than one segment, otherwise a missing 2-3 s segment would look like
+        # normal drift and the video would silently lose a part. When the
+        # caller knows the shortest segment, use half of it (capped at 1 s).
+        if tolerance is None:
+            tolerance = max(0.5, min(1.0, float(expected_duration) * 0.001))
+        if duration + float(tolerance) < float(expected_duration):
+            return False, "short"
+    return True, "ok"
+
+
+def _find_staged_output(temp_dir: str, safe_title: str):
+    """Largest finished media file produced in the temp dir (ignore .part,
+    .ytdl, .aria2 and previous .incomplete attempts)."""
+    exts = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts")
+    exact = []
+    others = []
+    try:
+        for name in os.listdir(temp_dir):
+            low = name.lower()
+            if low.endswith((".part", ".ytdl", ".aria2")):
+                continue
+            if ".incomplete" in low:
+                continue
+            if not low.endswith(exts):
+                continue
+            p = os.path.join(temp_dir, name)
+            if not os.path.isfile(p):
+                continue
+            if name.startswith(safe_title + "."):
+                exact.append(p)
+            else:
+                others.append(p)
+    except OSError:
+        return None
+    pool = exact or others
+    if not pool:
+        return None
+    try:
+        return max(pool, key=os.path.getsize)
+    except OSError:
+        return pool[0]
+
+
+def _keep_incomplete(path: str) -> None:
+    """Rename a rejected file so a retry does not skip it (``--no-overwrites``)
+    while keeping it around for manual inspection / debugging."""
+    try:
+        base, ext = os.path.splitext(path)
+        dst = base + ".incomplete" + ext
+        if os.path.exists(dst):
+            os.remove(dst)
+        os.replace(path, dst)
+    except OSError:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _purge_download_temp(temp_dir: str, keep_incomplete: bool = True) -> None:
+    """Delete yt-dlp/aria2c state (`.part`, `.ytdl`, `-Frag*`, `.aria2`).
+
+    A retry must NEVER reuse a fragment that was half-written before a 404 or
+    a dropped connection: yt-dlp sees the existing file and may treat it as
+    complete, producing a video with a hole. The ``.incomplete`` copy is kept
+    for inspection, but it is not a resumable state.
+    """
+    try:
+        names = os.listdir(temp_dir)
+    except OSError:
+        return
+    for name in names:
+        if keep_incomplete and ".incomplete" in name:
+            continue
+        p = os.path.join(temp_dir, name)
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+        except OSError:
+            pass
+
+
 def _download_headers(headers: dict, referer: str = "",
                       user_agent: str = "") -> dict:
     """Sanitised headers for yt-dlp/aria2c (cookies, signed-CDN tokens…)."""
@@ -1437,6 +1734,83 @@ def _download_headers(headers: dict, referer: str = "",
     if user_agent and "user-agent" not in low:
         out["User-Agent"] = user_agent
     return out
+
+
+def _ytdlp_download_cmd(ytdlp: str, stream_url: str, safe_title: str,
+                        home_dir: str, temp_dir: str, dl_headers: dict,
+                        format_arg: str = None, concurrent: int = 8) -> list:
+    """Build a conservative, gap-proof yt-dlp command.
+
+    Every fragment is retried; if one still cannot be fetched, yt-dlp ABORTS
+    (leaving the resumable .part/.ytdl in ``temp_dir``) instead of skipping it
+    and producing a video that jumps. The final file is written to
+    ``home_dir`` (our hidden temp) and only moved to Downloads after a
+    duration/size check.
+    """
+    cmd = [
+        ytdlp,
+        "--no-warnings",
+        "--newline",
+        "--no-overwrites",
+        "--no-playlist",
+        "--continue",
+        "--downloader", "native",
+        "--concurrent-fragments", str(concurrent),
+        # NEVER skip a fragment: retry hard, then abort (resumable) rather
+        # than leave a hole in the timeline.
+        "--abort-on-unavailable-fragments",
+        "--fragment-retries", "50",
+        "--retries", "20",
+        "--file-access-retries", "10",
+        "--retry-sleep", "2",
+        "--socket-timeout", "30",
+        "--merge-output-format", "mp4",
+        "-P", f"home:{home_dir}",
+        "-P", f"temp:{temp_dir}",
+        "-o", f"{safe_title}.%(ext)s",
+    ]
+    for key, val in (dl_headers or {}).items():
+        cmd += ["--add-header", f"{key}:{val}"]
+    if format_arg:
+        cmd.extend(["-f", format_arg])
+    cmd.append(stream_url)
+    return cmd
+
+
+def _aria2c_download_cmd(aria: str, stream_url: str, safe_title: str,
+                         temp_dir: str, dl_headers: dict) -> list:
+    """Build a resumable aria2c command with sane retry/timeout limits.
+
+    8 connections (not 16) avoids the CDN throttling/error bursts that can
+    leave holes; ``--max-tries`` + ``--continue`` retry the exact missing
+    ranges, and the file stays in temp until its size is verified.
+    """
+    cmd = [
+        aria,
+        "--no-conf",
+        "--continue=true",
+        "--max-connection-per-server=8",
+        "--split=8",
+        "--min-split-size=4M",
+        "--max-tries=10",
+        "--retry-wait=2",
+        "--timeout=60",
+        "--connect-timeout=20",
+        "--lowest-speed-limit=1K",
+        "--file-allocation=none",
+        "--auto-file-renaming=false",
+        "--allow-overwrite=false",
+        "--conditional-get=false",
+        "--remote-time=false",
+        "--summary-interval=1",
+        "--console-log-level=warn",
+        f"--dir={temp_dir}",
+        f"--out={safe_title}.mp4",
+    ]
+    for key, val in (dl_headers or {}).items():
+        cmd.append(f"--header={key}: {val}")
+    cmd.append(stream_url)
+    return cmd
 
 
 def _download_stream(
@@ -1458,9 +1832,15 @@ def _download_stream(
     e.g. one folder per season for batch downloads).
 
     Routing:
-      - HLS (.m3u8)     -> yt-dlp (handles segments via ffmpeg)
+      - HLS (.m3u8)     -> yt-dlp native fragments (abort on any missing one)
       - Direct mp4      -> aria2c (multi-connection, resumable)
                            falls back to yt-dlp if aria2c is missing.
+
+    Every download is STAGED in the hidden ``.temp/`` dir, then validated
+    (ffprobe duration vs the HLS playlist, or size vs Content-Length) before
+    being moved to the user's folder. An incomplete file is never published;
+    it is kept as ``.incomplete`` so the next attempt re-downloads it, and the
+    whole command is retried automatically (resuming where possible).
 
     Subtitles, if previously downloaded, are copied next to the video.
     """
@@ -1476,12 +1856,13 @@ def _download_stream(
 
     url_lower = stream_url.lower()
     _direct_exts = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")
-    is_hls = ".m3u8" in url_lower or (not is_mp4 and not url_lower.split("?")[0].endswith(_direct_exts))
+    is_hls = ".m3u8" in url_lower or (
+        not is_mp4 and not url_lower.split("?")[0].endswith(_direct_exts)
+    )
 
+    frag_tmp = _stable_temp_dir(safe_title, subfolder)
     backend_name = None
     cmd = None
-    frag_tmp = None  # temp dir for fragments / partial file (kept out of Downloads)
-    needs_move = False  # True when the finished file must be moved temp → out_dir
 
     # Use user-selected quality from probe, or fall back to tracker default.
     # Toute hauteur numérique est honorée (2160/1440/480/360…), pas seulement
@@ -1498,79 +1879,47 @@ def _download_stream(
     # in yt-dlp/aria2c even though playback (mpv) worked.
     dl_headers = _download_headers(headers, referer, user_agent)
 
+    # Expected duration/size are computed ONCE, before downloading, and used
+    # to prove the final file is complete. A missing fragment shows up as a
+    # short duration; an interrupted MP4 as a short file.
+    expected_duration = None
+    expected_tolerance = None
     if is_hls:
-        ytdlp = shutil.which("yt-dlp")
+        expected_duration, shortest_segment = _expected_hls_info(
+            stream_url, dl_headers
+        )
+        if expected_duration and shortest_segment:
+            expected_tolerance = max(0.25, min(1.0, shortest_segment * 0.5))
+    expected_size = None if is_hls else _remote_size(stream_url, dl_headers)
+
+    if is_hls:
+        ytdlp = _resolve_tool("yt-dlp")
         if not _tool_works(ytdlp):
             print_error(
                 f"{t('yt-dlp is required for HLS streams but is not installed.')} "
                 f"{t('Install with:')} {_install_hint('yt-dlp')}"
             )
             return False
-        # For HLS we MUST use yt-dlp's NATIVE downloader with parallel fragments,
-        # not aria2c. Two reasons:
-        #   1. real-time progress — native prints "[download] X% (frag a/b)"
-        #      continuously, so the bar climbs live. Handing fragments to aria2c
-        #      makes yt-dlp report only at the very end (bar stuck on "starting").
-        #   2. it's just as fast for HLS — 16 fragments download in parallel,
-        #      which already saturates the link (aria2c's per-connection split
-        #      doesn't help small segments), and it leaves no fragment files.
-        # Fragments + the .part go to a STABLE hidden temp dir that
-        # survives interruptions — yt-dlp finds its .ytdl state on
-        # re-launch and resumes where it left off.
-        frag_tmp = _stable_temp_dir(safe_title, subfolder)
-        backend_name = "yt-dlp (16 fragments)"
-        cmd = [
-            ytdlp,
-            "--no-warnings",
-            "--newline",
-            "--no-overwrites",
-            "--concurrent-fragments", "16",
-            # NEVER skip a fragment on a flaky link — a skipped fragment makes a
-            # gappy video that jumps parts. Retry each fragment hard, and if one
-            # truly can't be fetched, ABORT (the partial stays in .temp/ and is
-            # resumable) rather than produce an incomplete file in Downloads.
-            "--abort-on-unavailable-fragments",
-            "--fragment-retries", "50",
-            "--retries", "10",
-            "--retry-sleep", "2",
-            "--merge-output-format", "mp4",
-            "-P", f"home:{out_dir}",
-            "-P", f"temp:{frag_tmp}",
-            "-o", f"{safe_title}.%(ext)s",
-        ]
-        for key, val in dl_headers.items():
-            cmd += ["--add-header", f"{key}:{val}"]
-        if format_arg:
-            cmd.extend(["-f", format_arg])
-        cmd.append(stream_url)
+        # HLS uses yt-dlp's NATIVE downloader with parallel fragments:
+        #   1. real-time progress ("[download] X% (frag a/b)");
+        #   2. abort-on-unavailable-fragments → no silent gaps.
+        # Fragments + .part live in a STABLE hidden temp dir so a re-launch
+        # finds the .ytdl state and resumes where it left off.
+        backend_name = "yt-dlp (8 fragments)"
+        cmd = _ytdlp_download_cmd(
+            ytdlp, stream_url, safe_title, frag_tmp, frag_tmp, dl_headers,
+            format_arg, concurrent=8,
+        )
     else:
-        aria = shutil.which("aria2c")
+        aria = _resolve_tool("aria2c")
         if aria and _tool_works(aria):
             backend_name = "aria2c"
-            # Download into the hidden temp dir, NOT straight into Downloads, so a
-            # dropped connection never leaves a half-finished .mp4 in the user's
-            # folder. The finished file is moved to out_dir only on success
-            # (--continue=true + the .aria2 control file resume the same partial).
-            frag_tmp = _stable_temp_dir(safe_title, subfolder)
-            needs_move = True
-            cmd = [
-                aria,
-                "--continue=true",
-                "--max-connection-per-server=16",
-                "--split=16",
-                "--min-split-size=1M",
-                "--auto-file-renaming=false",
-                "--summary-interval=1",
-                "--console-log-level=notice",
-                f"--dir={frag_tmp}",
-                f"--out={safe_title}.mp4",
-            ]
-            for key, val in dl_headers.items():
-                cmd.append(f"--header={key}: {val}")
-            cmd.append(stream_url)
+            cmd = _aria2c_download_cmd(
+                aria, stream_url, safe_title, frag_tmp, dl_headers,
+            )
         else:
             print_info(t("aria2c not found, falling back to yt-dlp."))
-            ytdlp = shutil.which("yt-dlp")
+            ytdlp = _resolve_tool("yt-dlp")
             if not _tool_works(ytdlp):
                 print_error(
                     f"{t('Neither aria2c nor yt-dlp is installed.')} "
@@ -1578,38 +1927,19 @@ def _download_stream(
                 )
                 return False
             backend_name = "yt-dlp"
-            # Same idea: the .part lives in temp, the final file lands in out_dir
-            # only when complete (yt-dlp renames atomically on success).
-            frag_tmp = _stable_temp_dir(safe_title, subfolder)
-            cmd = [
-                ytdlp,
-                "--no-warnings",
-                "--newline",
-                "--no-overwrites",
-                # Never leave gaps: retry each fragment hard, abort (resumable in
-                # .temp/) rather than skip and produce a jumpy incomplete file.
-                "--abort-on-unavailable-fragments",
-                "--fragment-retries", "50",
-                "--retries", "10",
-                "--retry-sleep", "2",
-                "-P", f"home:{out_dir}",
-                "-P", f"temp:{frag_tmp}",
-                "-o", f"{safe_title}.%(ext)s",
-            ]
-            for key, val in dl_headers.items():
-                cmd += ["--add-header", f"{key}:{val}"]
-            if format_arg:
-                cmd.extend(["-f", format_arg])
-            cmd.append(stream_url)
+            cmd = _ytdlp_download_cmd(
+                ytdlp, stream_url, safe_title, frag_tmp, frag_tmp, dl_headers,
+                format_arg, concurrent=8,
+            )
 
     # Remember how to resume this exact download if the connection drops.
-    if frag_tmp:
-        _write_resume_meta(
-            frag_tmp,
-            stream_url=stream_url, referer=referer, user_agent=user_agent,
-            title=title, is_mp4=is_mp4, quality=quality, subfolder=subfolder,
-            headers=dl_headers,
-        )
+    _write_resume_meta(
+        frag_tmp,
+        stream_url=stream_url, referer=referer, user_agent=user_agent,
+        title=title, is_mp4=is_mp4, quality=quality, subfolder=subfolder,
+        headers=dl_headers, expected_duration=expected_duration,
+        expected_size=expected_size,
+    )
 
     output_suppressed = getattr(_suppress_print, "active", False)
 
@@ -1620,9 +1950,9 @@ def _download_stream(
         )
         print_info(f"{t('Output:')} [cyan]{out_dir}[/cyan]")
 
-    dl_ok = False
-    try:
-        from . import progress as _progress
+    from . import progress as _progress
+
+    def _run(cmd_to_run):
         if _with_ui:
             # The BatchView is keyed by the DISPLAY label ("[i/total] title"),
             # which differs from `title` once a clean per-episode filename is
@@ -1630,46 +1960,142 @@ def _download_stream(
             label = batch_label or title
             cb = (lambda _safe, info: batch_view.update(label, info)) if batch_view else None
             cancel = batch_view.is_cancelled if batch_view else None
-            rc = _progress.run_download_with_bar(
-                cmd, safe_title, batch_callback=cb, cancel_check=cancel
+            return _progress.run_download_with_bar(
+                cmd_to_run, safe_title, batch_callback=cb, cancel_check=cancel
             )
-            dl_ok = rc == 0
-        else:
-            import subprocess as _sp
-            rc = _sp.run(cmd, env=None).returncode
-            dl_ok = rc == 0
-        if not dl_ok and not output_suppressed:
-            print_error(f"{t('Download failed')} ({t('exit code')} {rc}).")
-    except KeyboardInterrupt:
-        if not output_suppressed:
-            print_info(f"\n{t('Download interrupted by user.')}")
-    except Exception as e:
-        if not output_suppressed:
-            print_error(f"{t('Download error:')} {e}")
-    finally:
-        _sweep_download_litter()
+        return subprocess.run(cmd_to_run, env=None).returncode
 
-    # Only a TRULY complete download leaves .temp for the user's folder. aria2c
-    # wrote the .mp4 into frag_tmp — move it to out_dir now that it finished.
-    if dl_ok and needs_move:
+    def _conservative(cmd_to_run):
+        """Second attempt: fewer parallel fragments (CDNs throttle bursts)."""
+        out = list(cmd_to_run)
+        for i, part in enumerate(out):
+            if part == "--concurrent-fragments" and i + 1 < len(out):
+                out[i + 1] = "4"
+        return out
+
+    dl_ok = False
+    interrupted = False
+    staged = None
+    max_attempts = 2
+    for attempt in range(1, max_attempts + 1):
+        rc = None
         try:
-            src = os.path.join(frag_tmp, f"{safe_title}.mp4")
-            if os.path.exists(src):
-                os.makedirs(out_dir, exist_ok=True)
-                shutil.move(src, os.path.join(out_dir, f"{safe_title}.mp4"))
+            rc = _run(cmd if attempt == 1 else _conservative(cmd))
+            dl_ok = rc == 0
+            if not dl_ok and not output_suppressed:
+                print_error(f"{t('Download failed')} ({t('exit code')} {rc}).")
+        except KeyboardInterrupt:
+            interrupted = True
+            if not output_suppressed:
+                print_info(f"\n{t('Download interrupted by user.')}")
+            break
+        except Exception as e:
+            if not output_suppressed:
+                print_error(f"{t('Download error:')} {e}")
+            dl_ok = False
+        finally:
+            _sweep_download_litter()
+
+        # Batch cancellation terminates the subprocess and returns a non-zero
+        # code; never treat that as a transient failure and restart it.
+        if rc is not None and rc < 0:
+            interrupted = True
+            break
+        if batch_view is not None:
+            try:
+                if batch_view.is_cancelled():
+                    interrupted = True
+                    break
+            except Exception:
+                pass
+
+        if not dl_ok:
+            if attempt < max_attempts:
+                # HLS native fragments are re-used by yt-dlp on the mere
+                # existence of a `.part-FragN` file, even when that fragment
+                # was truncated by a 404/drop. Purge them so the retry really
+                # re-fetches every segment (the proxy already resumes bytes
+                # inside a fragment, so this does not lose useful progress on
+                # normal network glitches).
+                if is_hls:
+                    _purge_download_temp(frag_tmp)
+                if not output_suppressed:
+                    print_info(t("Retrying download to fetch the missing parts…"))
+                time.sleep(2)
+                continue
+            break
+
+        # Exit code 0 is not proof: validate the actual media before moving it
+        # out of temp. This catches skipped fragments and truncated MP4s.
+        staged = _find_staged_output(frag_tmp, safe_title)
+        if not staged:
+            dl_ok = False
+            if not output_suppressed:
+                print_error(t("The download produced no playable file."))
+            if attempt < max_attempts:
+                time.sleep(1)
+                continue
+            break
+
+        ok, reason = _verify_download(
+            staged, expected_duration, expected_size, expected_tolerance
+        )
+        if ok:
+            dl_ok = True
+            break
+
+        dl_ok = False
+        if not output_suppressed:
+            print_warning(
+                f"{t('The downloaded file is incomplete or unreadable')} "
+                f"({_download_reason(reason)}). "
+                f"{t('Retrying to fetch the missing parts…')}"
+            )
+        # Keep it under a name yt-dlp/aria2c won't consider "already complete".
+        _keep_incomplete(staged)
+        staged = None
+        # Purge all resumable state: the downloaded fragment set is known to
+        # be incomplete, so resuming from it would reproduce the same gap.
+        _purge_download_temp(frag_tmp)
+        if attempt < max_attempts:
+            time.sleep(1)
+            continue
+        break
+
+    if dl_ok and staged:
+        # Move ONLY a verified file. Existing destination: validate it first;
+        # keep it if good, otherwise replace it with the verified staged file.
+        dst = os.path.join(out_dir, os.path.basename(staged))
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            if os.path.exists(dst):
+                existing_ok, _ = _verify_download(
+                    dst, expected_duration, expected_size, expected_tolerance
+                )
+                if existing_ok:
+                    try:
+                        os.remove(staged)
+                    except OSError:
+                        pass
+                else:
+                    os.replace(staged, dst)
             else:
-                dl_ok = False  # nothing to move → treat as incomplete
+                os.replace(staged, dst)
         except Exception as e:
             if not output_suppressed:
                 print_error(f"{t('Could not finalize download:')} {e}")
             dl_ok = False
 
-    # Clean the temp dir ONLY on success; keep it on failure/interrupt so the
-    # next attempt resumes the partial instead of restarting from zero.
-    if dl_ok and frag_tmp:
+    # On success remove the staging dir; on user interrupt keep the partial
+    # for a manual resume; on a hard HLS failure purge known-bad fragments.
+    if dl_ok:
         shutil.rmtree(frag_tmp, ignore_errors=True)
+    elif is_hls and not interrupted:
+        _purge_download_temp(frag_tmp)
 
     if not dl_ok:
+        if interrupted and staged is None:
+            pass  # already reported
         return False
 
     if local_subtitle_path and os.path.exists(local_subtitle_path):
@@ -1695,6 +2121,17 @@ def _download_stream(
     print_success(f"{t('Download completed in')} {out_dir}")
     _invalidate_download_index()  # new file → refresh badges immediately
     return True
+
+
+def _download_reason(code: str) -> str:
+    """Human-readable cause for a rejected staged download."""
+    return {
+        "short": t("video is shorter than expected (missing segments)"),
+        "size": t("file size does not match the server (missing data)"),
+        "unreadable": t("file cannot be decoded"),
+        "empty": t("file is empty"),
+        "missing": t("file is missing"),
+    }.get(code, code)
 
 
 # ── Downloaded-files index cache ──────────────────────────────────────

@@ -542,15 +542,19 @@ def crumbs_text() -> str:
 
 
 class crumb:
-    """Scoped breadcrumb level : ``with crumb(series.title): …`` — the trail is
-    restored on exit no matter how the block ends (break/return/exception)."""
+    """Scoped breadcrumb level(s) : ``with crumb(series.title): …`` — the trail
+    is restored on exit no matter how the block ends (break/return/exception).
 
-    def __init__(self, label):
-        self.label = label
+    Accepts several labels for a single level, e.g.
+    ``with crumb("Anime-Sama", day, date):`` (all pushed, all popped)."""
+
+    def __init__(self, *labels):
+        self.labels = [x for x in labels if x]
 
     def __enter__(self):
         self._n = len(_crumbs)
-        crumb_push(self.label)
+        for label in self.labels:
+            crumb_push(label)
         return self
 
     def __exit__(self, *exc):

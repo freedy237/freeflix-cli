@@ -1,6 +1,11 @@
 // FreeFlix source portal URLs — authoritative list.
-// anime-sama uses the .pw portal which self-heals to the current mirror
-// via its btn-primary link (same mechanism as autoflix-cli).
+// Mirror state checked 2026-10-23:
+//   anime-sama   : .pw (200) → btn-primary → anime-sama.si → 302 → .to  OK
+//   french-manga : w16.french-manga.net (200)                        OK
+//   coflix       : coflix.ac (200)                                   OK
+//   french-stream: french-stream.net (200)                           OK
+// Origins are cached 24 h in ~/.cache/AutoFlixCLI/origins.json; delete it
+// to force a fresh mirror resolution.
 {
   "anime-sama":   "https://anime-sama.pw",
   "french-manga": "https://w16.french-manga.net",

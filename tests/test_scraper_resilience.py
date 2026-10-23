@@ -820,7 +820,6 @@ class TestPortalCandidates:
         assert os.path.normpath(share_file) in cands
 
     def test_empty_file_does_not_shadow_next(self, tmp_path, monkeypatch):
-        import os
         from freeflix_cli.scraping import config as cfg
         first = tmp_path / "a.json"
         first.write_text("not json {{{")

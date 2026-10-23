@@ -31,6 +31,17 @@ _server_instance = None  # the ThreadingHTTPServer, for shutdown
 player_finished_event = threading.Event()
 player_heartbeat_time = 0
 
+
+class StreamIncomplete(Exception):
+    """Upstream ended before the announced body length.
+
+    The response has already started, so the only safe signal is to ABORT the
+    connection (close it without the final chunk / with fewer bytes than
+    ``Content-Length``). Players and yt-dlp then retry the range/segment
+    instead of accepting a truncated file as complete — a truncated segment is
+    exactly what makes a video "jump" over missing parts.
+    """
+
 # ── Data-usage meter ──────────────────────────────────────────────────
 _bytes_lock = threading.Lock()
 _bytes_served = 0
@@ -196,12 +207,13 @@ def _build_session():
     session.curl_options.update(DNS_OPTIONS)
     # Use DoH for the video proxy (bypasses ISP DNS blocks on CDNs).
     session.curl_options[CurlOpt.DOH_URL] = "https://1.1.1.1/dns-query"
-    # Abort a transfer that's essentially dead (< 100 B/s) after 20 s, so the
-    # resilient body can RECONNECT + RESUME quickly rather than hanging a full
-    # minute. The reconnect logic (not a longer cutoff) is what makes it robust.
+    # Abort a transfer that's essentially dead (< 100 B/s) after 3 s, so the
+    # resilient body can RECONNECT + RESUME quickly rather than hanging. The
+    # reconnect logic (not a longer cutoff) is what makes it robust: after a
+    # Wi-Fi/operator switch the next attempt uses a fresh DNS/TLS route.
     session.curl_options.update({
         CurlOpt.LOW_SPEED_LIMIT: 100,
-        CurlOpt.LOW_SPEED_TIME: 20,
+        CurlOpt.LOW_SPEED_TIME: 3,
     })
     return session
 
@@ -243,13 +255,31 @@ def _upstream_total(resp, start_offset: int):
     return None
 
 
+def _range_is_closed(value: str) -> bool:
+    """``bytes=0-1023`` (closed) vs ``bytes=0-`` (open-ended)."""
+    return bool(re.match(r"bytes=\d+-\d+\s*$", value or ""))
+
+
+def _declared_length(resp):
+    try:
+        cl = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+        if cl and str(cl).isdigit() and int(cl) >= 0:
+            return int(cl)
+    except Exception:
+        pass
+    return None
+
+
 # ── Stream re-resolution (handles EXPIRED / tokenised URLs) ───────────
 # Playback registers a refresher : a callable that RE-RESOLVES the stream and
 # returns a fresh (unexpired) master URL. On 401/403/410 the proxy fetches a
 # fresh master and re-signs the failing URL with the new token.
 _stream_refresher = None
 _refresh_lock = threading.Lock()
-_refresh_cache = {"master": None, "ts": 0.0}
+_refresh_cache = {
+    "master": None, "ts": 0.0,
+    "segments": None, "segments_ts": 0.0,
+}
 _SIGN_PARAMS = ("t", "s", "e", "sp", "i", "f", "fr", "token", "expires",
                 "expire", "hash", "hmac", "sig", "signature", "key", "st")
 
@@ -260,14 +290,18 @@ def set_stream_refresher(fn):
     global _stream_refresher
     with _refresh_lock:
         _stream_refresher = fn
-        _refresh_cache["master"] = None
-        _refresh_cache["ts"] = 0.0
+        _refresh_cache.update({
+            "master": None, "ts": 0.0, "segments": None, "segments_ts": 0.0,
+        })
 
 
 def clear_stream_refresher():
     global _stream_refresher
     with _refresh_lock:
         _stream_refresher = None
+        _refresh_cache.update({
+            "master": None, "ts": 0.0, "segments": None, "segments_ts": 0.0,
+        })
 
 
 def _fresh_master(max_age: float = 8.0):
@@ -284,111 +318,366 @@ def _fresh_master(max_age: float = 8.0):
     except Exception:
         master = None
     with _refresh_lock:
+        if master and master != _refresh_cache["master"]:
+            # New manifest → its segment URLs (and possibly host) changed.
+            _refresh_cache["segments"] = None
+            _refresh_cache["segments_ts"] = 0.0
         if master:
             _refresh_cache["master"] = master
             _refresh_cache["ts"] = time.time()
     return master
 
 
-def _refreshed_url(expired_url: str):
-    """A fresh, unexpired version of *expired_url* (the master itself, or a
-    segment re-signed with the fresh token), or None."""
+def _basename_path(url: str) -> str:
+    try:
+        return urllib.parse.urlparse(url).path.rsplit("/", 1)[-1] or ""
+    except Exception:
+        return ""
+
+
+def _fresh_segment_map(master: str, headers: dict, max_age: float = 12.0):
+    """Map ``basename → fresh absolute URL`` from the freshly resolved stream.
+
+    Query-token swapping fixes most expirations, but when the CDN rotates to a
+    different HOST (or signs URLs in the path) after a reconnect / network
+    switch, the only reliable URL is the one in the new manifest. Cached for a
+    few seconds so a burst of expired segments costs one playlist fetch.
+    """
+    with _refresh_lock:
+        cached = _refresh_cache.get("segments")
+        if cached is not None and (time.time() - _refresh_cache["segments_ts"]) < max_age:
+            return cached
+    out = {}
+    try:
+        import m3u8 as _m3u8
+
+        def _add(obj, base):
+            for key in getattr(obj, "keys", []) or []:
+                if key and key.uri:
+                    try:
+                        out[_basename_path(key.uri)] = key.absolute_uri
+                    except Exception:
+                        pass
+            for sm in getattr(obj, "segment_map", []) or []:
+                if sm and sm.uri:
+                    try:
+                        out[_basename_path(sm.uri)] = sm.absolute_uri
+                    except Exception:
+                        pass
+            for seg in getattr(obj, "segments", []) or []:
+                if seg and seg.uri:
+                    try:
+                        out[_basename_path(seg.uri)] = seg.absolute_uri
+                    except Exception:
+                        pass
+
+        resp = fetch_with_retry(master, headers or {}, max_retries=2)
+        if not resp or getattr(resp, "status_code", 0) not in (200, 206):
+            return out
+        try:
+            text = resp.text or ""
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if "#EXTM3U" not in text[:4096]:
+            return out
+        obj = _m3u8.loads(text, uri=master)
+        if obj.playlists:
+            # Segment names are normally shared by all variants; inspect the
+            # first few until we find the playlist level.
+            for p in obj.playlists[:4]:
+                try:
+                    media = p.absolute_uri
+                except Exception:
+                    media = p.uri
+                r2 = fetch_with_retry(media, headers or {}, max_retries=2)
+                if not r2 or getattr(r2, "status_code", 0) not in (200, 206):
+                    continue
+                try:
+                    t2 = r2.text or ""
+                finally:
+                    try:
+                        r2.close()
+                    except Exception:
+                        pass
+                if "#EXTINF" in t2 or "#EXT-X-MAP" in t2:
+                    _add(_m3u8.loads(t2, uri=media), media)
+                    if out:
+                        break
+        else:
+            _add(obj, master)
+    except Exception:
+        out = {}
+    with _refresh_lock:
+        _refresh_cache["segments"] = out
+        _refresh_cache["segments_ts"] = time.time()
+    return out
+
+
+def _refreshed_url(expired_url: str, headers: dict = None):
+    """A fresh, unexpired version of *expired_url* (the master itself, a
+    segment from the new manifest, or a segment re-signed with the fresh
+    token), or None.
+
+    The new-manifest lookup comes first: after an operator/Wi-Fi switch the CDN
+    may hand out a different host, which a query-only signature swap cannot
+    repair.
+    """
     master = _fresh_master()
     if not master:
         return None
     low = expired_url.lower()
     if ".m3u8" in low or "master" in low:
         return master
+    # Query-signature swap first (cheap, no extra request). The fresh-manifest
+    # lookup is only needed when the HOST or the path changed — e.g. after an
+    # operator switch the CDN hands out a new hostname that cannot be repaired
+    # by copying query params.
+    swapped = None
+    changed = False
     try:
         mq = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(master).query))
         parts = urllib.parse.urlparse(expired_url)
         sq = dict(urllib.parse.parse_qsl(parts.query))
-        changed = False
         for p in _SIGN_PARAMS:
             if p in mq:
                 sq[p] = mq[p]
                 changed = True
         if not changed and mq:
             sq = mq
-        return urllib.parse.urlunparse(parts._replace(query=urllib.parse.urlencode(sq)))
+        swapped = urllib.parse.urlunparse(
+            parts._replace(query=urllib.parse.urlencode(sq)))
     except Exception:
-        return None
+        swapped = None
+
+    try:
+        m_host = (urllib.parse.urlparse(master).hostname or "").lower()
+        e_host = (urllib.parse.urlparse(expired_url).hostname or "").lower()
+    except Exception:
+        m_host = e_host = ""
+    if (m_host and e_host and m_host != e_host) or not changed:
+        name = _basename_path(expired_url)
+        if name:
+            fresh = _fresh_segment_map(master, headers or {}).get(name)
+            if fresh:
+                return fresh
+    return swapped
+
+
+def _open_stream_response(url, headers, stream=True, client_range=None,
+                          max_retries=4):
+    """Fetch a playlist/segment/video, transparently re-resolving an expired
+    token (401/403/410) before any bytes are sent to the player.
+
+    Returns ``(resp, effective_url)``. ``resp`` is None on a hard failure.
+    """
+    current = url
+    for _ in range(3):
+        resp = fetch_with_retry(
+            current, headers, stream=stream, max_retries=max_retries,
+            client_range=client_range,
+        )
+        if not resp:
+            return None, current
+        if getattr(resp, "status_code", 0) in (401, 403, 410):
+            fresh = _refreshed_url(current, headers)
+            _close_quietly(resp)
+            if not fresh or fresh == current:
+                return None, current
+            current = fresh
+            continue
+        return resp, current
+    return None, current
+
+
+def _retry_after_seconds(resp, default: float) -> float:
+    """Honour ``Retry-After`` (seconds form) on 429/503, capped for playback."""
+    try:
+        raw = (resp.headers.get("Retry-After")
+               or resp.headers.get("retry-after") or "")
+        sec = float(str(raw).strip())
+        return max(0.5, min(15.0, sec))
+    except Exception:
+        return default
+
+
+def _close_quietly(resp) -> None:
+    try:
+        resp.close()
+    except Exception:
+        pass
 
 
 def resilient_body(url, base_headers, start_offset=0, first_resp=None,
-                   first_total=None, no_progress_budget=300.0):
+                   first_total=None, no_progress_budget=300.0,
+                   client_gone=None):
     """
-    A response body that survives a flaky connection AND expired URLs : on a
-    stall/drop it RECONNECTS with an HTTP ``Range`` from where it left off ; on
-    401/403/410 (token expired) it RE-RESOLVES the stream and retries with a
-    fresh URL. Gives up only after *no_progress_budget* seconds with ZERO bytes
-    (budget resets on every byte), on 404, or if the server can't honour Range
-    after a partial send.
+    A response body that survives a flaky connection, a network switch and
+    expired URLs:
+      • on a stall/drop it RECONNECTS with an HTTP ``Range`` from the exact
+        byte where it stopped (new session → new DNS/TLS/route, so switching
+        Wi-Fi or operator just works);
+      • on 401/403/410 it RE-RESOLVES the stream, preferring the matching
+        segment from the *new* manifest (new host/token), then falls back to
+        swapping signature query params;
+      • it gives up only on a hard 404/416 or when *no_progress_budget*
+        seconds pass with ZERO bytes. ``None`` means "keep trying as long as
+        the player is connected" — used by the streaming endpoints so an
+        outage (even a long one) resumes instead of ending the video.
+
+    If the server ignores Range after a partial send, raises
+    :class:`StreamIncomplete` instead of returning a short body: the caller
+    then aborts the HTTP response, which makes the player retry rather than
+    accept a gap.
     """
     sent = 0
     total = first_total
     resp = first_resp
     refresh_tries = 0
     last_progress = time.time()
+    attempts = 0
+
+    def _budget_exceeded() -> bool:
+        return (no_progress_budget is not None
+                and time.time() - last_progress > no_progress_budget)
+
+    def _pause(seconds: float) -> bool:
+        """Sleep, but wake up quickly if the player is gone. False = stop."""
+        deadline = time.time() + max(0.0, seconds)
+        while time.time() < deadline:
+            if client_gone is not None:
+                try:
+                    if client_gone():
+                        return False
+                except Exception:
+                    return False
+            time.sleep(min(0.25, max(0.0, deadline - time.time())))
+        return True
+
+    def _backoff() -> float:
+        return min(8.0, 0.5 * (2 ** min(attempts, 4)))
 
     while True:
-        if resp is None:
-            if time.time() - last_progress > no_progress_budget:
+        if client_gone is not None:
+            try:
+                if client_gone():
+                    return
+            except Exception:
                 return
+
+        if resp is None:
+            if _budget_exceeded():
+                raise StreamIncomplete(
+                    f"no data for {no_progress_budget:.0f}s") from None
             h = dict(base_headers or {})
             h["Range"] = f"bytes={start_offset + sent}-"
             try:
-                resp = get_session().request("GET", url, headers=h, stream=True, timeout=60)
+                resp = get_session().request(
+                    "GET", url, headers=h, stream=True, timeout=60)
             except Exception:
                 _reset_session()
                 resp = None
-                time.sleep(1.0)
+                attempts += 1
+                if not _budget_exceeded() and not _pause(_backoff()):
+                    return
                 continue
 
         st = getattr(resp, "status_code", 0)
         if st in (401, 403, 410):
-            fresh = _refreshed_url(url)
-            if fresh and fresh != url and refresh_tries < 4:
+            fresh = _refreshed_url(url, base_headers)
+            if fresh and fresh != url and refresh_tries < 6:
                 refresh_tries += 1
                 url = fresh
+                _close_quietly(resp)
                 resp = None
-                time.sleep(0.5)
+                attempts = 0
+                if not _pause(0.5):
+                    return
                 continue
-            return
-        if st == 404:
-            return
-        if st not in (200, 206):
-            resp = None
-            if time.time() - last_progress > no_progress_budget:
+            raise StreamIncomplete(f"upstream HTTP {st}")
+        if st == 416:
+            # Requested range already satisfied (or resource shrank). If we
+            # really sent everything expected, this is a clean end.
+            if total is not None and sent >= total:
+                _close_quietly(resp)
                 return
-            time.sleep(1.0)
+            _close_quietly(resp)
+            raise StreamIncomplete("HTTP 416")
+        if st == 404:
+            _close_quietly(resp)
+            raise StreamIncomplete("HTTP 404")
+        if st not in (200, 206):
+            retryable = st in (408, 425, 429) or st >= 500
+            delay = _retry_after_seconds(resp, _backoff()) if retryable else 0
+            _close_quietly(resp)
+            resp = None
+            if not retryable:
+                raise StreamIncomplete(f"upstream HTTP {st}")
+            attempts += 1
+            if _budget_exceeded() or not _pause(delay):
+                if _budget_exceeded():
+                    raise StreamIncomplete(
+                        f"no data for {no_progress_budget:.0f}s")
+                return
             continue
         if st == 200 and sent > 0:
-            return  # server ignored Range → can't resume cleanly
+            # The server ignored our Range: we cannot append without
+            # duplicating bytes. Abort so the client restarts cleanly.
+            _close_quietly(resp)
+            raise StreamIncomplete("server ignored Range")
+        if st == 206:
+            try:
+                cr = (resp.headers.get("Content-Range")
+                      or resp.headers.get("content-range") or "")
+                m = re.match(r"bytes\s+(\d+)-", cr)
+                if m and int(m.group(1)) != start_offset + sent:
+                    _close_quietly(resp)
+                    raise StreamIncomplete("wrong Content-Range")
+            except StreamIncomplete:
+                raise
+            except Exception:
+                pass
         if total is None:
             total = _upstream_total(resp, start_offset)
 
         try:
             for chunk in resp.iter_content():
-                if chunk:
-                    sent += len(chunk)
-                    add_bytes(len(chunk))
-                    last_progress = time.time()
-                    yield chunk
+                if not chunk:
+                    continue
+                sent += len(chunk)
+                add_bytes(len(chunk))
+                last_progress = time.time()
+                yield chunk
+            # Body ended naturally: either complete, or short → reconnect.
             if total is None or sent >= total:
+                _close_quietly(resp)
                 return
+            _close_quietly(resp)
             resp = None
+            attempts += 1
+            if _budget_exceeded() or not _pause(_backoff()):
+                if _budget_exceeded():
+                    raise StreamIncomplete(
+                        f"no data for {no_progress_budget:.0f}s")
+                return
         except GeneratorExit:
+            _close_quietly(resp)
             return
         except Exception:
             _reset_session()
+            _close_quietly(resp)
             resp = None
-            if time.time() - last_progress > no_progress_budget:
+            if _budget_exceeded():
+                raise StreamIncomplete(
+                    f"no data for {no_progress_budget:.0f}s") from None
+            attempts += 1
+            if not _pause(_backoff()):
                 return
-            time.sleep(1.0)
 
 
-def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3,
+def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=4,
                      client_range=None, _max_hops=3):
     """Request with retries, reusing the thread-local session. *client_range*
     (the player's Range header) is forwarded when present (MP4 seeking).
@@ -396,9 +685,14 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3,
     Redirects are followed MANUALLY (≤3 sauts) : chaque hop est re-soumis au
     garde SSRF, sinon une cible publique qui 302 vers l'interne contournerait
     le contrôle initial (fonctionne partout : Windows, Linux, macOS).
+
+    429/5xx are retried with exponential backoff and ``Retry-After`` support;
+    a fresh session is built each retry (new DNS/TLS/route) so switching
+    network/operator recovers instead of staying stuck on a dead connection.
     """
     attempt = 0
     while attempt < max_retries:
+        retry_delay = None
         try:
             session = get_session()
             req_headers = headers.copy() if headers else {}
@@ -432,17 +726,28 @@ def fetch_with_retry(url, headers, method="GET", stream=False, max_retries=3,
                     from . import logsetup as _ls
                     _ls.warning(f"proxy: blocked redirect to {current}")
                     return None
-            if response.status_code == 429 or response.status_code >= 500:
-                raise requests.RequestsError(f"Status {response.status_code}")
+            if response is None:
+                raise requests.RequestsError("no response")
+            if (response.status_code in (408, 425, 429)
+                    or response.status_code >= 500):
+                delay = _retry_after_seconds(response, 0.5 * (attempt + 1))
+                retry_delay = delay
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                raise requests.RequestsError(
+                    f"Status {response.status_code} (retry in {delay:.1f}s)")
             return response
         except Exception as e:
             attempt += 1
             _reset_session()
-            time.sleep(0.5 * attempt)
             if attempt >= max_retries:
                 from . import logsetup as _ls
                 _ls.warning(f"proxy: failed to fetch {url} after {max_retries} attempts: {e}")
                 return None
+            time.sleep(retry_delay if retry_delay is not None
+                       else min(8.0, 0.5 * (2 ** min(attempt, 4))))
 
 
 # ── m3u8 manifest rewriting ───────────────────────────────────────────
@@ -455,9 +760,10 @@ def _rewrite_manifest(target_url, headers):
     headers). Returns the rewritten text, ``_NOT_A_PLAYLIST`` when the target
     is actually a direct media file (so the caller can switch to /video without
     buffering the whole video), or None on a hard fetch error."""
-    resp = fetch_with_retry(target_url, headers, stream=True)
+    resp, effective_url = _open_stream_response(target_url, headers, stream=True)
     if not resp or resp.status_code not in (200, 206):
         return None
+    target_url = effective_url
     try:
         ctype = (resp.headers.get("content-type") or "").lower()
         playlist_type = "mpegurl" in ctype or "m3u" in ctype
@@ -661,21 +967,75 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _stream(self, status, headers, generator):
-        """Stream a generator to the client using chunked transfer encoding."""
+    def _client_gone(self) -> bool:
+        """True when the player closed its socket (best effort, non-blocking).
+
+        Used by the long-resilience streaming body so a network outage can be
+        retried indefinitely without leaking a worker forever after the user
+        quits playback.
+        """
+        try:
+            import select
+            ready, _, _ = select.select([self.connection], [], [], 0)
+            if not ready:
+                return False
+            data = self.connection.recv(1, socket.MSG_PEEK)
+            return data == b""
+        except Exception:
+            return True
+
+    def _stream(self, status, headers, generator, total=None):
+        """Stream a generator to the client.
+
+        When the upstream length is known we announce ``Content-Length`` and
+        send raw bytes: a short body is then an unambiguous HTTP protocol
+        error for mpv/yt-dlp. Without a length we use chunked encoding, and an
+        incomplete generator simply does NOT emit the terminating ``0`` chunk
+        — again a protocol error, never a silently truncated segment. This is
+        what prevents "the video skips bad parts": a gap can no longer look
+        like a valid, complete response.
+        """
         h = dict(headers)
-        h["Transfer-Encoding"] = "chunked"
+        known_total = total is not None and int(total) >= 0
+        if known_total:
+            total = int(total)
+            h["Content-Length"] = str(total)
+            h.pop("Transfer-Encoding", None)
+        else:
+            h["Transfer-Encoding"] = "chunked"
+        sent = 0
         try:
             self._send_headers(status, h)
             for chunk in generator:
                 if not chunk:
                     continue
-                self.wfile.write(b"%X\r\n" % len(chunk) + chunk + b"\r\n")
-            self.wfile.write(b"0\r\n\r\n")
+                if known_total:
+                    remaining = total - sent
+                    if remaining <= 0:
+                        break
+                    if len(chunk) > remaining:
+                        chunk = chunk[:remaining]
+                    self.wfile.write(chunk)
+                else:
+                    self.wfile.write(b"%X\r\n" % len(chunk) + chunk + b"\r\n")
+                sent += len(chunk)
+            if known_total and sent < total:
+                raise StreamIncomplete(
+                    f"client got {sent}/{total} bytes")
+            if not known_total:
+                self.wfile.write(b"0\r\n\r\n")
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
+        except StreamIncomplete:
+            # The response already started: close the connection WITHOUT a
+            # valid terminator. Do NOT pretend this was a complete body.
+            self.close_connection = True
         except (BrokenPipeError, ConnectionResetError):
-            pass  # client (mpv) closed — stop quietly
+            self.close_connection = True  # client (mpv) closed — stop quietly
         except Exception:
-            pass
+            self.close_connection = True
         finally:
             try:
                 generator.close()
@@ -771,22 +1131,51 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._send_bytes(400, "Missing URL")
             return
         headers = self._parse_headers_arg(args)
-        # Stream the segment PROGRESSIVELY (bytes as they arrive) so mpv's cache
-        # fills smoothly second-by-second and playback starts fast — the same
-        # feel as autoflix. resilient_body still RESUMES on a stall (reconnect +
-        # HTTP Range) and re-resolves an expired token, so a very bad connection
-        # recovers and completes the segment instead of hanging — robustness
-        # kept, without buffering the whole segment first.
-        resp = fetch_with_retry(target_url, headers, stream=True)
+        # Segment-level resilience: keep retrying for as long as the player is
+        # connected (network switch, operator change, long outage). The
+        # callable stops the loop immediately if the player closed its socket.
+        client_range = self.headers.get("Range")
+        resp, target_url = _open_stream_response(
+            target_url, headers, stream=True, client_range=client_range,
+            max_retries=4,
+        )
         if not resp:
             self._send_bytes(502, "Error fetching segment")
             return
-        total = _upstream_total(resp, 0)
+        status = getattr(resp, "status_code", 200) or 200
+        if status == 416:
+            self._send_bytes(416, "Range Not Satisfiable")
+            try:
+                resp.close()
+            except Exception:
+                pass
+            return
+
+        start_offset = 0
+        if status == 206 and client_range:
+            m = re.match(r"bytes=(\d+)-", client_range)
+            if m:
+                start_offset = int(m.group(1))
+        total = (_declared_length(resp) if _range_is_closed(client_range)
+                 else _upstream_total(resp, start_offset))
+        excluded = {"content-length", "transfer-encoding", "connection",
+                    "content-encoding"}
+        out_headers = {"Access-Control-Allow-Origin": "*"}
+        try:
+            for k, v in resp.headers.items():
+                if k.lower() not in excluded:
+                    out_headers[k] = v
+        except Exception:
+            pass
+        out_headers.setdefault("Content-Type", "video/mp2t")
+
         self._stream(
-            getattr(resp, "status_code", 200) or 200,
-            {"Content-Type": "video/mp2t", "Access-Control-Allow-Origin": "*"},
-            resilient_body(target_url, headers, start_offset=0,
-                           first_resp=resp, first_total=total),
+            status, out_headers,
+            resilient_body(target_url, headers, start_offset=start_offset,
+                           first_resp=resp, first_total=total,
+                           no_progress_budget=None,
+                           client_gone=self._client_gone),
+            total=total,
         )
 
     def _h_video(self, args):
@@ -796,12 +1185,32 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
         headers = self._parse_headers_arg(args)
         client_range = self.headers.get("Range")
-        resp = fetch_with_retry(target_url, headers, stream=True, client_range=client_range)
+        resp, target_url = _open_stream_response(
+            target_url, headers, stream=True, client_range=client_range,
+            max_retries=4,
+        )
         if not resp:
             self._send_bytes(502, "Error fetching video")
             return
+        status = getattr(resp, "status_code", 200) or 200
+        if status == 416:
+            out = {}
+            try:
+                cr = (resp.headers.get("Content-Range")
+                      or resp.headers.get("content-range"))
+                if cr:
+                    out["Content-Range"] = cr
+            except Exception:
+                pass
+            self._send_bytes(416, b"", extra=out)
+            try:
+                resp.close()
+            except Exception:
+                pass
+            return
 
-        excluded = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+        excluded = {"content-encoding", "content-length", "transfer-encoding",
+                    "connection"}
         out_headers = {"Access-Control-Allow-Origin": "*"}
         try:
             for k, v in resp.headers.items():
@@ -809,18 +1218,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     out_headers[k] = v
         except Exception:
             pass
+        out_headers.setdefault("Accept-Ranges", "bytes")
 
+        # Only a real 206 starts at the requested offset. If the origin
+        # ignored Range and returned 200, the body starts at 0 — forwarding
+        # the client's offset would corrupt every subsequent byte.
         start_offset = 0
-        if client_range:
+        if status == 206 and client_range:
             m = re.match(r"bytes=(\d+)-", client_range)
             if m:
                 start_offset = int(m.group(1))
-        total = _upstream_total(resp, start_offset)
+        total = (_declared_length(resp) if _range_is_closed(client_range)
+                 else _upstream_total(resp, start_offset))
         self._stream(
-            getattr(resp, "status_code", 200) or 200,
-            out_headers,
+            status, out_headers,
             resilient_body(target_url, headers, start_offset=start_offset,
-                           first_resp=resp, first_total=total),
+                           first_resp=resp, first_total=total,
+                           no_progress_budget=None,
+                           client_gone=self._client_gone),
+            total=total,
         )
 
     def _h_subtitle(self, args):

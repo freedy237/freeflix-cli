@@ -867,6 +867,60 @@ _FR = {
     'No releases found (try another episode).':
         'Aucune release (essaie un autre épisode).',
     'EN sub + dub': 'EN sub + dub',
+    # ── Download / streaming robustness ──
+    "Retrying download to fetch the missing parts…":
+        "Nouvelle tentative pour récupérer les parties manquantes…",
+    "The download produced no playable file.":
+        "Le téléchargement n’a produit aucun fichier lisible.",
+    "The downloaded file is incomplete or unreadable":
+        "Le fichier téléchargé est incomplet ou illisible",
+    "Retrying to fetch the missing parts…":
+        "Nouvelle tentative pour récupérer les parties manquantes…",
+    "video is shorter than expected (missing segments)":
+        "la vidéo est plus courte que prévu (segments manquants)",
+    "file size does not match the server (missing data)":
+        "la taille du fichier ne correspond pas au serveur (données manquantes)",
+    "file cannot be decoded": "le fichier ne peut pas être décodé",
+    "file is empty": "le fichier est vide",
+    "file is missing": "le fichier est introuvable",
+
+    # ── In-app update ──
+    'Do you want to update now?': 'Voulez-vous mettre à jour maintenant ?',
+    'Your choice': 'Votre choix',
+    '(y/n)': '(o/n)',
+    'New dependencies, if any, are installed automatically.':
+        'Les nouvelles dépendances, s’il y en a, sont installées automatiquement.',
+    'New tools required by this version will be installed after the restart.':
+        'Les nouveaux outils requis par cette version seront installés après le redémarrage.',
+    'Updating FreeFlix…': 'Mise à jour de FreeFlix…',
+    'Update installed:': 'Mise à jour installée :',
+    'Update failed:': 'Échec de la mise à jour :',
+    'Update failed. You can retry manually:':
+        'La mise à jour a échoué. Tu peux réessayer manuellement :',
+    'Could not find how FreeFlix was installed.':
+        "Impossible de déterminer comment FreeFlix a été installé.",
+    'Running from a source checkout — nothing to install.':
+        'Lancement depuis le code source — rien à installer.',
+    'FreeFlix is up to date:': 'FreeFlix est à jour :',
+    'Download the latest version here:':
+        'Télécharge la dernière version ici :',
+    'Press Enter to restart FreeFlix with the new version.':
+        "Appuie sur Entrée pour relancer FreeFlix avec la nouvelle version.",
+    # ── Anime-Sama weekly planning ──
+    'Weekly planning': 'Planning de la semaine',
+    'Search an anime': 'Rechercher un anime',
+    'Planning of the moment': 'Planning du moment',
+    'Loading the planning…': 'Chargement du planning…',
+    'Planning unavailable:': 'Planning indisponible :',
+    'Released': 'Sorti',
+    'Not yet released': 'Pas encore sorti',
+    'out': 'sortis',
+    'No anime in the planning right now.':
+        'Aucun anime dans le planning pour le moment.',
+    'Follow the latest released episode': 'Suivre le dernier épisode sorti',
+    'Browse seasons': 'Parcourir les saisons',
+    "The announced episode isn't online yet.":
+        "L'épisode annoncé n'est pas encore en ligne.",
     'Papystreaming is Cloudflare-protected right now.':
         'Papystreaming est protégé par Cloudflare pour le moment.',
     'Papystreaming is Cloudflare-protected (this mirror answers a challenge). Try Papystreaming later, or use GoldenMS/French-Stream/Coflix for this title.':

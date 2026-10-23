@@ -15,7 +15,7 @@ from .cli_utils import (
 )
 from .i18n import t
 from .icons import icon
-from .update_checker import check_update
+from .update_checker import prompt_and_update
 from . import setup_assistant
 from .tracker import tracker
 from .providers_registry import registry
@@ -1009,9 +1009,14 @@ def main():
         _ls.status(t("Ready"), frac=1.0)
         time.sleep(0.28)
 
-    # Check for updates
-    if check_update():
-        pause()
+    # Check for updates: ask y/n (o/n in French), install, then reload on Enter.
+    try:
+        prompt_and_update()
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        # Never block startup on the updater (network/installer issues).
+        pass
 
     # Check for language setup
     check_language_setup()

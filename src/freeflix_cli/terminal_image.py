@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 from .tracker import tracker
 
@@ -343,6 +344,179 @@ def _poster_size():
 # re-downloading. Files are kept for the session and cleaned up at exit.
 _img_cache = {}
 
+# Persistent cover cache: {url: {"path", "etag", "sig", "ts"}}. The planning
+# (and any catalogue view) re-asks the site every time, so a new poster must
+# replace the old one instead of showing a stale cached image.
+_cover_index = None
+_cover_lock = threading.Lock()
+_COVER_TTL = 7 * 24 * 3600  # untouched covers are pruned after a week
+
+
+def _cover_dir():
+    """Directory holding the persistent cover cache (best-effort)."""
+    try:
+        from platformdirs import user_cache_dir
+        d = os.path.join(user_cache_dir("AutoFlixCLI", "PaulExplorer"), "covers")
+    except Exception:
+        d = os.path.join(tempfile.gettempdir(), "freeflix-covers")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        return None
+    return d
+
+
+def _cover_index_path():
+    d = _cover_dir()
+    return os.path.join(d, "index.json") if d else None
+
+
+def _load_cover_index() -> dict:
+    global _cover_index
+    with _cover_lock:
+        if _cover_index is not None:
+            return _cover_index
+        data = {}
+        path = _cover_index_path()
+        if path and os.path.exists(path):
+            try:
+                import json
+                with open(path, encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    data = {k: v for k, v in raw.items() if isinstance(v, dict)}
+            except Exception:
+                data = {}
+        _cover_index = data
+        return _cover_index
+
+
+def _save_cover_index() -> None:
+    path = _cover_index_path()
+    if not path:
+        return
+    try:
+        import json
+        tmp = path + ".tmp"
+        with _cover_lock:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(_cover_index or {}, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def cover_version(url: str):
+    """Cheap change signal for a cover URL (registered ETag / signature).
+
+    The planning re-reads the site on every visit; when the site switches an
+    anime's poster it also changes this value, so callers holding a rendered
+    preview can tell it must be rebuilt. None when nothing is known yet.
+    """
+    if not url:
+        return None
+    ent = _load_cover_index().get(url) or {}
+    for key in ("etag", "sig"):
+        if ent.get(key):
+            return ent[key]
+    return None
+
+
+def _probe_cover(url: str, timeout: float = 4.0) -> tuple:
+    """(status, etag) of the ORIGINAL cover file on the source host.
+
+    We probe the original, not the wsrv resized copy: wsrv answers without an
+    ETag, and a resized file's size drifts with its encoder — both made every
+    poster look "changed". The origin's ETag (or the source length) tracks the
+    real artwork, and 304 Not Modified is accepted as "unchanged".
+    """
+    if not url or _rq is None:
+        return (0, "", 0)
+    try:
+        u = url
+        if u.startswith("//"):
+            u = "https:" + u
+        etag = ""
+        for method in ("head", "get"):
+            fn = getattr(_rq, method, None)
+            if fn is None:
+                continue
+            r = fn(u, impersonate="chrome", timeout=timeout,
+                   allow_redirects=True)
+            status = getattr(r, "status_code", 0) or 0
+            etag = str(r.headers.get("ETag") or r.headers.get("etag") or "").strip('"')
+            if status in (200, 206, 304):
+                try:
+                    length = int(r.headers.get("Content-Length") or 0)
+                except (TypeError, ValueError):
+                    length = 0
+                return (status, etag, length)
+        return (0, "", 0)
+    except Exception:
+        return (0, "", 0)
+
+
+def cover_changed(url: str) -> bool:
+    """True when the poster behind a cached URL has been updated on the site.
+
+    Cheap HEAD probe: the ETag (or the file size) recorded at download time is
+    compared with what the CDN answers now. Unknown/unreachable → False, so a
+    flaky host never triggers pointless re-downloads of the whole grid.
+    """
+    ent = _load_cover_index().get(url) or {}
+    if not ent:
+        return False
+    status, etag, length = _probe_cover(url)
+    if status not in (200, 206):
+        return False
+    if etag and ent.get("etag") and etag != ent["etag"]:
+        return True
+    # Size fallback only needed when neither side exposes an ETag (a 304 HEAD
+    # carries no Content-Length, but the ETag comparison above decides then).
+    old_len = int(ent.get("len") or 0)
+    if not etag and not ent.get("etag") and length and old_len and length != old_len:
+        return True
+    return False
+
+
+def forget(url: str) -> None:
+    """Drop a cached cover so the next use downloads it fresh (e.g. changed)."""
+    if not url:
+        return
+    index = _load_cover_index()
+    ent = index.pop(url, None)
+    _img_cache.pop(url, None)
+    for key in [k for k in _text_cache if k[0] == url]:
+        _text_cache.pop(key, None)
+    if ent:
+        p = ent.get("path")
+        d = _cover_dir()
+        if p and d and os.path.dirname(p) == d:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        _save_cover_index()
+
+
+def _prune_covers(index: dict) -> None:
+    """Delete covers not seen for a week (and their stale temp files)."""
+    import time
+    d = _cover_dir()
+    if not d:
+        return
+    now = time.time()
+    stale = [u for u, v in index.items()
+             if now - float(v.get("ts") or 0) > _COVER_TTL]
+    for url in stale:
+        p = index.pop(url, {}).get("path")
+        if p and os.path.dirname(p) == d:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 
 def _is_fast_cdn(url: str) -> bool:
     """High-resolution, fast CDNs we fetch DIRECTLY (no wsrv resize) to keep the
@@ -391,15 +565,23 @@ def _download(url: str, attempts: int = 3):
     if not url or _rq is None:
         return None
     # Protocol-relative URLs (//host/…, common on Coflix/TMDB) can't be
-    # fetched as-is — give them a scheme.
-    if url.startswith("//"):
-        url = "https:" + url
+    # fetched as-is — give them a scheme. Keep the ORIGINAL string as the
+    # cache key: callers must query cover_version() with the same value.
+    key = url
+    if key.startswith("//"):
+        key = "https:" + key
 
     # Reuse the already-downloaded file if we still have it (keyed by the
-    # ORIGINAL url so callers are unchanged).
-    cached = _img_cache.get(url)
+    # ORIGINAL url so callers are unchanged). Persistent cache first: it
+    # survives restarts, so the planning opens instantly.
+    cached = _img_cache.get(key)
     if cached and os.path.exists(cached):
         return cached
+    ent = _load_cover_index().get(key) or {}
+    p_path = ent.get("path")
+    if p_path and os.path.exists(p_path):
+        _img_cache[key] = p_path
+        return p_path
 
     # Fetch a HIGHER-RESOLUTION source when we can, so a large on-screen poster
     # keeps real detail (faces, small text) instead of an upscaled blur. Many
@@ -426,14 +608,57 @@ def _download(url: str, attempts: int = 3):
             try:
                 r = _rq.get(fetch_url, impersonate="chrome", timeout=8)
                 if r.status_code == 200 and r.content:
-                    fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(r.content)
-                    _img_cache[url] = path
-                    return path
+                    _store_cover(key, r.content, getattr(r, "headers", {}) or {})
+                    return _img_cache[key]
             except Exception:
                 pass
     return None
+
+
+def _store_cover(url: str, content: bytes, headers) -> str:
+    """Persist a downloaded cover + its change signal, return the local path."""
+    import hashlib
+    import time
+
+    index = _load_cover_index()
+    old = (index.get(url) or {}).get("path")
+    d = _cover_dir()
+    if d:
+        path = os.path.join(
+            d, hashlib.sha1(url.encode("utf-8")).hexdigest()[:24] + ".jpg")
+        tmp = path + ".part"
+    else:
+        fd, path = tempfile.mkstemp(prefix="freeflix_poster_", suffix=".jpg")
+        os.close(fd)
+        tmp = path
+    with open(tmp, "wb") as f:
+        f.write(content)
+    os.replace(tmp, path)
+    if d:
+        # Change signal: the CDN's ETag when present, else a hash of the
+        # bytes — so the same URL serving a NEW poster changes the signal.
+        etag = str(headers.get("ETag") or headers.get("etag") or "").strip('"')
+        sig = etag or hashlib.sha1(content).hexdigest()[:16]
+        try:
+            src_len = int(headers.get("Content-Length")
+                          or headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            src_len = 0
+        index[url] = {
+            "path": path, "etag": etag, "sig": sig,
+            # ORIGIN file size (not the wsrv resized copy) → comparable with
+            # the HEAD probe that detects artwork updates.
+            "len": src_len or len(content or b""), "ts": time.time(),
+        }
+        if old and old != path:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        _prune_covers(index)
+        _save_cover_index()
+    _img_cache[url] = path
+    return path
 
 
 def _fast_url(url: str, width: int = 720) -> str:
@@ -457,6 +682,34 @@ def prefetch(url: str):
     the GIL — safe to run with high concurrency in a download pool so covers
     are on disk by the time the (CPU-bound, low-concurrency) chafa render runs."""
     return _download(url)
+
+
+def prefetch_many(urls) -> None:
+    """Warm a whole list of covers in parallel (planning / results lists).
+
+    `_download` is I/O-bound, so a small pool makes a 20-poster day open in
+    about the same time as a single image."""
+    todo = [u for u in dict.fromkeys(urls or []) if u]
+    if not todo:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        list(pool.map(_download, todo))
+
+
+def refresh_cover(url: str) -> bool:
+    """Re-download a cover RIGHT NOW (used when the site changed its poster).
+
+    Returns True when a new image replaced the cached one."""
+    if not url:
+        return False
+    old = cover_version(url)
+    forget(url)
+    path = _download(url)
+    if not path:
+        return False
+    return cover_version(url) != old
 
 
 def _cleanup_images():

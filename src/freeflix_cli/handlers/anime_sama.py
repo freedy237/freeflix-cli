@@ -125,15 +125,253 @@ def _update_anilist_progress(series, season, selected_episode):
             print_error(t("Failed to update AniList."))
 
 
+def _planning_menu() -> None:
+    """Anime-Sama → Planning / Recherche."""
+    while True:
+        choice = select_from_list(
+            [
+                f"{icon('calendar')} {t('Weekly planning')}",
+                f"{icon('search')} {t('Search an anime')}",
+                t("← Back"),
+            ],
+            f"{icon('anime')} Anime-Sama",
+        )
+        if choice == 0:
+            handle_anime_sama_planning()
+            continue
+        if choice == 1:
+            _search_flow()
+            continue
+        return
+
+
+def handle_anime_sama_planning() -> None:
+    """Live weekly planning: day → anime (poster preview) → series actions.
+
+    The grid is fetched from Anime-Sama on every visit (5-minute cache), never
+    hard-coded. Only animes are listed (scans/webtoons dropped), and each entry
+    shows its day, hour and whether it is already out.
+    """
+    from ..scraping import anime_sama_planning as planning
+
+    anime_sama.get_website_url()
+    lang = tracker.get_anime_language() or ""
+    try:
+        with spinner(t("Loading the planning…")):
+            entries = planning.get_planning()
+    except Exception as e:
+        print_error(f"{t('Planning unavailable:')} {type(e).__name__}")
+        print_info(t("The source may be down or rate-limiting — try again in a moment."))
+        pause()
+        return
+
+    if lang in ("vostfr", "vf"):
+        filtered = [e for e in entries if not e.lang or e.lang == lang.upper()]
+        entries = filtered or entries
+    if not entries:
+        print_warning(t("No anime in the planning right now."))
+        pause()
+        return
+
+    groups = planning.group_by_day(entries)
+    start = planning.today_index(entries)
+    while True:  # ── Day level ──
+        day_labels = []
+        for day, date_label, items in groups:
+            out = sum(1 for e in items if e.released)
+            day_labels.append(
+                f"{icon('calendar')} {day} {date_label}  "
+                f"[{t('out')} {out}/{len(items)}]"
+            )
+        day_labels.append(t("← Back"))
+        day_idx = select_from_list(
+            day_labels,
+            f"{icon('calendar')} {t('Planning of the moment')}",
+            default_index=start,
+        )
+        if day_idx >= len(groups):
+            return
+        start = day_idx
+        day, date_label, items = groups[day_idx]
+
+        # The day's posters are already on disk (persistent cache) → previews
+        # are instant; missing ones are fetched in parallel.
+        try:
+            from .. import terminal_image as _ti
+            _ti.prefetch_many([e.img for e in items])
+        except Exception:
+            pass
+
+        while True:  # ── Entry level (poster preview) ──
+            previews = [
+                make_preview(
+                    cover=e.img,
+                    title=e.title,
+                    lines=[
+                        f"{icon('calendar')} {e.when_label}",
+                        (
+                            f"{icon('check')} {t('Released')}"
+                            if e.released
+                            else f"{icon('hourglass')} {t('Not yet released')}"
+                        ),
+                        e.lang,
+                    ],
+                    panel_title=f"Anime-Sama · {day} {date_label}",
+                )
+                for e in items
+            ]
+            labels = [
+                f"{icon('check') if e.released else icon('clock')} "
+                + f"{e.hour_label + ' · ' if e.has_hour else ''}"
+                + e.title + (f"  [{e.lang}]" if e.lang else "")
+                for e in items
+            ]
+            with crumb(f"{icon('anime')} Anime-Sama", day, date_label):
+                idx = select_with_preview(
+                    labels, f"{icon('calendar')} {day} {date_label}", previews
+                )
+            if idx >= len(items):
+                break  # → day list
+            # Coming back from an anime: before drawing the LIST again, check
+            # whether the site swapped a poster. The cached file is then
+            # refreshed and the list redrawn once with the new art.
+            _planning_entry_actions(items[idx], day, date_label)
+            changed = _changed_covers(items)
+            if changed:
+                try:
+                    from .. import terminal_image as _ti
+                    for img in changed:
+                        _ti.refresh_cover(img)
+                except Exception:
+                    pass
+
+
+def _cover_versions(items) -> tuple:
+    """Poster fingerprints for the current day (detects updated covers)."""
+    return tuple(_cover_version(e.img) for e in items)
+
+
+def _cover_version(img: str):
+    try:
+        from .. import terminal_image
+        return terminal_image.cover_version(img)
+    except Exception:
+        return None
+
+
+def _changed_covers(items) -> list:
+    """Posters the site replaced since they were cached (re-download later)."""
+    try:
+        from .. import terminal_image
+    except Exception:
+        return []
+    out = []
+    for e in items:
+        try:
+            if terminal_image.cover_changed(e.img):
+                out.append(e.img)
+        except Exception:
+            continue
+    return out
+
+
+def _planning_entry_actions(entry, day, date_label) -> None:
+    """Pick what to do with one planned anime."""
+    state = (
+        f"{icon('check')} {t('Released')}" if entry.released
+        else f"{icon('hourglass')} {t('Not yet released')}"
+    )
+    print_info(
+        f"[bold cyan]{entry.title}[/bold cyan]  "
+        f"[dim]{day} {date_label} · {entry.hour_label} · {state}[/dim]"
+    )
+    choice = select_from_list(
+        [
+            f"{icon('play')} {t('Follow the latest released episode')}",
+            f"{icon('list')} {t('Browse seasons')}",
+            t("← Back"),
+        ],
+        entry.title,
+    )
+    if choice >= 2:
+        return
+    try:
+        with spinner(f"{t('Loading')} {entry.title}…"):
+            series = anime_sama.get_series(entry.url)
+    except Exception as e:
+        print_error(f"{t('Failed to load (network/source issue):')} {type(e).__name__}")
+        pause()
+        return
+    if not series.seasons:
+        print_warning(t("No seasons found."))
+        pause()
+        return
+    if choice == 0:
+        _follow_latest_episode(series)
+    else:
+        _anime_sama_series_flow(series)
+
+
+def _follow_latest_episode(series) -> None:
+    """Open the newest season at its last released episode (with sync check).
+
+    The planning announces a release at an hour, but the episode file can
+    land a few minutes later: we verify the newest season actually has
+    episodes, warn when it doesn't yet, and fall back to the previous season
+    that does.
+    """
+    ordered = list(reversed(series.seasons))
+    for season_access in ordered:
+        try:
+            with spinner(f"{t('Loading')} {season_access.title}…"):
+                season = anime_sama.get_season(season_access.url)
+        except Exception:
+            continue
+        langs = list(season.episodes.keys())
+        if not langs:
+            continue
+        if tracker.get_anime_language() in langs:
+            lang = tracker.get_anime_language()
+        else:
+            lang = langs[0]
+        episodes = season.episodes.get(lang) or []
+        if not episodes:
+            continue
+        if season_access is ordered[0] and len(ordered) > 1:
+            # Newest season is announced but still empty → be explicit.
+            print_info(t("The announced episode isn't online yet."))
+        ep = episodes[-1]
+        play_episode_flow(
+            provider_name="Anime-Sama",
+            series_title=series.title,
+            season_title=season.title,
+            episode=ep,
+            series_url=series.url,
+            season_url=season_access.url,
+            logo_url=series.img,
+            headers={"Referer": anime_sama.website_origin},
+            genres=getattr(series, "genres", None),
+            anilist_callback=lambda _se=season, _ep=ep:
+                _update_anilist_progress(series, _se, _ep),
+        )
+        return
+    print_warning(t("No episodes found."))
+    pause()
+
+
 def handle_anime_sama():
     """Handle Anime-Sama provider flow.
 
-    Navigation is a strict stack (one Back = one level up, state kept):
-    search → results → seasons → episodes → players. Backing out of a
-    series shows the SAME results again (no refetch); backing out of the
-    results returns to the search prompt (pre-filled), and Esc there
-    leaves the source.
+    First menu: weekly planning or classic search. Navigation is a strict
+    stack (one Back = one level up, state kept): search → results → seasons
+    → episodes → players. Backing out of a series shows the SAME results
+    again (no refetch); backing out of the results returns to the search
+    prompt (pre-filled), and Esc there leaves the source.
     """
+    _planning_menu()
+
+
+def _search_flow():
     anime_sama.get_website_url()
 
     last_query = ""

@@ -79,7 +79,8 @@ def test_anime_sama_back_stack(monkeypatch):
 
     monkeypatch.setattr(H, "select_from_list", _sfl)
 
-    H.handle_anime_sama()
+    # The provider now opens on Planning / Search: pick "Search an anime".
+    H._search_flow()
 
     # The search ran ONCE; results were re-displayed after backing out of the
     # season picker (no refetch).
@@ -88,6 +89,21 @@ def test_anime_sama_back_stack(monkeypatch):
     # Sequence: results → season → episode → season → results → search prompt.
     kinds = [e[0] for e in events]
     assert kinds == ["search", "results", "menu", "menu", "menu", "results"]
+
+
+def test_anime_sama_entry_shows_planning_menu(monkeypatch):
+    """Entering the provider must offer Planning and Search first."""
+    picked = []
+
+    def _sfl(opts, prompt, **kw):
+        picked.append(opts)
+        return len(opts) - 1  # Back
+
+    monkeypatch.setattr(H, "select_from_list", _sfl)
+    H.handle_anime_sama()
+    assert len(picked) == 1
+    assert len(picked[0]) == 3
+    assert "planning" in picked[0][0].lower()
 
 
 def test_select_back_means_last_option():

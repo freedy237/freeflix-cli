@@ -10,7 +10,9 @@ off for this test only (the upstream is on loopback); it's covered separately.
 
 import re
 import threading
+import urllib.error
 import urllib.request
+import http.client
 import http.server
 
 import pytest
@@ -38,12 +40,14 @@ class _Upstream(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.apple.mpegurl")
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            self.wfile.write(body)
         elif path in ("/seg0.ts", "/seg1.ts"):
             body = SEG0 if path.endswith("0.ts") else SEG1
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            self.wfile.write(body)
         elif path in ("/movie.mp4", "/movie.bin"):
             rng = self.headers.get("Range")
             start = 0
@@ -58,9 +62,11 @@ class _Upstream(http.server.BaseHTTPRequestHandler):
             # media file whose URL has no extension.
             self.send_header("Content-Type", "video/mp4")
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            self.wfile.write(body)
         else:
-            self.send_response(404); self.end_headers()
+            self.send_response(404)
+            self.end_headers()
 
 
 @pytest.fixture()
@@ -135,8 +141,111 @@ def test_player_html_and_heartbeat(running_proxy):
 
 
 def test_unknown_path_404(running_proxy):
-    try:
+    with pytest.raises(urllib.error.HTTPError) as exc:
         _get(f"{running_proxy}/nope")
-        assert False, "expected 404"
-    except urllib.error.HTTPError as e:
-        assert e.code == 404
+    assert exc.value.code == 404
+
+
+class _DroppingMp4(http.server.BaseHTTPRequestHandler):
+    """First response drops halfway; later ranges are honoured."""
+
+    protocol_version = "HTTP/1.1"
+    calls = 0
+    ranges = 0
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        cls = type(self)
+        cls.calls += 1
+        rng = self.headers.get("Range")
+        start = 0
+        if rng:
+            m = re.match(r"bytes=(\d+)-", rng)
+            start = int(m.group(1)) if m else 0
+        body = MP4[start:]
+        self.send_response(206 if start else 200)
+        if start:
+            cls.ranges += 1
+            self.send_header("Content-Range",
+                             f"bytes {start}-{len(MP4)-1}/{len(MP4)}")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        if start == 0 and not getattr(cls, "dropped", False):
+            cls.dropped = True
+            try:
+                self.wfile.write(body[:len(body) // 2])
+                self.wfile.flush()
+                self.connection.close()
+            except Exception:
+                pass
+        else:
+            try:
+                self.wfile.write(body)
+            except Exception:
+                pass
+
+
+def test_video_stream_resumes_after_midstream_drop(running_proxy):
+    """Direct MP4 playback keeps going after a dropped connection: the proxy
+    reconnects with Range and the client still receives every byte once."""
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DroppingMp4)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        import urllib.parse as up
+        url = (f"{running_proxy}/video?url="
+               f"{up.quote(f'http://127.0.0.1:{srv.server_address[1]}/movie.mp4')}"
+               f"&headers=%7B%7D")
+        with urllib.request.urlopen(url, timeout=15) as r:
+            got = r.read()
+    finally:
+        srv.shutdown()
+    assert got == MP4
+    assert _DroppingMp4.ranges >= 1  # resumed from the exact byte offset
+
+
+class _AlwaysTruncated(http.server.BaseHTTPRequestHandler):
+    """Announces a full body but always sends half and ignores Range."""
+
+    protocol_version = "HTTP/1.1"
+    calls = 0
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        type(self).calls += 1
+        body = MP4
+        self.send_response(200)  # deliberately ignores Range
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.wfile.write(body[:len(body) // 2])
+            self.wfile.flush()
+            self.connection.close()
+        except Exception:
+            pass
+
+
+def test_truncated_segment_is_not_served_as_complete(running_proxy):
+    """If the origin cannot resume, the proxy must break the HTTP response
+    instead of letting the player accept a short segment (a visible gap)."""
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _AlwaysTruncated)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        import urllib.parse as up
+        url = (f"{running_proxy}/ts?url="
+               f"{up.quote(f'http://127.0.0.1:{srv.server_address[1]}/seg.ts')}"
+               f"&headers=%7B%7D")
+        with pytest.raises((http.client.IncompleteRead, ConnectionError,
+                            urllib.error.URLError)):
+            with urllib.request.urlopen(url, timeout=15) as r:
+                r.read()
+    finally:
+        srv.shutdown()
+    assert _AlwaysTruncated.calls >= 2  # tried to resume from the offset
