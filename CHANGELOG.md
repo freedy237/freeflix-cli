@@ -1,12 +1,44 @@
 # Changelog
 
-## 1.13.9
+## 1.14.0
 
+- **Anime-Sama — planning hebdomadaire** : nouveau menu à l'entrée de la
+  source. Le planning est récupéré en direct (cache 5 min), filtré sur les
+  animes, regroupé par jour et par heure, avec affiche et statut « sorti ».
+  Chaque entrée permet de suivre le dernier épisode sorti ou de parcourir les
+  saisons.
+- **Affiches persistantes** : les posters du planning sont mis en cache sur
+  disque, préchargés en parallèle et rafraîchis automatiquement quand le site
+  change l'illustration (ETag/Last-Modified), sans re-télécharger à chaque
+  visite.
+- **Mise à jour au lancement** : FreeFlix demande maintenant `y/n` (`o/n` en
+  français), met à jour avec le **même installateur** (uv → uv, pipx → pipx,
+  pip → pip), installe les nouvelles dépendances, puis recharge le nouveau
+  code sur Entrée. Les outils système manquants sont installés après le
+  redémarrage.
+- **Téléchargements sans trous** : les fichiers sont téléchargés dans
+  `.temp/`, puis validés avant publication (durée ffprobe vs playlist HLS,
+  taille vs `Content-Length`, fichier lisible). yt-dlp abandonne si un
+  fragment reste indisponible au lieu de produire une vidéo qui saute ; les
+  fragments corrompus sont purgés avant un nouvel essai. Un fichier incomplet
+  n'est jamais déplacé dans `Downloads`.
+- **Streaming résilient** : le proxy annonce une longueur exacte et coupe la
+  connexion si le corps est court (plus de segment tronqué accepté comme
+  complet). Reprise par `Range` au byte près, nouvelle session/DNS après une
+  coupure, retries tant que le lecteur est connecté, et re-résolution du
+  manifest après expiration du token ou changement d'hôte/CDN (Wi-Fi,
+  opérateur). Les `401/403/410` initiaux et `Retry-After` sont gérés.
 - **GoldenMS / Cinemeta** : Cinemeta répond parfois par un timeout (curl 28).
   La recherche réessaie 3 fois (avec backoff, timeout de lecture 20 s) puis
   utilise la dernière réponse en cache au lieu d'afficher « aucun résultat »
   et de masquer toute la source.
-- **Tests** : 363 tests au vert, ruff OK.
+- **mpv** : timeout réseau désactivé (`--network-timeout=0`) et options de
+  reconnexion activées pour laisser le proxy reprendre pendant une longue
+  coupure ; le cache disque existant est conservé.
+- **Tests** : 429 tests au vert, ruff OK. Ajout de tests bout-en-bout réels
+  (ffmpeg + yt-dlp + proxy) : segment coupé en plein transfert → vidéo
+  complète de 6 s, segment 404 → aucun fichier publié, MP4 coupé → reprise
+  `Range`, origine tronquée → erreur protocolaire au lieu d'un faux succès.
 
 ## 1.13.8
 
