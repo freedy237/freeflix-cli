@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.15.1
+
+- **Téléchargements en lot (Anime-Sama / uqload)** : les épisodes après les
+  deux premiers échouaient tous instantanément. Uqload coupe les connexions
+  quand 8 fragments sont demandés en parallèle ; le lot réessayait à
+  l'identique. Chaque épisode qui échoue est maintenant retenté **fragment par
+  fragment** (1 à la fois), avec la progression visible dans sa ligne
+  (`sequential retry`), puis vérifié avant publication.
+- **Finalisation des fichiers** : le déplacement final gère désormais les cas
+  où le dossier de téléchargement et le dossier temporaire sont sur deux
+  disques différents (`Invalid cross-device link`).
+- **Tests** : 464 tests au vert, ruff OK.
+
 ## 1.15.0
 
 - **Contrôle complet à la souris** : menus et listes cliquables, curseur qui

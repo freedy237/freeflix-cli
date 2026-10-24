@@ -571,7 +571,7 @@ class BatchView:
         for lb in labels:
             self._data[lb] = {"frac": None, "speed": None,
                               "downloaded": None, "total": None,
-                              "done": False, "ok": None}
+                              "done": False, "ok": None, "stage": ""}
         self._items = list(labels)
         self._cancel = threading.Event()
 
@@ -593,6 +593,13 @@ class BatchView:
                 if v is not None:
                     ep[k] = v
 
+    def stage(self, label: str, text: str = ""):
+        """Show what a worker is doing (e.g. sequential retry) in its row."""
+        with self._lock:
+            ep = self._data.get(label)
+            if ep is not None:
+                ep["stage"] = text or ""
+
     def mark_done(self, label: str, ok: bool):
         """Called when a worker finishes (success or failure)."""
         with self._lock:
@@ -601,6 +608,7 @@ class BatchView:
                 return
             ep["done"] = True
             ep["ok"] = ok
+            ep["stage"] = ""
             if ok:
                 ep["frac"] = max(ep.get("frac") or 0, 0.999)
                 if not ep.get("downloaded"):
@@ -633,6 +641,8 @@ class BatchView:
         for label, ep in data.items():
             frac = ep["frac"]
             speed = ep.get("speed") or ""
+            if not speed and ep.get("stage"):
+                speed = ep["stage"]
             dl = ep.get("downloaded") or ""
             status_char = "✓" if ep["ok"] else ("✗" if ep["done"] else " ")
             # reserve space for: status(2) + spaces(4) + pct(5) + speed + dl

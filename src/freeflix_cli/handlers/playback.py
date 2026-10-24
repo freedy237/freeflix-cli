@@ -544,6 +544,48 @@ def _download_one_episode(
             return True
         print_warning(f"   {t('server')} {sp.name} {t('failed, trying next…')}")
 
+    # Last resort: uqload/fsvid CDNs often reset a burst of parallel
+    # fragments, which made every episode after the first two fail instantly
+    # in a batch. Retry ONE fragment at a time (slow but reliable) on the
+    # same server we just tried.
+    from ..player_manager import _retry_hls_sequential, _ytdlp_meta
+    want = str(file_title or label).strip().lower()
+    keys = [k for k in list(_ytdlp_meta.keys())
+            if str(_ytdlp_meta[k].get("title", "")).strip().lower() == want]
+    if keys:
+        print_info(f"{label} — {t('sequential retry (1 fragment at a time)…')}")
+        if batch_view is not None:
+            try:
+                batch_view.stage(label, t('sequential retry'))
+            except Exception:
+                pass
+        def _cb(n, _label=label):
+            # A silent UI for minutes looks like a hang: show the attempt and
+            # a coarse progress estimate (sequential is slow by nature).
+            if batch_view is not None:
+                try:
+                    batch_view.update(_label, {
+                        "frac": 0.05 + 0.9 * (n / 10.0),
+                        "speed": f"{t('sequential retry')} {n + 1}/3",
+                    })
+                except Exception:
+                    pass
+
+        for key in keys:
+            if _retry_hls_sequential(key, progress_cb=_cb):
+                tracker.save_progress(
+                    provider=provider_name,
+                    series_title=series_title,
+                    season_title=season_title,
+                    episode_title=episode.title,
+                    series_url=series_url,
+                    season_url=season_url,
+                    episode_url=episode.url if hasattr(episode, "url") else "",
+                    logo_url=logo_url,
+                )
+                print_success(f"✓ {label} {t('done')}")
+                return True
+
     print_error(f"✗ {label} {t('all servers failed')}")
     return False
 

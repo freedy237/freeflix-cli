@@ -445,3 +445,13 @@ def test_inline_menu_click_uses_cursor_anchor(monkeypatch):
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_from_list(["First", "Second", "← Back"],
                                "Choose", inline=True) == 0
+
+
+def test_batch_stage_is_shown_in_the_row():
+    from freeflix_cli import progress as pg
+    view = pg.BatchView(["[1/2] Épisode 1"])
+    view.stage("[1/2] Épisode 1", "sequential retry")
+    from rich.console import Console
+    con = Console(width=100, record=True, force_terminal=False)
+    con.print(view.render(0, "Avatar"))
+    assert "sequential retry" in con.export_text()

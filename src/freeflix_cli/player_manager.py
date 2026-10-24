@@ -1753,7 +1753,8 @@ def _download_headers(headers: dict, referer: str = "",
 
 def _ytdlp_download_cmd(ytdlp: str, stream_url: str, safe_title: str,
                         home_dir: str, temp_dir: str, dl_headers: dict,
-                        format_arg: str = None, concurrent: int = 8) -> list:
+                        format_arg: str = None, concurrent: int = 8,
+                        resume: bool = False) -> list:
     """Build a conservative, gap-proof yt-dlp command.
 
     Every fragment is retried; if one still cannot be fetched, yt-dlp ABORTS
@@ -1768,7 +1769,7 @@ def _ytdlp_download_cmd(ytdlp: str, stream_url: str, safe_title: str,
         "--newline",
         "--no-overwrites",
         "--no-playlist",
-        "--continue",
+        *(("--continue",) if resume else ("--no-continue",)),
         "--downloader", "native",
         "--concurrent-fragments", str(concurrent),
         # NEVER skip a fragment: retry hard, then abort (resumable) rather
@@ -1826,6 +1827,76 @@ def _aria2c_download_cmd(aria: str, stream_url: str, safe_title: str,
         cmd.append(f"--header={key}: {val}")
     cmd.append(stream_url)
     return cmd
+
+
+# Last yt-dlp HLS command per stream URL, so a failed batch episode can be
+# retried sequentially (the batch retry comes from the UI thread, long after
+# the worker's temp dir is gone).
+_ytdlp_meta: dict = {}
+
+
+def _retry_hls_sequential(stream_url: str, attempts: int = 3,
+                          progress_cb=None) -> bool:
+    """Re-run a failed HLS download ONE fragment at a time.
+
+    Parallel fragments (8) are fast, but uqload/fsvid CDNs sometimes reset
+    several connections at once: the batch finishes episode 1-2 then every
+    later episode fails instantly. Sequential retries are slow but reliable.
+    Returns True when the staged file was verified and published.
+    """
+    meta = _ytdlp_meta.get(stream_url)
+    if not meta:
+        return False
+    ytdlp = _resolve_tool("yt-dlp")
+    if not _tool_works(ytdlp):
+        return False
+    title = meta["title"]
+    frag_tmp = meta["dir"]
+    dl_headers = meta.get("headers") or {}
+    for n in range(max(1, attempts)):
+        cmd = _ytdlp_download_cmd(
+            ytdlp, meta["url"], title, frag_tmp, frag_tmp, dl_headers,
+            meta.get("format"), concurrent=1, resume=(n > 0),
+        )
+        if progress_cb is not None:
+            try:
+                progress_cb(n)
+            except Exception:
+                pass
+        try:
+            from . import progress as _pg
+            code = _pg.run_download_with_bar(
+                cmd, f"{title} — {t('sequential retry')}"
+            )
+        except Exception:
+            code = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL).returncode
+        if code != 0:
+            continue
+        staged = _find_staged_output(frag_tmp, title)
+        if not staged:
+            continue
+        expected, shortest = _expected_hls_info(meta["url"], dl_headers)
+        tol = (max(0.25, min(1.0, shortest * 0.5))
+               if expected and shortest else None)
+        code = _verify_download(staged, expected, None, tol)
+        if code != "ok":
+            _purge_download_temp(staged)
+            continue
+        try:
+            dst_dir = meta.get("out_dir") or DOWNLOAD_DIR
+            os.makedirs(dst_dir, exist_ok=True)
+            dst = os.path.join(dst_dir, os.path.basename(staged))
+            # Downloads dir and /tmp can live on different filesystems.
+            try:
+                os.replace(staged, dst)
+            except OSError:
+                shutil.move(staged, dst)
+            _invalidate_download_index()
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _download_stream(
@@ -1932,6 +2003,11 @@ def _download_stream(
             ytdlp, stream_url, safe_title, frag_tmp, frag_tmp, dl_headers,
             format_arg, concurrent=8,
         )
+        _ytdlp_meta[stream_url] = {
+            "url": stream_url, "title": safe_title, "dir": frag_tmp,
+            "headers": dl_headers, "format": format_arg,
+            "out_dir": out_dir, "subfolder": subfolder,
+        }
     else:
         aria = _resolve_tool("aria2c")
         if aria and _tool_works(aria):
@@ -1953,6 +2029,11 @@ def _download_stream(
                 ytdlp, stream_url, safe_title, frag_tmp, frag_tmp, dl_headers,
                 format_arg, concurrent=8,
             )
+            _ytdlp_meta[stream_url] = {
+                "url": stream_url, "title": safe_title, "dir": frag_tmp,
+                "headers": dl_headers, "format": format_arg,
+                "out_dir": out_dir, "subfolder": subfolder,
+            }
 
     # Remember how to resume this exact download if the connection drops.
     _write_resume_meta(

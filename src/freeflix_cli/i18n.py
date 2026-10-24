@@ -607,6 +607,8 @@ _FR = {
     'This uqload stream is a short placeholder. Choose another player.':
         'Ce flux uqload est un extrait de 30 s. Choisis un autre lecteur.',
     'again to cancel': 'encore pour annuler',
+    'sequential retry': 'nouvelle tentative séquentielle',
+    'sequential retry (1 fragment at a time)…': 'nouvelle tentative séquentielle (1 fragment à la fois)…',
     'Esc again to go back': 'Échap à nouveau pour retour',
     'Esc again to decline': 'Échap à nouveau pour refuser',
     'Failed to download subtitles:': 'Échec du téléchargement des sous-titres :',
