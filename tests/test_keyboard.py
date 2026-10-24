@@ -113,6 +113,7 @@ class _DummyLive:
 
     def __init__(self, *a, **k):
         self.frames = []
+        self.get_renderable = k.get("get_renderable")
 
     def __enter__(self):
         return self
@@ -120,8 +121,12 @@ class _DummyLive:
     def __exit__(self, *exc):
         return False
 
-    def update(self, renderable):
+    def update(self, renderable=None, **kw):
         self.frames.append(renderable)
+
+    def refresh(self):
+        if self.get_renderable is not None:
+            self.frames.append(self.get_renderable())
 
 
 def _run_input(keys, history=None, default=None):

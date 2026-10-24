@@ -25,3 +25,49 @@ def test_real_stream_is_not_decoy():
 def test_empty_or_none_is_not_decoy():
     assert player._is_decoy_stream(None) is False
     assert player._is_decoy_stream("") is False
+
+
+class _Resp:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def test_hls_duration_and_uqload_short_placeholder(monkeypatch):
+    master = (
+        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=720x304\n"
+        "variant.m3u8\n"
+    )
+    short = (
+        "#EXTM3U\n#EXTINF:15.0,\nseg1\n#EXTINF:15.0,\nseg2\n"
+        "#EXT-X-ENDLIST\n"
+    )
+    long = (
+        "#EXTM3U\n#EXTINF:60.0,\nseg1\n#EXTINF:60.0,\nseg2\n"
+        "#EXT-X-ENDLIST\n"
+    )
+
+    def fake_get(url, **kw):
+        if ".html" in url:
+            return _Resp('var player={file:"https://cdn/master.m3u8"}')
+        if "master.m3u8" in url:
+            return _Resp(master)
+        return _Resp(short)
+
+    monkeypatch.setattr(player, "_get", fake_get)
+    assert player._hls_duration_seconds("https://cdn/master.m3u8") == 30.0
+    assert player.get_hls_link_uqload(
+        "https://uqload.vc/embed-x.html", {}
+    ) is None
+
+    monkeypatch.setattr(
+        player, "_get",
+        lambda url, **kw: _Resp(long) if "variant" in url else (
+            _Resp(master) if "master" in url else _Resp(
+                'var player={file:"https://cdn/master.m3u8"}')),
+    )
+    assert player.get_hls_link_uqload(
+        "https://uqload.vc/embed-x.html", {}
+    ) == "https://cdn/master.m3u8"

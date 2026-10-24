@@ -32,7 +32,11 @@ def parse_episodes_from_js(js_code: str) -> List[Episode]:
             url = urls[i] if i < len(urls) else None
             if url:
                 players.append(Player(name, url))
-        episodes.append(Episode(title=f"Épisode {i+1}", players=players))
+        # A placeholder slot with no player at all is NOT an episode. Some
+        # shows pad one player array with extra slots, which used to inflate
+        # the episode count in the menu.
+        if players:
+            episodes.append(Episode(title=f"Épisode {i+1}", players=players))
 
     return episodes
 

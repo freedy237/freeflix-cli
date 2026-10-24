@@ -170,8 +170,19 @@ def test_planning_entry_actions_offer_follow_and_browse(monkeypatch):
         picked["opts"] = opts
         return 2  # Back
 
+    class _Series:
+        title = entry.title
+        img = ""
+        genres = []
+        seasons = [object()]
+
     monkeypatch.setattr(H, "select_from_list", fake_select)
     monkeypatch.setattr(H, "print_info", lambda *a, **k: None)
+    monkeypatch.setattr(H.anime_sama, "get_series", lambda url: _Series())
+    monkeypatch.setattr(H, "spinner",
+                        lambda _m: __import__("contextlib").nullcontext())
+    monkeypatch.setattr("freeflix_cli.terminal_image.show_poster",
+                        lambda *a, **k: None)
     H._planning_entry_actions(entry, "Lundi", "19/10")
     assert len(picked["opts"]) == 3
     joined = " ".join(picked["opts"]).lower()

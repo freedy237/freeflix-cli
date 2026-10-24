@@ -504,7 +504,8 @@ def _prompt_hls_quality(variants: list):
     opts.append(t("Auto (best)"))
     opts.append(t("← Back"))
     idx = select_from_list(
-        opts, t("📺 Choisis la qualité :"), clear_on_back=False
+        opts, t("📺 Choisis la qualité :"),
+        clear_on_back=False, inline=True,
     )
     if idx == len(variants):  # Auto
         return None
@@ -1020,7 +1021,7 @@ def handle_player_error(context: str = "player") -> int:
         _msg = f"{t('The')} {context} {t('failed. What would you like to do?')}"
     return select_from_list(
         [t("Try another player"), t("← Back")],
-        _msg,
+        _msg, inline=True,
     )
 
 
@@ -1904,6 +1905,13 @@ def _download_stream(
         )
         if expected_duration and shortest_segment:
             expected_tolerance = max(0.25, min(1.0, shortest_segment * 0.5))
+        # Defensive: a 30 s uqload ad/placeholder must never be published as
+        # an episode, even if it reached this function via old resume metadata.
+        if (expected_duration and expected_duration < 90
+                and "uqload" in stream_url.lower()):
+            print_error(t("This uqload stream is a short placeholder. "
+                          "Choose another player."))
+            return False
     expected_size = None if is_hls else _remote_size(stream_url, dl_headers)
 
     if is_hls:
@@ -2187,6 +2195,32 @@ def is_already_downloaded(title: str, subfolder: str = None) -> bool:
     names = {n.lower() for n in _downloaded_names(out_dir)}
     return any(base + ext in names
                for ext in (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v"))
+
+
+def is_download_usable(title: str, subfolder: str = None,
+                       min_seconds: float = 90.0) -> bool:
+    """True when an existing download is a real, long-enough video.
+
+    Used by the batch picker before marking an episode "already downloaded":
+    a 30 s uqload ad/placeholder saved earlier must be re-downloaded, not
+    silently skipped. Unknown duration (ffprobe missing) is treated as usable.
+    """
+    out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
+               if subfolder else DOWNLOAD_DIR)
+    base = _sanitize_filename(title).lower()
+    path = None
+    for name in _downloaded_names(out_dir):
+        low = name.lower()
+        if low == base or any(low == base + ext for ext in
+                              (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")):
+            path = os.path.join(out_dir, name)
+            break
+    if not path or not os.path.isfile(path):
+        return False
+    duration, _size = _ffprobe_file_info(path, timeout=20)
+    if duration is None:
+        return True
+    return duration >= min_seconds
 
 
 def _refresh_stream_url(u: str, h: dict):
@@ -2533,7 +2567,7 @@ def play_video(
                     ]
                 player_choice = select_from_list(
                     player_labels, t("🎮 Select video player:"),
-                    clear_on_back=False,  # Back → source player menu
+                    clear_on_back=False, inline=True,
                 )
 
                 if player_choice == len(player_values):  # Back
@@ -2611,17 +2645,18 @@ def play_video(
             )
 
         if player_name == "download":
-            # Vidzy/fsvid nginx rejects yt-dlp's TLS fingerprint even with the
-            # gate cookie; playing through our curl_cffi proxy works. Use that
-            # same local endpoint for the download (yt-dlp then talks to
-            # localhost, and the proxy fetches with a browser TLS fingerprint).
+            # Vidzy/fsvid/uqload reject yt-dlp's TLS fingerprint (or serve it
+            # a 30 s ad) even though the same URL streams correctly through
+            # our curl_cffi proxy. Route the download through the SAME local
+            # proxy endpoint, so yt-dlp talks to localhost while the proxy
+            # fetches with the browser fingerprint and real headers/cookies.
             dl_url = stream_url
             try:
                 from urllib.parse import urlparse, quote
                 dl_host = (urlparse(stream_url).hostname or "").lower()
                 if ".m3u8" in stream_url.lower() and (
-                    player_config.get("type") == "fsvid"
-                    or "vidzy" in dl_host or "fsvid" in dl_host
+                    player_config.get("type") in ("fsvid", "uqload")
+                    or any(h in dl_host for h in ("vidzy", "fsvid", "uqload"))
                 ):
                     proxy.ensure_started()
                     if proxy.PROXY_URL:
@@ -3006,6 +3041,7 @@ def play_video(
                 t("← Back"),
             ],
             t("The player failed. What would you like to do?"),
+            inline=True,
         )
         if retry == 0:  # Try another player
             continue

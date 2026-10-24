@@ -413,6 +413,14 @@ class _EscCancel:
         return False
 
     @staticmethod
+    def _bottom_cancel(ev) -> bool:
+        """A single click on the visible bottom Cancel bar is enough."""
+        try:
+            return bool(ev.is_left and ev.y >= console.size.height - 1)
+        except Exception:
+            return False
+
+    @staticmethod
     def _strip_paste(buf: str) -> str:
         """Drop bracketed-paste blobs (ESC[200~ … ESC[201~) and terminal-reply
         spans (OSC … ST/BEL) so pasted garbage and late replies can't
@@ -470,7 +478,10 @@ class _EscCancel:
         mm = _MOUSE_RE_S.search(buf)
         if mm:
             try:
-                if _mouse_from_match(mm).is_left:
+                ev = _mouse_from_match(mm)
+                if ev.is_left:
+                    if self._bottom_cancel(ev):
+                        return True
                     return self._register_escs(1)
             except Exception:
                 pass
@@ -504,7 +515,10 @@ class _EscCancel:
         mm = _MOUSE_RE_S.search(raw)
         if mm:
             try:
-                if _mouse_from_match(mm).is_left:
+                ev = _mouse_from_match(mm)
+                if ev.is_left:
+                    if self._bottom_cancel(ev):
+                        return True
                     return self._register_escs(1)
             except Exception:
                 pass
@@ -527,7 +541,7 @@ class _EscCancel:
         if not self.active:
             return ""
         return ("! " + t("again to cancel") if self.armed
-                else t("Esc Esc / double-click : cancel"))
+                else t("Esc Esc / double-click / bottom bar : cancel"))
 
     def __exit__(self, *exc):
         if self._mouse_gate is not None:
@@ -717,8 +731,12 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
 
     def _frame(info, tick, hint=None):
         h = max(8, console.size.height - 1)
-        return Align.center(_render_download(title, info, tick, hint),
-                            vertical="middle", height=h)
+        return Group(
+            Align.center(_render_download(title, info, tick, hint),
+                         vertical="middle", height=max(1, h - 1)),
+            Text(f"  [ {t('Cancel')} ]  ·  {t('click to cancel')}",
+                 justify="center", style=color("warning")),
+        )
 
     tick = 0
     last = {"frac": None, "speed": None, "downloaded": None,

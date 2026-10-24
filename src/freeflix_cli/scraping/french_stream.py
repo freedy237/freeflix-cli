@@ -346,17 +346,15 @@ def get_series_season(url: str, content: str) -> FrenchStreamSeason:
 
     episodes: dict[str, list[Episode]] = {}
 
-    voEpisodes = get_episodes_from_lang("vo", serie_info)
-    if voEpisodes:
-        episodes["vo"] = voEpisodes
-
-    vostfrEpisodes = get_episodes_from_lang("vostfr", serie_info)
-    if vostfrEpisodes:
-        episodes["vostfr"] = vostfrEpisodes
-
-    vfEpisodes = get_episodes_from_lang("vf", serie_info)
-    if vfEpisodes:
-        episodes["vf"] = vfEpisodes
+    # The API exposes one dict per language (vo/vostfr/vf, sometimes vff/vfq)
+    # plus a metadata "info" dict. Read the language keys dynamically so a
+    # renamed/added track is never silently dropped.
+    for lang, payload in serie_info.items():
+        if lang == "info" or not isinstance(payload, dict):
+            continue
+        lang_eps = get_episodes_from_lang(lang, serie_info)
+        if lang_eps:
+            episodes[lang] = lang_eps
 
     return FrenchStreamSeason(title, url, episodes)
 
@@ -367,15 +365,26 @@ def get_episodes_from_lang(lang: str, serie_info: dict):
         return []
     episodes: list[Episode] = []
 
-    for number, players_raw in episodes_raw.items():
+    def _num(key):
+        try:
+            return (0, int(key))
+        except (TypeError, ValueError):
+            return (1, str(key))
+
+    # API dicts arrive in JSON order; numeric sort keeps 2 before 10 and
+    # avoids a jumbled / seemingly longer episode list.
+    for number, players_raw in sorted(episodes_raw.items(),
+                                      key=lambda kv: _num(kv[0])):
+        if not isinstance(players_raw, dict):
+            continue
         players: list[Player] = []
         for player_name, link in players_raw.items():
             if not _is_usable_player_link(link):
                 continue  # dead host (trakx/netu) or non-URL code
             players.append(Player(player_name, link))
-
-        episode = Episode(f"Episode {number}", players)
-        episodes.append(episode)
+        # Do not list announced-but-empty episodes (no playable host).
+        if players:
+            episodes.append(Episode(f"Episode {number}", players))
 
     return episodes
 

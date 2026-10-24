@@ -210,6 +210,8 @@ def _input_fullscreen(prompt: str, default: str, header: str,
                 if key == "":
                     continue  # event focus/souris ignoré
                 if isinstance(key, MouseEvent):
+                    if key.motion:
+                        continue
                     if key.is_left:
                         rel = key.y - 1
                         tag = (mouse_rows[rel]
@@ -313,6 +315,8 @@ def ask_yes_no(message: str, default: bool = True,
             while True:
                 key = _read_menu_key()
                 if isinstance(key, MouseEvent):
+                    if key.motion:
+                        continue
                     if key.is_left:
                         val = _action(key.x, render().plain)
                         if val is not None:
@@ -456,41 +460,70 @@ def flush_input_settled(settle: float = 0.03):
 #   ESC [ < button ; x ; y M   (press / wheel)
 #   ESC [ < button ; x ; y m   (release)
 # `button` is 0 left, 1 middle, 2 right, 64 wheel-up, 65 wheel-down (with
-# modifier bits in the low byte). We enable ONLY button reporting + SGR
-# encoding (?1000h ?1006h): no all-motion (?1003h) flood, no legacy X10
-# mangling. Tracking is switched off again as soon as the screen exits, so
-# the user's shell keeps its normal mouse selection.
+# modifier bits in the low byte). Bit 32 marks a motion report. We enable
+# button + all-motion reporting with SGR encoding (?1000h ?1003h ?1006h) so
+# the menu cursor follows the physical mouse (hover), not just clicks.
+# Tracking is switched off as soon as the screen exits, so the user's shell
+# keeps its normal mouse selection.
 _MOUSE_RE_S = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _MOUSE_RE_B = re.compile(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
-_MOUSE_ON = "\x1b[?1000h\x1b[?1006h"
+_MOUSE_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h"
 _MOUSE_OFF = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
 _mouse_active = False
+_raw_mode_active = False
+
+
+def _escape_incomplete(data):
+    """True while an escape sequence has not received its final byte.
+
+    This is what stops a split mouse report (very common under all-motion
+    tracking) from being decoded byte-by-byte, which used to append
+    ``<35;...M`` fragments to the type-to-filter query and hide results.
+    """
+    if not data or not data.startswith(b"\x1b"):
+        return False
+    if _PASTE_START.startswith(data):
+        return True
+    if data == b"\x1b":
+        return True
+    if data.startswith(b"\x1b[<"):
+        return _MOUSE_RE_B.match(data) is None
+    if data.startswith(b"\x1b]"):
+        return not any(end in data[2:] for end in _OSC_ENDS)
+    if data[1:2] in (b"[", b"O"):
+        return len(data) < 3
+    return False
 
 
 class MouseEvent:
     """A decoded terminal mouse event (1-based screen coordinates)."""
 
-    __slots__ = ("x", "y", "button", "pressed", "wheel")
+    __slots__ = ("x", "y", "button", "pressed", "wheel", "motion")
 
     def __init__(self, x: int, y: int, button: int, pressed: bool):
+        raw = int(button)
         self.x = int(x)
         self.y = int(y)
-        self.button = int(button) & 3
+        self.button = raw & 3
         self.pressed = bool(pressed)
-        self.wheel = (int(button) & 64) and (
-            "up" if (int(button) & 1) == 0 else "down") or ""
+        self.motion = bool(raw & 32 and not raw & 64)
+        self.wheel = (raw & 64) and (
+            "up" if (raw & 1) == 0 else "down") or ""
 
     @property
     def is_left(self) -> bool:
-        return self.pressed and not self.wheel and self.button == 0
+        return (self.pressed and not self.wheel and not self.motion
+                and self.button == 0)
 
     @property
     def is_right(self) -> bool:
-        return self.pressed and not self.wheel and self.button == 2
+        return (self.pressed and not self.wheel and not self.motion
+                and self.button == 2)
 
     def __repr__(self):
         return (f"MouseEvent(x={self.x}, y={self.y}, button={self.button}, "
-                f"pressed={self.pressed}, wheel={self.wheel!r})")
+                f"pressed={self.pressed}, wheel={self.wheel!r}, "
+                f"motion={self.motion})")
 
 
 def _mouse_from_match(m) -> MouseEvent:
@@ -533,13 +566,36 @@ def _mouse_off() -> None:
 def mouse_tracking():
     """Enable SGR mouse reporting for the duration of an interactive screen.
 
+    The terminal is also put in cbreak/no-echo mode for the WHOLE screen.
+    This second part is essential with all-motion tracking: between two
+    ``_read_menu_key`` calls the tty would otherwise be back in canonical mode
+    with ECHO on, and the terminal emulator would print every motion report as
+    literal ``[<35;…M`` text at the bottom of the screen. Nested readers
+    (``_read_menu_key``, preview's raw loop, progress) still save/restore their
+    own settings; ours restores the original on exit.
+
     Yields True when tracking was actually enabled. The disable call is in a
     ``finally`` (and also registered at exit) so an exception/crash can never
     leave the terminal grabbing every click.
     """
-    global _mouse_active
+    global _mouse_active, _raw_mode_active
     active = False
+    old_term = None
+    fd = None
     if _mouse_available():
+        try:
+            import sys
+            if os.name != "nt" and sys.stdin.isatty():
+                import termios
+                import tty
+                fd = sys.stdin.fileno()
+                old_term = termios.tcgetattr(fd)
+                tty.setcbreak(fd)
+                _raw_mode_active = True
+        except Exception:
+            fd = None
+            old_term = None
+            _raw_mode_active = False
         _mouse_write(_MOUSE_ON)
         _mouse_active = True
         active = True
@@ -548,6 +604,13 @@ def mouse_tracking():
     finally:
         if active:
             _mouse_off()
+        if old_term is not None:
+            try:
+                import termios
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_term)
+            except Exception:
+                pass
+        _raw_mode_active = False
 
 
 try:
@@ -555,6 +618,50 @@ try:
     _atexit.register(_mouse_off)
 except Exception:  # pragma: no cover
     pass
+
+
+def _cursor_row(timeout: float = 0.15):
+    """Ask the terminal for the cursor row (1-based), or None.
+
+    Used by inline mouse menus: unlike alternate-screen menus, their first
+    rendered row is wherever the cursor currently sits. A DSR query
+    (``ESC[6n``) gives the exact anchor so click coordinates stay correct.
+    Best-effort: unsupported terminals return None and the caller can fall
+    back to a full-screen menu.
+    """
+    import sys
+    try:
+        if os.name == "nt" or not sys.stdin.isatty():
+            return None
+        import select as _sel
+        import termios
+        import tty
+        import time as _t
+        fd = sys.stdin.fileno()
+        old = None
+        if not _raw_mode_active:
+            old = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+        try:
+            sys.stdout.write("\x1b[6n")
+            sys.stdout.flush()
+            buf = b""
+            deadline = _t.monotonic() + timeout
+            while _t.monotonic() < deadline:
+                left = deadline - _t.monotonic()
+                r, _, _ = _sel.select([fd], [], [], max(0.0, left))
+                if not r:
+                    break
+                buf += os.read(fd, 64)
+                m = re.search(rb"\x1b\[(\d+);(\d+)R", buf)
+                if m:
+                    return int(m.group(1))
+            return None
+        finally:
+            if old is not None:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except Exception:
+        return None
 
 
 def _renderable_height(renderable, width: int = None) -> int:
@@ -939,9 +1046,12 @@ def _read_menu_key_raw():
                         else:
                             continue
                     if seq.startswith("\x1b[<"):
-                        mm = _MOUSE_RE_S.match(seq)
-                        if mm:
-                            return _mouse_from_match(mm)
+                        hits = list(_MOUSE_RE_S.finditer(seq))
+                        if hits:
+                            # A burst often contains several motion reports.
+                            # Return the LAST one so the cursor jumps straight
+                            # to the pointer's current position (no backlog).
+                            return _mouse_from_match(hits[-1])
                         if len(seq) > 64:
                             return ""
                         continue  # partial SGR mouse report
@@ -993,9 +1103,12 @@ def _read_menu_key_raw():
         return readchar.readkey()
 
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    outer_raw = _raw_mode_active
+    old = None
     try:
-        tty.setcbreak(fd)
+        if not outer_raw:
+            old = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
         ch = os.read(fd, 1)
         if ch == b"\x1b":
             # Drain the WHOLE escape sequence (arrows, but also focus events
@@ -1036,9 +1149,12 @@ def _read_menu_key_raw():
                         else:
                             continue  # partial reply — keep waiting
                     if seq.startswith(b"\x1b[<"):
-                        mm = _MOUSE_RE_B.match(seq)
-                        if mm:
-                            return _mouse_from_match(mm)
+                        hits = list(_MOUSE_RE_B.finditer(seq))
+                        if hits:
+                            # Use the newest report in the read chunk: the
+                            # cursor follows the physical pointer immediately
+                            # instead of replaying a queue of stale motion.
+                            return _mouse_from_match(hits[-1])
                         if len(seq) > 64:
                             return ""
                         continue  # partial SGR mouse report
@@ -1085,7 +1201,8 @@ def _read_menu_key_raw():
         except Exception:
             return ""
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if old is not None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def _read_menu_key():
@@ -1232,7 +1349,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                      header: str = None, group_headers: dict = None,
                      top=None, flush_input: bool = False,
                      esc_selects_last: bool = True,
-                     clear_on_back: bool = True) -> int:
+                     clear_on_back: bool = True,
+                     inline: bool = False) -> int:
     """
     Display an interactive menu where users can navigate with arrow keys.
 
@@ -1263,6 +1381,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     flt = {"on": False, "q": ""}   # '/' type-to-filter
     mouse_on = _mouse_available()
     mouse_rows = []   # absolute row tag, rebuilt with every render
+    mouse_page = {"n": 5}
+    mouse_top = [1]   # first screen row occupied by the menu
 
     def _view():
         """Original indices currently shown (all, or the '/' filter matches)."""
@@ -1306,6 +1426,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             reserved_lines += 2 * len(group_headers)
         available_height = max(3, term_height - reserved_lines)
         window_size = min(max(1, len(view)), available_height)
+        mouse_page["n"] = window_size
 
         # Adjust start_index to keep selected_index (a VIEW position) visible
         if selected_index < start_index:
@@ -1317,10 +1438,15 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
 
         lines = []
 
-        def add(line, tag=None):
-            """Append a rendered line and remember its row for mouse hits."""
+        def add(line, tag=None, height=None):
+            """Append a rendered line and remember its row for mouse hits.
+
+            ``height=1`` is passed for pre-fitted rows so a hover repaint does
+            not invoke Rich's renderer for each row.
+            """
             lines.append(line)
-            h = _renderable_height(line) if mouse_on else 1
+            h = (height if height is not None
+                 else (_renderable_height(line) if mouse_on else 1))
             mouse_rows.extend([tag] + [None] * (h - 1))
 
         # Optional dashboard/renderable above everything (e.g. the home screen).
@@ -1329,11 +1455,12 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
         if header:
             add(_header_panel(header))
         if _crumbs:
-            add(_crumb_line(console.size.width))
+            add(_crumb_line(console.size.width), ("crumb",))
         add(Text(f"\n❯ {iconify(prompt)}", style=f"bold {color('accent')}"))
         # Active filter line.
         if flt["on"]:
-            add(Text(f"  / {flt['q']}▏", style=f"bold {color('info')}"))
+            add(Text(f"  / {flt['q']}▏", style=f"bold {color('info')}"),
+                height=1)
 
         if not view:
             from .i18n import t as _t
@@ -1345,15 +1472,15 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
 
         if start_index > 0:
             add(Text(f"  ↑ … {start_index + 1}/{len(view)}",
-                     style=color("dim")))
+                     style=color("dim")), ("page", "up"), height=1)
 
         for pos in range(start_index, end_index):
             idx = view[pos]
             if grouped and idx in group_headers:
                 if pos != start_index:
-                    add(Text(""))
+                    add(Text(""), height=1)
                 add(Text(f"  {group_headers[idx]}",
-                         style=f"bold {color('info')}"))
+                         style=f"bold {color('info')}"), height=1)
             option = _fit(iconify(options[idx]))
             if pos == selected_index:
                 # Soft, high-end cursor: chevron + accent rail + bold accent
@@ -1370,7 +1497,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                            if bright else color("dim"))
                 row.append_text(_hl_match(option, fq,
                                           base=f"bold {color('accent')}"))
-                add(row, ("item", pos))
+                add(row, ("item", pos), height=1)
             else:
                 # Watched rows (✓ badge) render dim so the eye lands on what's
                 # left to watch ; the cursor row always stays bright. Badges
@@ -1378,27 +1505,39 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 base = color("dim") if "✓" in option else ""
                 un = Text("    ")
                 un.append_text(_hl_match(option, fq, base=base))
-                add(un, ("item", pos))
+                add(un, ("item", pos), height=1)
 
         if end_index < len(view):
             add(Text(f"  ↓ … {end_index}/{len(view)}",
-                     style=color("dim")))
+                     style=color("dim")), ("page", "down"), height=1)
 
         # Status bar : consistent bottom hints on every menu.
-        add(Text(""))
+        add(Text(""), height=1)
         status = _status_bar(filtering=flt["on"])
-        add(status, ("status", status.plain))
+        add(status, ("status", status.plain), height=1)
 
+        if mouse_on and not use_screen:
+            # Inline menu: it starts where the cursor was. If the frame is
+            # taller than the remaining screen, Rich scrolls, so clamp the
+            # anchor to where the first row actually landed.
+            anchor = min(mouse_top[0],
+                         max(1, console.size.height - len(mouse_rows) + 1))
+            mouse_top[0] = max(1, anchor)
         return Group(*lines)
 
     # Full-screen menus (those carrying a banner) render in the ALTERNATE
-    # screen buffer (screen=True): the whole frame is repainted every refresh,
-    # so a terminal resize leaves NO stacked/wrapped leftovers in the
-    # scrollback. When mouse support is active we use the same buffer for
-    # inline menus too, so click coordinates map to a stable row 1 (and the
-    # previous screen is restored on exit). Keyboard-only terminals keep the
-    # original transient in-place render.
-    use_screen = bool(header) or mouse_on
+    # screen buffer (screen=True). Inline menus keep the transient in-place
+    # render. With the mouse active, an inline menu needs a DSR cursor-row
+    # anchor so clicks still map correctly; `inline=True` is used for the
+    # planning action menu so the series poster printed above stays visible.
+    if mouse_on and inline:
+        flush_input_settled()
+        anchor = _cursor_row()
+        if anchor is None:
+            inline = False
+        else:
+            mouse_top[0] = anchor
+    use_screen = bool(header) or (mouse_on and not inline)
     # get_renderable=... : re-evaluate the frame on every auto-refresh so the
     # breathing cursor, the toast rail and the status line actually update
     # while the menu sits idle (previously the same frozen renderable was
@@ -1426,17 +1565,28 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 view = _view()
                 n = max(1, len(view))
 
-                # Help overlay open → any key/click closes it.
+                # Help overlay open → any key/click closes it. Pure mouse
+                # motion must NOT close it (the pointer always moves).
                 if show_help["on"]:
                     if key == readchar.key.CTRL_C:
                         raise KeyboardInterrupt("Menu cancelled by user")
+                    if isinstance(key, MouseEvent) and key.motion:
+                        continue
                     show_help["on"] = False
-                    live.update(generate_renderable())
+                    live.refresh()
                     continue
 
-                # Mouse: wheel scrolls, right-click goes back, left-click
-                # activates the clicked row (or the help/filter status pills).
+                # Mouse: hover moves the cursor, wheel scrolls, right-click
+                # goes back, left-click activates the row under the pointer.
                 if isinstance(key, MouseEvent):
+                    if key.motion:
+                        rel = key.y - mouse_top[0]
+                        tag = (mouse_rows[rel]
+                               if 0 <= rel < len(mouse_rows) else None)
+                        if tag and tag[0] == "item" and tag[1] != selected_index:
+                            selected_index = tag[1]
+                            live.refresh()
+                        continue
                     if key.wheel:
                         step = -1 if key.wheel == "up" else 1
                         selected_index = (selected_index + step) % n
@@ -1448,13 +1598,24 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                         elif esc_selects_last:
                             result = len(options) - 1
                     elif key.is_left:
-                        rel = key.y - 1
+                        rel = key.y - mouse_top[0]
                         tag = (mouse_rows[rel]
                                if 0 <= rel < len(mouse_rows) else None)
                         if tag and tag[0] == "item":
                             selected_index = tag[1]
                             if view:
                                 result = view[selected_index]
+                        elif tag and tag[0] == "page":
+                            step = max(1, mouse_page["n"] - 1)
+                            if tag[1] == "up":
+                                selected_index = max(0, selected_index - step)
+                            else:
+                                selected_index = min(n - 1, selected_index + step)
+                        elif tag and tag[0] == "crumb":
+                            # The breadcrumb is a mouse Back button: one click
+                            # goes up exactly like Esc.
+                            if esc_selects_last:
+                                result = len(options) - 1
                         elif tag and tag[0] == "status":
                             act = _status_mouse_action(key.x, tag[1])
                             if act == "help":
@@ -1473,7 +1634,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                             elif act == "back":
                                 if esc_selects_last:
                                     result = len(options) - 1
-                    live.update(generate_renderable())
+                    live.refresh()
                     continue
 
                 # '/' type-to-filter mode.
@@ -1497,7 +1658,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                     elif isinstance(key, str) and len(key) == 1 and key.isprintable():
                         flt["q"] += key
                         selected_index = 0
-                    live.update(generate_renderable())
+                    live.refresh()
                     continue
 
                 # Normal mode.
@@ -1521,7 +1682,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                         result = len(options) - 1
                 elif key == readchar.key.CTRL_C:
                     raise KeyboardInterrupt("Menu cancelled by user")
-                live.update(generate_renderable())
+                live.refresh()
 
     label = str(options[result])
     # A Back/Cancel/Exit selection means we are leaving this level: wipe the
@@ -1639,6 +1800,14 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
             while True:
                 key = _read_menu_key()
                 if isinstance(key, MouseEvent):
+                    if key.motion:
+                        rel = key.y - 1
+                        tag = (mouse_rows[rel]
+                               if 0 <= rel < len(mouse_rows) else None)
+                        if tag and tag[0] == "item" and tag[1] != cursor:
+                            cursor = tag[1]
+                            live.update(render(), refresh=True)
+                        continue
                     if key.wheel:
                         step = -1 if key.wheel == "up" else 1
                         cursor = (cursor + step) % n
@@ -1661,7 +1830,7 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
                                 break
                             elif act == "cancel":
                                 return None
-                    live.update(render())
+                    live.update(render(), refresh=True)
                     continue
                 if key == readchar.key.UP:
                     cursor = (cursor - 1) % n
@@ -1679,7 +1848,7 @@ def select_multiple(options, prompt, preselected=None, disabled=None):
                     return None
                 elif key == readchar.key.CTRL_C:
                     raise KeyboardInterrupt("Menu cancelled by user")
-                live.update(render())
+                live.update(render(), refresh=True)
 
     return sorted(checked)
 
@@ -1743,8 +1912,9 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     start = 0
     query = ""
     visible = list(range(n))
-    mouse_on = _mouse_available()
+    back_sel = [False]   # keyboard/mouse cursor on the clickable Back row
     mouse_rows = []      # left-column row tags, refreshed by render()
+    mouse_grid = {"left_w": 0, "grid_h": 0}
 
     # TWO pools, because the work has opposite needs :
     #  * downloads are I/O-bound and release the GIL → high concurrency is a
@@ -1877,7 +2047,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         selected = 0
         start = 0
 
-    def _list_lines(vis, sel, s, end, lw):
+    def _list_lines(vis, sel, s, end, lw, on_back=False):
         """Build the left column and its mouse row map (top row = 1)."""
         head = f"/{query}" if query else iconify(prompt)
         # Counter + viewport bar so long lists show where you are.
@@ -1888,15 +2058,18 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         lines = []
         tags = []
 
-        def add(line, tag=None):
+        def add(line, tag=None, height=1):
             lines.append(line)
-            h = _renderable_height(line) if mouse_on else 1
-            tags.extend([tag] + [None] * (h - 1))
+            tags.extend([tag] + [None] * (height - 1))
 
-        add(Text(f"\n {head}", style=f"bold {color('accent')}"))
-        add(counter)
+        # The head Text starts with a newline → exactly two rows. Every item
+        # is pre-fitted to the column width by _fit_w, so one row each. This
+        # avoids calling Rich's renderer for every hover repaint (the old
+        # per-line measurement was the main source of mouse lag).
+        add(Text(f"\n {head}", style=f"bold {color('accent')}"), height=2)
+        add(counter, ("scroll", counter.plain))
         if s > 0:
-            add(Text("  ↑ …", style=color("dim")))
+            add(Text("  ↑ …", style=color("dim")), ("page", "up"))
         for pos in range(s, end):
             i = vis[pos]
             lab = _fit_w(iconify(labels[i]), lw - 5)
@@ -1911,13 +2084,18 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                 urow.append_text(_styled_option(lab, base="white"))
                 add(urow, ("item", pos))
         if end < len(vis):
-            add(Text("  ↓ …", style=color("dim")))
+            add(Text("  ↓ …", style=color("dim")), ("page", "down"))
         if not vis:
             add(Text(f"    ({_t('no match')})", style=color("dim")))
         # Always-visible mouse target: clicking it is exactly Esc/Back.
         back = Text("  ")
-        back.append(icon("back"), style=color("dim"))
-        back.append(f" {_t('Back')}", style=color("dim"))
+        if on_back:
+            back.append("▌ ", style=f"bold {color('accent')} reverse")
+            back.append(f"{icon('back')} {_t('Back')}",
+                        style=f"bold {color('accent')} reverse")
+        else:
+            back.append(icon("back"), style=color("dim"))
+            back.append(f" {_t('Back')}", style=color("dim"))
         add(back, ("back",))
         return lines, tags
 
@@ -1959,7 +2137,8 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         # full-width list (no panel) instead of cramming/overflowing.
         show_preview = console.size.width >= 34 and right_w >= 14
         lw = left_w if show_preview else max(10, console.size.width - 2)
-        left_lines, left_tags = _list_lines(vis, sel, s, end, lw)
+        left_lines, left_tags = _list_lines(vis, sel, s, end, lw,
+                                             on_back=back_sel[0])
         left = Group(*left_lines)
 
         hint = Text(_t("↑/↓ navigate · type to filter · Enter · Esc"),
@@ -1968,6 +2147,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         grid_h = max(len(left_tags), (win + 2) if show_preview else 0)
         mouse_rows[:] = left_tags + [None] * (grid_h - len(left_tags))
         mouse_rows.append(("hint", hint.plain))
+        mouse_grid.update(left_w=left_w, grid_h=grid_h)
 
         if not show_preview:
             return Group(left, hint)
@@ -2029,6 +2209,21 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         grid.add_row(left, right)
         return Group(grid, hint)
 
+    def _scroll_jump(x, plain):
+        """Click/drag the ▰▱ track: jump to that position in the list."""
+        i = plain.find("▰")
+        if i < 0:
+            i = plain.find("▱")
+        if i < 0:
+            return None
+        bar = plain[i:i + 5]
+        if not (i <= (x - 1) < i + len(bar)):
+            return None
+        if not visible:
+            return None
+        frac = (x - 1 - i) / max(1, len(bar) - 1)
+        return min(len(visible) - 1, max(0, round(frac * (len(visible) - 1))))
+
     def _hint_action(x, plain):
         for token, action in ((_t("Enter"), "select"), (_t("Esc"), "back")):
             i = plain.find(token)
@@ -2039,6 +2234,28 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     def _handle(key):
         nonlocal selected, query
         if isinstance(key, MouseEvent):
+            if key.motion:
+                rel = key.y - 1
+                tag = (mouse_rows[rel]
+                       if 0 <= rel < len(mouse_rows) else None)
+                if tag and tag[0] == "scroll" and key.button == 0:
+                    pos = _scroll_jump(key.x, tag[1])
+                    if pos is not None and pos != selected:
+                        selected = pos
+                        back_sel[0] = False
+                        return ("hover", None)
+                if tag and tag[0] == "item" and visible:
+                    if tag[1] != selected or back_sel[0]:
+                        selected = tag[1]
+                        back_sel[0] = False
+                        return ("hover", None)
+                    return None
+                if tag and tag[0] == "back":
+                    if not back_sel[0]:
+                        back_sel[0] = True
+                        return ("hover", None)
+                    return None
+                return None
             if key.wheel and visible:
                 step = -1 if key.wheel == "up" else 1
                 selected = (selected + step) % len(visible)
@@ -2052,19 +2269,46 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                     return ("select", visible[tag[1]])
                 if tag and tag[0] == "back":
                     return ("back", None)
+                if tag and tag[0] == "scroll":
+                    pos = _scroll_jump(key.x, tag[1])
+                    if pos is not None and visible:
+                        selected = pos
+                        return ("hover", None)
+                if tag and tag[0] == "page" and visible:
+                    step = max(1, console.size.height - 8)
+                    if tag[1] == "up":
+                        selected = max(0, selected - step)
+                    else:
+                        selected = min(len(visible) - 1, selected + step)
+                    back_sel[0] = False
+                    return ("hover", None)
                 if tag and tag[0] == "hint":
                     act = _hint_action(key.x, tag[1])
                     if act == "select" and visible:
                         return ("select", visible[selected])
                     if act == "back":
                         return ("back", None)
+                # Clicking the poster/info pane opens the selected title too.
+                if (not tag and visible and key.x > mouse_grid["left_w"]
+                        and 1 <= key.y <= mouse_grid["grid_h"]):
+                    return ("select", visible[selected])
             return None
         if key == "UP" and visible:
-            selected = (selected - 1) % len(visible)
+            if back_sel[0]:
+                back_sel[0] = False
+                selected = len(visible) - 1
+            else:
+                selected = (selected - 1) % len(visible)
         elif key == "DOWN" and visible:
-            selected = (selected + 1) % len(visible)
-        elif key == "ENTER" and visible:
-            return ("select", visible[selected])
+            if not back_sel[0] and selected >= len(visible) - 1:
+                back_sel[0] = True
+            elif not back_sel[0]:
+                selected += 1
+        elif key == "ENTER":
+            if back_sel[0]:
+                return ("back", None)
+            if visible:
+                return ("select", visible[selected])
         elif key == "ESC":
             return ("back", None)
         elif key == "BACKSPACE":
@@ -2083,30 +2327,49 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         return idx
 
     def _decode_key(data):
-        mm = _MOUSE_RE_B.match(data)
-        if mm:
-            return _mouse_from_match(mm)
+        nonlocal carry
+        if not data:
+            return None
+        if data.startswith(b"\x1b[<"):
+            hits = list(_MOUSE_RE_B.finditer(data))
+            if not hits:
+                return "IGN"       # incomplete mouse report
+            ev = _mouse_from_match(hits[-1])
+            carry = data[hits[-1].end():]
+            return ev
         if data[:1] == b"\x1b":
             if len(data) == 1:
                 return "ESC"  # a true, standalone Escape press
             if data[:2] == b"\x1b\x1b":
                 # Fast double-Esc in one read : replay the second press.
                 _stash_esc_carry()
+                carry = data[2:]
                 return "ESC"
             if data[1:2] in (b"[", b"O"):
-                return {b"A": "UP", b"B": "DOWN", b"C": "RIGHT",
-                        b"D": "LEFT"}.get(data[2:3], "IGN")
+                if len(data) < 3:
+                    return "IGN"
+                key = {b"A": "UP", b"B": "DOWN", b"C": "RIGHT",
+                       b"D": "LEFT"}.get(data[2:3], "IGN")
+                carry = data[3:]
+                return key
             return "IGN"  # unknown escape sequence (focus event...) - ignore
         b0 = data[:1]
         if b0 in (b"\r", b"\n"):
+            carry = data[1:]
             return "ENTER"
         if b0 in (b"\x7f", b"\x08"):
+            carry = data[1:]
             return "BACKSPACE"
         if b0 == b"\x03":
+            carry = data[1:]
             return "CTRLC"
         try:
             ch = data.decode("utf-8", "ignore")
-            return ch[0] if ch else None
+            if not ch:
+                return None
+            # Keep the rest of a fast multi-key read for the next iteration.
+            carry = data[len(ch[0].encode("utf-8")):]
+            return ch[0]
         except Exception:
             return None
 
@@ -2203,33 +2466,34 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                     _paint_sixel()   # first paint (once the sixel is ready)
                     import time as _ltime
                     last_anim_tick = [0.0]
+                    carry = b""
                     while chosen["idx"] is None:
                         anim = _is_loading()
-                        r, _, _ = _sel.select([fd], [], [], 0.06 if anim else 0.25)
+                        if carry:
+                            data, carry = carry, b""
+                            r = True
+                        else:
+                            r, _, _ = _sel.select([fd], [], [], 0.06 if anim else 0.25)
+                            data = b""
                         dirty = False
                         if r:
-                            data = _os.read(fd, 16)
-                            if data == b"\x1b" or (
-                                data and _PASTE_START.startswith(data)
-                            ):
-                                # Lone ESC may be a split escape sequence
-                                # (arrow / focus event) - wait briefly for more.
-                                # 200 ms idle budget: under poster-load
-                                # contention the tail can lag, and a truncated
-                                # read decoded as ESC = phantom "back".
-                                r2, _, _ = _sel.select([fd], [], [], 0.20)
-                                if r2:
-                                    data += _os.read(fd, 16)
-                            # SGR mouse reports can be split across reads.
-                            if (data.startswith(b"\x1b[<")
-                                    and not _MOUSE_RE_B.match(data)):
-                                while len(data) < 64:
-                                    r3, _, _ = _sel.select([fd], [], [], 0.10)
-                                    if not r3:
+                            if not data:
+                                data = _os.read(fd, 16)
+                            # A split escape/mouse report must be completed
+                            # before decoding. Otherwise its tail becomes
+                            # printable text in the search filter.
+                            if _escape_incomplete(data):
+                                deadline = _ltime.monotonic() + 0.20
+                                while _escape_incomplete(data):
+                                    left = deadline - _ltime.monotonic()
+                                    if left <= 0:
+                                        break
+                                    r2, _, _ = _sel.select([fd], [], [], left)
+                                    if not r2:
                                         break
                                     data += _os.read(fd, 64)
-                                    if _MOUSE_RE_B.match(data):
-                                        break
+                                if _escape_incomplete(data) and data != b"\x1b":
+                                    data = b""
                             pasted = False
                             if data.startswith(_PASTE_START):
                                 # Bracketed paste (middle-click of terminal
@@ -2283,8 +2547,16 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                                 res = _handle(key) if key else None
                                 if res:
                                     act, idx = res
-                                    chosen["idx"] = n if act == "back" else idx
-                                dirty = True
+                                    if act == "hover":
+                                        dirty = True
+                                    else:
+                                        chosen["idx"] = n if act == "back" else idx
+                                        dirty = True
+                                else:
+                                    # Pure hover over a non-selectable area must
+                                    # not force a full frame repaint.
+                                    dirty = not (isinstance(key, MouseEvent)
+                                                 and key.motion)
                         cur = (console.size.width, console.size.height)
                         if cur != last_size:
                             last_size = cur
@@ -2377,8 +2649,10 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                     res = _handle(mp.get(raw, raw))
                     if res:
                         act, idx = res
-                        chosen["idx"] = n if act == "back" else idx
-                    live.update(render())
+                        if act != "hover":
+                            chosen["idx"] = n if act == "back" else idx
+                    if not (isinstance(raw, MouseEvent) and raw.motion and not res):
+                        live.update(render())
     finally:
         mouse_gate.__exit__(None, None, None)
         dl_pool.shutdown(wait=False)

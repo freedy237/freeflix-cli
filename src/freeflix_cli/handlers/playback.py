@@ -274,6 +274,7 @@ def play_episode_flow(
             t("🎮 Select Player:"),
             default_index=default_idx,
             clear_on_back=False,  # Back → episode list, same series view
+            inline=True,
         )
 
         if player_idx == len(supported_players):  # Back selected
@@ -329,6 +330,7 @@ def play_episode_flow(
             retry = select_from_list(
                 [t("Try another server/player"), t("← Back to main menu")],
                 t("What would you like to do?"),
+                inline=True,
             )
             if retry == 1:  # Back
                 return False
@@ -463,7 +465,8 @@ def _pick_player_for_batch(
     opts.append(t("← Back"))
 
     idx = select_from_list(
-        opts, f"{icon('download')} {t('Select quality for batch download:')}"
+        opts, f"{icon('download')} {t('Select quality for batch download:')}",
+        inline=True,
     )
     if idx >= len(heights):
         return None
@@ -595,9 +598,13 @@ def download_episodes_batch(
     from ..progress import BatchView
     from rich.live import Live as _Live
     from rich.align import Align
+    from rich.console import Group
+    from rich.text import Text
+    from ..themes import color
     from ..cli_utils import select_multiple
     from ..player_manager import (
         clean_season_title, clean_episode_title, is_already_downloaded,
+        is_download_usable,
     )
 
     # One folder per season + clean per-episode filenames.
@@ -612,6 +619,7 @@ def download_episodes_batch(
     done_idx = {
         i for i, ft in enumerate(file_titles)
         if is_already_downloaded(ft, subfolder)
+        and is_download_usable(ft, subfolder)
     }
 
     # Let the user choose WHICH episodes to download (default = all not yet
@@ -658,19 +666,25 @@ def download_episodes_batch(
 
         from ..progress import _EscCancel
         height = max(12, console.size.height - 1)
+
+        def _batch_frame(renderable):
+            return Group(
+                Align.center(renderable, vertical="middle",
+                             height=max(1, height - 1)),
+                Text(f"  [ {t('Cancel')} ]  ·  {t('click to cancel')}",
+                     justify="center", style=color("warning")),
+            )
+
         with _EscCancel() as esc, _Live(
-            Align.center(batch.render(0, series_title), vertical="middle", height=height),
+            _batch_frame(batch.render(0, series_title)),
             refresh_per_second=8, screen=True,
         ) as live:
             while not batch.finished:
                 if esc.poll():
-                    batch.cancel()  # Esc Esc → abort the whole batch
+                    batch.cancel()  # Esc Esc / double-click / bottom bar
                     break
                 tick += 1
-                live.update(
-                    Align.center(batch.render(tick, series_title),
-                                 vertical="middle", height=height)
-                )
+                live.update(_batch_frame(batch.render(tick, series_title)))
                 time.sleep(0.08)
 
         # Compté par LABEL unique ("[n/N] titre"), pas par titre : deux

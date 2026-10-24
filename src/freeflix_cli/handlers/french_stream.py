@@ -120,6 +120,7 @@ def handle_french_stream():
                         t("Browse Episodes"),
                     ],
                     f"{t('Found saved progress for')} {content.title} :",
+                    clear_on_back=False, inline=True,
                 )
                 if choice == 0:
                     resume_french_stream(saved_progress)
@@ -138,6 +139,7 @@ def handle_french_stream():
                     l_idx = select_from_list(
                         langs + [t("← Back")],
                         f"{icon('globe')} {t('Select Language:')}",
+                        clear_on_back=False, inline=True,
                     )
                     if l_idx >= len(langs):
                         break  # → results
@@ -155,6 +157,7 @@ def handle_french_stream():
                             ep_labels + [f"{icon('download')} {t('Download')}", t("← Back")],
                             f"{icon('tv')} {t('Select Episode:')}",
                             default_index=min(ep_idx, len(episodes) - 1),
+                            clear_on_back=False, inline=True,
                         )
                     if ep_idx == len(episodes):  # Download ALL
                         preferred = _pick_player_for_batch(

@@ -277,7 +277,7 @@ def _changed_covers(items) -> list:
 
 
 def _planning_entry_actions(entry, day, date_label) -> None:
-    """Pick what to do with one planned anime."""
+    """Show the series poster, then offer its planning actions."""
     state = (
         f"{icon('check')} {t('Released')}" if entry.released
         else f"{icon('hourglass')} {t('Not yet released')}"
@@ -286,16 +286,7 @@ def _planning_entry_actions(entry, day, date_label) -> None:
         f"[bold cyan]{entry.title}[/bold cyan]  "
         f"[dim]{day} {date_label} · {entry.hour_label} · {state}[/dim]"
     )
-    choice = select_from_list(
-        [
-            f"{icon('play')} {t('Follow the latest released episode')}",
-            f"{icon('list')} {t('Browse seasons')}",
-            t("← Back"),
-        ],
-        entry.title,
-    )
-    if choice >= 2:
-        return
+
     try:
         with spinner(f"{t('Loading')} {entry.title}…"):
             series = anime_sama.get_series(entry.url)
@@ -307,11 +298,35 @@ def _planning_entry_actions(entry, day, date_label) -> None:
         print_warning(t("No seasons found."))
         pause()
         return
+
+    # Same poster treatment as the classic search flow: load the series
+    # first, show its artwork, THEN offer actions. The action menu is inline
+    # so the poster stays visible beside/above it (and remains mouse-aware).
+    from .. import terminal_image
+    terminal_image.show_poster(
+        getattr(series, "img", "") or entry.img,
+        info_lines=[
+            f"{len(series.seasons)} "
+            f"{plural(len(series.seasons), 'season', 'seasons')}",
+            ", ".join(getattr(series, "genres", []) or []),
+        ],
+    )
+
+    choice = select_from_list(
+        [
+            f"{icon('play')} {t('Follow the latest released episode')}",
+            f"{icon('list')} {t('Browse seasons')}",
+            t("← Back"),
+        ],
+        entry.title,
+        inline=True,
+    )
+    if choice >= 2:
+        return
     if choice == 0:
         _follow_latest_episode(series)
     else:
         _anime_sama_series_flow(series)
-
 
 def _follow_latest_episode(series) -> None:
     """Open the newest season at its last released episode (with sync check).
@@ -457,6 +472,7 @@ def _search_flow():
                         t("Browse Seasons"),
                     ],
                     f"{t('Found saved progress for')} {series.title} :",
+                    clear_on_back=False, inline=True,
                 )
                 if choice == 0:
                     resume_anime_sama(saved_progress)
@@ -478,6 +494,7 @@ def _anime_sama_series_flow(series) -> bool:
             season_idx = select_from_list(
                 [s.title for s in series.seasons] + [back],
                 f"{icon('tv')} {t('Select Season:')}",
+                clear_on_back=False, inline=True,
             )
         if season_idx >= len(series.seasons):
             return False  # back to results
@@ -505,7 +522,7 @@ def _anime_sama_series_flow(series) -> bool:
                 with crumb(series.title), crumb(season.title):
                     lang_idx = select_from_list(
                         langs + [back], f"{icon('globe')} {t('Select Language:')}",
-                        clear_on_back=False,  # stay inside the series view
+                        clear_on_back=False, inline=True,
                     )
                 if lang_idx >= len(langs):
                     break  # back to season picker
@@ -523,7 +540,7 @@ def _anime_sama_series_flow(series) -> bool:
                         ep_labels + [f"{icon('download')} {t('Download')}", back],
                         f"{icon('tv')} {t('Select Episode:')}",
                         default_index=min(ep_idx, len(episodes) - 1),
-                        clear_on_back=False,  # stay inside the series view
+                        clear_on_back=False, inline=True,
                     )
                 if ep_idx == len(episodes):  # Download ALL
                     preferred = _pick_player_for_batch(episodes, {"Referer": anime_sama.website_origin})

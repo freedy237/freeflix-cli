@@ -319,6 +319,7 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
 
     # Modern layout : a signed fsvid-family HLS `…/.urlset/master.m3u8?t=…`
     # (served with the embed's Origin). Legacy : sources:[{file:"…mp4"}].
+    candidate = None
     for pat in (
         r'file:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"',
         r'sources:\s*\[\s*"([^"]+)"',
@@ -327,9 +328,53 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     ):
         m = re.search(pat, haystack)
         if m:
-            return m.group(1)
+            candidate = m.group(1)
+            break
 
-    return None  # graceful : caller shows 'try another player'
+    if not candidate:
+        return None  # graceful : caller shows 'try another player'
+
+    # Some uqload embeds answer with a ~30 s ad/preview placeholder instead of
+    # the episode. It still looks like a valid HLS master and would otherwise
+    # play. Probe the media playlist's total EXTINF and reject clearly-too-short
+    # streams so the caller falls back to another player.
+    if ".m3u8" in candidate:
+        dur = _hls_duration_seconds(candidate, headers)
+        if dur is not None and dur < 90:
+            return None
+    return candidate
+
+
+def _hls_duration_seconds(url: str, headers: dict = None,
+                          timeout: int = 8):
+    """Total EXTINF duration of an HLS media playlist (None if unknown).
+
+    Follows a master playlist's first variant. Best-effort: any network or
+    parsing issue returns None so extraction never fails because of this
+    validation. Used to reject uqload's short ad/preview placeholder.
+    """
+    try:
+        import m3u8 as _m3u8
+
+        r = _get(url, headers=headers or {}, impersonate="chrome",
+                 timeout=timeout)
+        r.raise_for_status()
+        text = r.text or ""
+        obj = _m3u8.loads(text, uri=url)
+        if obj.playlists:
+            variant = obj.playlists[0]
+            try:
+                vurl = variant.absolute_uri
+            except Exception:
+                vurl = variant.uri
+            rv = _get(vurl, headers=headers or {}, impersonate="chrome",
+                      timeout=timeout)
+            rv.raise_for_status()
+            obj = _m3u8.loads(rv.text or "", uri=vurl)
+        total = sum(float(seg.duration or 0) for seg in obj.segments)
+        return total if total > 0 else None
+    except Exception:
+        return None
 
 
 def get_hls_link_sendvid(url: str) -> str:

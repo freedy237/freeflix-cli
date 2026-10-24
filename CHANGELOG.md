@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.15.0
+
+- **Contrôle complet à la souris** : menus et listes cliquables, curseur qui
+  suit le survol, molette, clic droit pour revenir, pagination et barre de
+  défilement cliquables, fil d'Ariane cliquable, boutons aide/filtre,
+  multi-sélection (tout/confirmer/annuler), aperçu (ouvrir/retour), champs
+  texte (OK/annuler), Oui/Non (mise à jour/installation), et annulation d'un
+  téléchargement par clic sur la barre du bas ou double-clic. Le suivi SGR est
+  coupé proprement à la sortie de chaque écran (`FREEFLIX_NO_MOUSE=1` pour le
+  désactiver).
+- **Fluidité et affichage** : les mouvements de souris sont coalescés sur la
+  dernière position, les répaints sont immédiats, et les menus saison / langue
+  / épisode / qualité / lecteur sont **inline** : l'affiche et les infos de la
+  série ne sont plus masquées pendant la navigation.
+- **Planning Anime-Sama** : cliquer un anime affiche sa grande affiche puis les
+  actions, comme après une recherche ; « Suivre le dernier épisode sorti »
+  ouvre directement le dernier épisode.
+- **Uqload / téléchargements** : les flux de moins de 90 s (extrait/pub) sont
+  rejetés ; le download passe maintenant par le **même proxy local** que le
+  streaming, avec les vrais en-têtes, au lieu de laisser yt-dlp recevoir
+  l'extrait. Le flux résolu par l'analyse de qualité est réutilisé pour la
+  lecture, et le choix de qualité est respecté. Vérifié : Avatar épisode 1 en
+  23 min 07 s (et non 30 s), et un flux multi-qualités téléchargé en
+  **1280×720**, 23 min 44 s.
+- **Épisodes et langues** : tri numérique, suppression des épisodes sans
+  lecteur valide, lecture dynamique des langues FrenchStream (`vf`, `vostfr`,
+  `vo`, `vff`, `vfq`…).
+- **Tests** : 463 tests au vert en français et en anglais, ruff OK.
+
 ## 1.14.1
 
 - **Planning Anime-Sama — statut en direct** : le statut « Sorti » ne dépend

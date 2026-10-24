@@ -36,6 +36,10 @@ class _DummyLive:
         if renderable is not None:
             self.frames.append(renderable)
 
+    def refresh(self):
+        if self.get_renderable is not None:
+            self.frames.append(self.get_renderable())
+
 
 class _FakeConsole:
     is_terminal = True
@@ -85,6 +89,11 @@ def test_sgr_mouse_events_decode():
     release = cu._mouse_from_match(
         cu._MOUSE_RE_B.match(b"\x1b[<0;4;6m"))
     assert release.pressed is False and release.is_left is False
+
+    # SGR motion without a button: Cb = 32 (motion) + 3 (no button).
+    hover = cu._mouse_from_match(
+        cu._MOUSE_RE_B.match(b"\x1b[<35;7;4M"))
+    assert hover.motion is True and hover.is_left is False
 
 
 def test_windows_reader_returns_mouse_not_ignored(monkeypatch):
@@ -201,7 +210,7 @@ def test_preview_click_selects_an_item(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
     monkeypatch.setattr(cu, "console", fake)
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=3))
+    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=4))
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
         {"cover": "", "title": "B", "lines": [], "panel_title": ""},
@@ -319,3 +328,120 @@ def test_preview_hint_click_goes_back(monkeypatch):
         {"cover": "", "title": "B", "lines": [], "panel_title": ""},
     ]
     assert cu.select_with_preview(["A", "B"], "Pick", previews) == 2
+
+
+def test_select_from_list_hover_moves_cursor(monkeypatch):
+    _patch_ui(monkeypatch)
+    keys = [_mouse(y=3, button=35), readchar.key.ENTER]
+    monkeypatch.setattr(cu, "_read_menu_key",
+                        lambda: keys.pop(0) if keys else readchar.key.ENTER)
+    assert cu.select_from_list(["First", "Second", "← Back"],
+                               "Choose") == 1
+
+
+def test_select_multiple_hover_then_space(monkeypatch):
+    _patch_ui(monkeypatch)
+    # Items are rows 3 and 4 with one-row renderables.
+    keys = [_mouse(y=4, button=35), " ", readchar.key.ENTER]
+    monkeypatch.setattr(cu, "_read_menu_key",
+                        lambda: keys.pop(0) if keys else readchar.key.ENTER)
+    assert cu.select_multiple(["Ep1", "Ep2"], "Pick", preselected=[]) == [1]
+
+
+def test_preview_hover_moves_cursor(monkeypatch):
+    _patch_ui(monkeypatch)
+    monkeypatch.setattr(cu, "console", _FakeConsole())
+    keys = [_mouse(y=5, button=35), "ENTER"]
+    monkeypatch.setattr(cu, "_read_menu_key",
+                        lambda: keys.pop(0) if keys else "ESC")
+    previews = [
+        {"cover": "", "title": "A", "lines": [], "panel_title": ""},
+        {"cover": "", "title": "B", "lines": [], "panel_title": ""},
+    ]
+    assert cu.select_with_preview(["A", "B"], "Pick", previews) == 1
+
+
+def test_preview_click_on_poster_opens_selected(monkeypatch):
+    _patch_ui(monkeypatch)
+    fake = _FakeConsole()
+    monkeypatch.setattr(cu, "console", fake)
+    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(x=60, y=1))
+    previews = [
+        {"cover": "", "title": "A", "lines": [], "panel_title": ""},
+        {"cover": "", "title": "B", "lines": [], "panel_title": ""},
+    ]
+    assert cu.select_with_preview(["A", "B"], "Pick", previews) == 0
+
+
+def test_breadcrumb_click_goes_back(monkeypatch):
+    _patch_ui(monkeypatch)
+    monkeypatch.setattr(cu, "_crumbs", ["Home"])
+    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=1))
+    assert cu.select_from_list(["First", "Second", "← Back"],
+                               "Choose") == 2
+
+
+def test_preview_scrollbar_click_jumps(monkeypatch):
+    _patch_ui(monkeypatch)
+    monkeypatch.setattr(cu, "console", _FakeConsole())
+    labels = [f"Show {i}" for i in range(20)]
+    previews = [
+        {"cover": "", "title": label, "lines": [], "panel_title": ""}
+        for label in labels
+    ]
+    # Row 2 is the counter + ▰▱ track; click its last cell.
+    counter = "  [1/20] \u25b0\u25b1\u25b1\u25b1\u25b1"
+    x = counter.find("\u25b0") + 5
+    keys = [_mouse(x=x, y=3), "ENTER"]
+    monkeypatch.setattr(cu, "_read_menu_key",
+                        lambda: keys.pop(0) if keys else "ESC")
+    assert cu.select_with_preview(labels, "Pick", previews) == 19
+
+
+def test_download_cancel_single_click_bottom_bar(monkeypatch):
+    from unittest import mock
+    from freeflix_cli import progress as pg
+
+    monkeypatch.setattr(pg, "console", _FakeConsole())
+    state = {"queue": list("\x1b[<0;10;23M")}
+    fake = types.ModuleType("msvcrt")
+    fake.kbhit = lambda: bool(state["queue"])
+    fake.getwch = lambda: state["queue"].pop(0)
+    with mock.patch.dict(sys.modules, {"msvcrt": fake}):
+        with mock.patch.object(cu.os, "name", "nt"):
+            esc = pg._EscCancel()
+            esc.active = True
+            assert esc.poll() is True
+
+
+def test_escape_incomplete_detects_split_mouse_report():
+    assert cu._escape_incomplete(b"\x1b") is True
+    assert cu._escape_incomplete(b"\x1b[") is True
+    assert cu._escape_incomplete(b"\x1b[<35;12;5") is True
+    assert cu._escape_incomplete(b"\x1b[<35;12;5M") is False
+    assert cu._escape_incomplete(b"\x1b[A") is False
+    assert cu._escape_incomplete(b"abc") is False
+
+
+def test_preview_hover_reaches_back_and_enter(monkeypatch):
+    _patch_ui(monkeypatch)
+    monkeypatch.setattr(cu, "console", _FakeConsole())
+    # Rows: head(2), counter, item0, item1, Back.
+    keys = [_mouse(y=6, button=35), "ENTER"]
+    monkeypatch.setattr(cu, "_read_menu_key",
+                        lambda: keys.pop(0) if keys else "ESC")
+    previews = [
+        {"cover": "", "title": "A", "lines": [], "panel_title": ""},
+        {"cover": "", "title": "B", "lines": [], "panel_title": ""},
+    ]
+    assert cu.select_with_preview(["A", "B"], "Pick", previews) == 2
+
+
+def test_inline_menu_click_uses_cursor_anchor(monkeypatch):
+    _patch_ui(monkeypatch)
+    monkeypatch.setattr(cu, "_cursor_row", lambda: 10)
+    keys = [_mouse(y=11), readchar.key.ENTER]
+    monkeypatch.setattr(cu, "_read_menu_key",
+                        lambda: keys.pop(0) if keys else readchar.key.ENTER)
+    assert cu.select_from_list(["First", "Second", "← Back"],
+                               "Choose", inline=True) == 0

@@ -601,6 +601,11 @@ _FR = {
     'Esc Esc : cancel': 'Échap Échap : annuler',
     'Esc again to cancel': 'Échap pour annuler',
     'Esc Esc / double-click : cancel': 'Échap ×2 / double-clic : annuler',
+    'Esc Esc / double-click / bottom bar : cancel':
+        'Échap ×2 / double-clic / barre du bas : annuler',
+    'click to cancel': 'clique pour annuler',
+    'This uqload stream is a short placeholder. Choose another player.':
+        'Ce flux uqload est un extrait de 30 s. Choisis un autre lecteur.',
     'again to cancel': 'encore pour annuler',
     'Esc again to go back': 'Échap à nouveau pour retour',
     'Esc again to decline': 'Échap à nouveau pour refuser',
