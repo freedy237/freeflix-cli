@@ -671,6 +671,20 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
                              **player.get_stream_headers(stream_url)}
         except Exception:
             pass
+        # IMPORTANT: the quality menu has just resolved this embed. Remember
+        # the result for playback, otherwise the same embed is scraped a
+        # second time when the user presses Enter. fsvid/vidzy rate-limit
+        # that burst and answer with the /troll/ decoy — the user sees the
+        # quality, then "Could not resolve stream URL". The 90 s resolution
+        # TTL (and the proxy refresher) still handles expired tokens.
+        if not is_direct_stream:
+            try:
+                with _resolve_lock:
+                    _resolve_cache[u] = (stream_url, time.time())
+                    if u != url:
+                        _resolve_cache[url] = (stream_url, time.time())
+            except Exception:
+                pass
         probe = _probe_stream(stream_url, probe_headers, timeout=timeout)
         blocked = probe.get("blocked")
         if blocked == "cloudflare":
@@ -2706,9 +2720,8 @@ def play_video(
             # We can't observe an external app's lifecycle, so wait for the user
             # to come back and confirm the episode is done (drives auto-next).
             try:
-                console.input(
-                    f"\n[dim]{t('Press Enter when the episode is finished')}[/dim]"
-                )
+                from .cli_utils import pause
+                pause()
             except (KeyboardInterrupt, EOFError):
                 pass
             _LAST_PLAYBACK["finished"] = True  # assume watched → allow auto-next

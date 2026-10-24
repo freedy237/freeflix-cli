@@ -231,6 +231,9 @@ def test_planning_entries_screen_renders_without_error(monkeypatch):
     monkeypatch.setattr(H.anime_sama, "get_website_url", lambda: None)
     monkeypatch.setattr(H.tracker, "get_anime_language", lambda: "")
     monkeypatch.setattr(H, "spinner", lambda _m: __import__("contextlib").nullcontext())
+    # Never hit the network for the fake poster URLs in this offline test.
+    monkeypatch.setattr("freeflix_cli.terminal_image.prefetch_many",
+                        lambda urls: None)
     try:
         H.handle_anime_sama_planning()
     except _Stop:

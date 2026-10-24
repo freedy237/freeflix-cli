@@ -52,6 +52,8 @@ _FR = {
     "Back": "Retour",
     "Yes": "Oui",
     "No": "Non",
+    "OK": "OK",
+    "Install it now?": "L'installer maintenant ?",
 
     # ── History ─────────────────────────────────────────────────
     "No history found.": "Aucun historique trouvé.",
@@ -598,6 +600,8 @@ _FR = {
     'Esc': 'Échap',
     'Esc Esc : cancel': 'Échap Échap : annuler',
     'Esc again to cancel': 'Échap pour annuler',
+    'Esc Esc / double-click : cancel': 'Échap ×2 / double-clic : annuler',
+    'again to cancel': 'encore pour annuler',
     'Esc again to go back': 'Échap à nouveau pour retour',
     'Esc again to decline': 'Échap à nouveau pour refuser',
     'Failed to download subtitles:': 'Échec du téléchargement des sous-titres :',
@@ -677,6 +681,7 @@ _FR = {
     'Please select:': 'Choisis :',
     'Preferred graphics processor': 'Processeur graphique préféré',
     'Press Enter to continue...': 'Appuie sur Entrée pour continuer…',
+    'Press Enter or click to continue...': 'Appuie sur Entrée ou clique pour continuer…',
     'Press Enter to go back...': 'Appuie sur Entrée pour revenir…',
     'Proceed?': 'Continuer ?',
     'Program Settings tab → Add → pick mpv.exe': 'Onglet Paramètres de programme → Ajouter → choisis mpv.exe',

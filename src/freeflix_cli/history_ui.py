@@ -5,6 +5,7 @@ from .cli_utils import (
     print_warning,
     select_from_list,
     print_success,
+    pause,
 )
 from .handlers import (
     anime_sama,
@@ -64,7 +65,7 @@ def handle_history():
         history = tracker.get_history()
         if not history:
             print_warning(t("No history found."))
-            input(f"\n{t('Press Enter to go back...')}")
+            pause()
             return
 
         options = []

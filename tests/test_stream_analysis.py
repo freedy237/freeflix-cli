@@ -250,3 +250,38 @@ def test_player_back_returns_to_episode_without_clearing(monkeypatch):
         "https://x/catalogue/dbs", "https://x/dbs/saison1/vostfr", headers={},
     ) is False
     assert captured.get("clear_on_back") is False
+
+
+def test_quality_analysis_primes_playback_resolution_cache(monkeypatch):
+    """The quality menu resolves once; pressing Enter must not re-scrape.
+
+    fsvid/vidzy rate-limit a second scrape and answer with the /troll/ decoy —
+    that produced "quality shown, then Could not resolve stream URL".
+    """
+    pm._resolve_cache.clear()
+    calls = []
+    monkeypatch.setattr(
+        pm.player, "get_hls_link",
+        lambda url, headers=None: calls.append(url) or "https://cdn/master.m3u8",
+    )
+    monkeypatch.setattr(pm, "_proxy_request_headers", lambda *a, **k: {})
+    monkeypatch.setattr(pm.player, "get_stream_headers", lambda url: {})
+    monkeypatch.setattr(
+        pm, "_probe_stream",
+        lambda url, headers, timeout=12: {
+            "variants": [{"height": 304, "bandwidth": 900000,
+                          "uri": "https://cdn/304.m3u8"}],
+            "blocked": None,
+        },
+    )
+    try:
+        info = pm._analyze_stream_quality_uncached(
+            "https://fsvid.lol/embed-or1b267mrn9t.html"
+        )
+        assert info["ok"] is True
+        assert pm._cached_resolve(
+            "https://fsvid.lol/embed-or1b267mrn9t.html", {}
+        ) == "https://cdn/master.m3u8"
+        assert calls == ["https://fsvid.lol/embed-or1b267mrn9t.html"]
+    finally:
+        pm._resolve_cache.clear()

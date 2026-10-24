@@ -27,7 +27,7 @@ from rich.align import Align
 from rich.live import Live
 from rich.panel import Panel
 
-from .cli_utils import console
+from .cli_utils import console, mouse_tracking, _MOUSE_RE_S, _mouse_from_match
 from .themes import color
 from .icons import icon
 from .i18n import t
@@ -374,6 +374,7 @@ class _EscCancel:
         self._armed = 0.0
         self.active = False
         self._in_paste = False  # inside an unterminated bracketed-paste blob
+        self._mouse_gate = None
 
     def __enter__(self):
         import os
@@ -393,6 +394,12 @@ class _EscCancel:
                 self.active = True
         except Exception:
             self.active = False
+        if self.active:
+            try:
+                self._mouse_gate = mouse_tracking()
+                self._mouse_gate.__enter__()
+            except Exception:
+                self._mouse_gate = None
         return self
 
     def _register_escs(self, escs: int) -> bool:
@@ -459,6 +466,14 @@ class _EscCancel:
                 buf += ch
         except Exception:
             return False
+        # A left click is a cancel intent too (double-click = cancel).
+        mm = _MOUSE_RE_S.search(buf)
+        if mm:
+            try:
+                if _mouse_from_match(mm).is_left:
+                    return self._register_escs(1)
+            except Exception:
+                pass
         buf = self._clean(buf)
         escs, i = 0, 0
         while i < len(buf):
@@ -484,7 +499,16 @@ class _EscCancel:
             data = os.read(self._fd, 32)
         except Exception:
             return False
-        data = self._clean(data.decode("utf-8", "ignore")).encode()
+        raw = data.decode("utf-8", "ignore")
+        # Mouse click = one cancel intent; double-click cancels immediately.
+        mm = _MOUSE_RE_S.search(raw)
+        if mm:
+            try:
+                if _mouse_from_match(mm).is_left:
+                    return self._register_escs(1)
+            except Exception:
+                pass
+        data = self._clean(raw).encode()
         escs, i = 0, 0
         while i < len(data):
             if data[i:i + 1] == b"\x1b":
@@ -502,9 +526,15 @@ class _EscCancel:
     def hint(self) -> str:
         if not self.active:
             return ""
-        return "! " + t("Esc again to cancel") if self.armed else t("Esc Esc : cancel")
+        return ("! " + t("again to cancel") if self.armed
+                else t("Esc Esc / double-click : cancel"))
 
     def __exit__(self, *exc):
+        if self._mouse_gate is not None:
+            try:
+                self._mouse_gate.__exit__(None, None, None)
+            except Exception:
+                pass
         if self._old is not None:
             try:
                 import termios

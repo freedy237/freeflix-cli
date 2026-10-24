@@ -1023,6 +1023,16 @@ def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
     if not stream_url:
         return None
 
+    # fsvid's player sets this cookie before creating the video.js instance.
+    # The CDN usually tolerates its absence, but mpv/yt-dlp are more likely to
+    # be rejected on some edges — carry it with the resolved URL.
+    if "fsvid" in host.lower():
+        set_stream_headers(stream_url, {
+            "Cookie": "fsv_pe=1",
+            "Referer": f"https://{host}/",
+            "Origin": f"https://{host}",
+        })
+
     # Vidzy's player runs a browser "gate" that returns a short-lived gk and
     # sets a vz_ok cookie. Without it the CDN answers 403 to mpv/yt-dlp even
     # though the decoded master URL looks valid. Reproduce the gate with the

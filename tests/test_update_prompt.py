@@ -25,37 +25,32 @@ def test_update_plan_compares_running_code_not_stale_metadata(monkeypatch):
     assert uc.update_plan() is None
 
 
-def test_ask_update_accepts_y_yes_o_oui(monkeypatch):
-    for answer in ("y", "Y", "yes", "o", "O", "oui", " oui "):
+def test_ask_update_returns_the_clickable_prompt(monkeypatch):
+    import freeflix_cli.cli_utils as cu
+    for expected in (True, False):
         _fake_plan(monkeypatch)
-        monkeypatch.setattr("builtins.input", lambda _p, a=answer: a)
+        monkeypatch.setattr(cu, "ask_yes_no", lambda *a, _e=expected, **k: _e)
         monkeypatch.setattr(uc, "console", type("C", (), {"print": lambda *a, **k: None})())
-        assert uc.ask_update() is True, answer
-
-
-def test_ask_update_defaults_to_no(monkeypatch):
-    for answer in ("", "n", "no", "non", "x", "later"):
-        _fake_plan(monkeypatch)
-        monkeypatch.setattr("builtins.input", lambda _p, a=answer: a)
-        monkeypatch.setattr(uc, "console", type("C", (), {"print": lambda *a, **k: None})())
-        assert uc.ask_update() is False, answer
+        assert uc.ask_update() is expected
 
 
 def test_ask_update_handles_ctrl_c_as_no(monkeypatch):
+    import freeflix_cli.cli_utils as cu
     _fake_plan(monkeypatch)
     monkeypatch.setattr(uc, "console", type("C", (), {"print": lambda *a, **k: None})())
 
-    def _boom(_p):
+    def _boom(*a, **k):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("builtins.input", _boom)
+    monkeypatch.setattr(cu, "ask_yes_no", _boom)
     assert uc.ask_update() is False
 
 
 def test_ask_update_skips_when_no_new_version(monkeypatch):
+    import freeflix_cli.cli_utils as cu
     _fake_plan(monkeypatch, "1.13.9", "1.13.9")
     asked = []
-    monkeypatch.setattr("builtins.input", lambda p: asked.append(p) or "y")
+    monkeypatch.setattr(cu, "ask_yes_no", lambda p, **k: asked.append(p) or True)
     assert uc.ask_update() is False
     assert asked == []  # no question when there is nothing to install
 

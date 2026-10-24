@@ -8,6 +8,7 @@ from .cli_utils import (
     print_warning,
     get_user_input,
     pause,
+    ask_yes_no,
     toast,
     crumb_reset,
     crumb_push,
@@ -1411,7 +1412,7 @@ def main():
                     picked = i_vals[c]
                     if picked == "nerd" and not setup_assistant.detect_nerd_font():
                         print_info(t("CaskaydiaCove Nerd Font not found on this system."))
-                        if input(t("Install it now? [Y/n] ")).strip().lower() not in ("n", "no"):
+                        if ask_yes_no(t("Install it now?"), default=True):
                             setup_assistant.install_nerd_font()
                     tracker.set_icon_style(picked)
                     print_success(f"{t('Icon Style')}: {picked}")

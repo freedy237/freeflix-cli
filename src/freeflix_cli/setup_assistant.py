@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 from typing import Dict
 
-from .cli_utils import print_info, print_success, print_warning
+from .cli_utils import print_info, print_success, print_warning, ask_yes_no
 from .tracker import tracker
 from .i18n import t
 
@@ -858,13 +858,13 @@ def _linux_install_missing(missing_ess: list) -> bool:
     if not sys.stdin.isatty():
         return False
     try:
-        ans = input(
+        if not ask_yes_no(
             f"{t('Install missing tools')} ({', '.join(pkgs)}) {t('now via')} "
-            f"{chosen[0]}? [Y/n] "
-        ).strip().lower()
+            f"{chosen[0]}?",
+            default=True,
+        ):
+            return False
     except (EOFError, KeyboardInterrupt):
-        return False
-    if ans in ("n", "no"):
         return False
 
     print_info(f"{t('Installing')} {', '.join(pkgs)} ({t('sudo may ask your password')})…")
@@ -939,10 +939,12 @@ def install_media_player(name: str) -> bool:
         return False
 
     try:
-        ans = input(f"{t('Install')} {name} {t('now?')} ({' '.join(cmd)}) [Y/n] ").strip().lower()
+        if not ask_yes_no(
+            f"{t('Install')} {name} {t('now?')} ({' '.join(cmd)})",
+            default=True,
+        ):
+            return False
     except (EOFError, KeyboardInterrupt):
-        return False
-    if ans in ("n", "no"):
         return False
 
     print_info(f"{t('Installing')} {name}…")
@@ -996,10 +998,12 @@ def install_chafa() -> bool:
 
     print_info(t("chafa draws anime cover art inside the terminal (optional)."))
     try:
-        ans = input(f"{t('Install chafa now?')} ({' '.join(cmd)}) [Y/n] ").strip().lower()
+        if not ask_yes_no(
+            f"{t('Install chafa now?')} ({' '.join(cmd)})",
+            default=True,
+        ):
+            return False
     except (EOFError, KeyboardInterrupt):
-        return False
-    if ans in ("n", "no"):
         return False
 
     try:
@@ -1406,12 +1410,14 @@ def install_flaresolverr() -> bool:
             if cmd:
                 print_info(t("No Docker/Podman found. Podman is the easiest (rootless)."))
                 try:
-                    ans = input(f"{t('Install Podman now?')} ({' '.join(cmd)}) [Y/n] ").strip().lower()
+                    if ask_yes_no(
+                        f"{t('Install Podman now?')} ({' '.join(cmd)})",
+                        default=True,
+                    ):
+                        subprocess.run(cmd, check=False)
+                        runtime = _container_runtime()
                 except (EOFError, KeyboardInterrupt):
                     return False
-                if ans not in ("n", "no"):
-                    subprocess.run(cmd, check=False)
-                    runtime = _container_runtime()
         elif os_name == "macos":
             print_warning(
                 f"{t('Install a container runtime to enable FlareSolverr, e.g.:')}\n"
@@ -1432,10 +1438,12 @@ def install_flaresolverr() -> bool:
         return False
 
     try:
-        ans = input(f"{t('Set up FlareSolverr via')} {runtime} {t('now?')} [Y/n] ").strip().lower()
+        if not ask_yes_no(
+            f"{t('Set up FlareSolverr via')} {runtime} {t('now?')}",
+            default=True,
+        ):
+            return False
     except (EOFError, KeyboardInterrupt):
-        return False
-    if ans in ("n", "no"):
         return False
 
     # Reuse an existing container, else pull & create it.
@@ -1585,13 +1593,12 @@ def _run_android_setup() -> bool:
     print_info(f"  2. {t('Guide you to install mpv-android for playback')}")
     print_info("")
     try:
-        ans = input(f"{t('Proceed?')} [Y/n] ").strip().lower()
+        if not ask_yes_no(t("Proceed?"), default=True):
+            tracker.data["setup_declined"] = True
+            tracker._save_data()
+            return False
     except (EOFError, KeyboardInterrupt):
         print_info(t("Aborted."))
-        return False
-    if ans in ("n", "no"):
-        tracker.data["setup_declined"] = True
-        tracker._save_data()
         return False
 
     # yt-dlp is REQUIRED to download HLS streams (aria2c only handles direct
@@ -1655,14 +1662,13 @@ def run_setup(force: bool = False) -> bool:
     print_info("")
 
     try:
-        ans = input(f"{t('Proceed?')} [Y/n] ").strip().lower()
+        if not ask_yes_no(t("Proceed?"), default=True):
+            # Remember the decline so we don't re-prompt every launch
+            tracker.data["setup_declined"] = True
+            tracker._save_data()
+            return False
     except (EOFError, KeyboardInterrupt):
         print_info(t("Aborted."))
-        return False
-    if ans in ("n", "no"):
-        # Remember the decline so we don't re-prompt every launch
-        tracker.data["setup_declined"] = True
-        tracker._save_data()
         return False
 
     print_info(f"\n• {t('Installing mpv configuration…')}")

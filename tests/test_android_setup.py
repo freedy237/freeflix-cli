@@ -53,7 +53,7 @@ def test_android_install_uses_apt_in_proot(monkeypatch):
 def test_run_setup_routes_to_android(monkeypatch):
     monkeypatch.setattr(sa, "_is_android", lambda: True)
     monkeypatch.setattr(sa, "is_setup_complete", lambda: False)
-    monkeypatch.setattr("builtins.input", lambda *a: "y")
+    monkeypatch.setattr(sa, "ask_yes_no", lambda *a, **k: True)
     monkeypatch.setattr(sa, "_android_install_pkgs", lambda pkgs: True)
     saved = {}
     monkeypatch.setattr(sa.tracker, "set_player", lambda p: saved.setdefault("player", p))

@@ -277,11 +277,10 @@ def ask_update(package_name: str = "freeflix-cli") -> bool:
         expand=False,
     ))
     try:
-        answer = input(f"  {t('Your choice')} [y/n] : ").strip().lower()
+        from .cli_utils import ask_yes_no
+        return ask_yes_no(t("Do you want to update now?"), default=True)
     except (EOFError, KeyboardInterrupt):
         return False
-    # y / yes / o / oui → update ; anything else → later.
-    return answer in ("y", "yes", "o", "oui")
 
 
 def reload_process() -> None:  # pragma: no cover - replaces the process
