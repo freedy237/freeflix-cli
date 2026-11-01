@@ -236,7 +236,8 @@ def handle_nyaa():
     Back stack : mode → results → actions (search input between results
     and mode), one level per Esc.
     """
-    print_header(t("🌊 Nyaa.si Torrents"))
+    from ..icons import icon
+    print_header(f"{icon('wave')} {t('Nyaa.si Torrents')}")
 
     if not _aria2c_path():
         print_error(
@@ -317,7 +318,10 @@ def _nyaa_results_flow(results: list) -> None:
                 f"{icon('list')} {t('Batch download (multi-select)')}",
                 t("← Back"),
             ]
-            act = select_from_list(actions, chosen["title"][:60])
+            act = select_from_list(
+                actions, chosen["title"][:60],
+                clear_on_back=False, inline=True,
+            )
             if act == 4:
                 break  # → results
             if act == 0:

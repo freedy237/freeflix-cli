@@ -98,6 +98,7 @@ def handle_coflix():
                     choice = select_from_list(
                         [t("Watch again/Resume"), t("Cancel")],
                         f"{t('Found saved progress for')} {content.title} :",
+                        clear_on_back=False, inline=True,
                     )
                     if choice == 0:
                         resume_coflix(saved_progress)
@@ -142,6 +143,7 @@ def handle_coflix():
                             t("Browse Seasons"),
                         ],
                         f"{t('Found saved progress for')} {content.title} :",
+                        clear_on_back=False, inline=True,
                     )
                     if choice == 0:
                         resume_coflix(saved_progress)
@@ -152,6 +154,7 @@ def handle_coflix():
                         season_idx = select_from_list(
                             [s.title for s in content.seasons] + [t("← Back")],
                             f"{icon('tv')} {t('Select Season:')}",
+                            clear_on_back=False, inline=True,
                         )
                     if season_idx >= len(content.seasons):
                         break  # back to the search prompt
@@ -178,6 +181,7 @@ def handle_coflix():
                             ep_idx = select_from_list(
                                 ep_labels + [f"{icon('download')} {t('Download')}", t("← Back")],
                                 f"{icon('tv')} {t('Select Episode:')}",
+                                clear_on_back=False, inline=True,
                             )
                         if ep_idx == len(season.episodes):  # Download ALL
                             headers = {"Referer": "https://lecteurvideo.com/"}
@@ -230,6 +234,7 @@ def handle_coflix():
                                 select_from_list(
                                     [t("Yes"), t("No")],
                                     f"{t('Play next episode:')} {season.episodes[ep_idx + 1].title}?",
+                                    clear_on_back=False, inline=True,
                                 ) == 0
                             ):
                                 ep_idx += 1
@@ -272,7 +277,10 @@ def resume_coflix(data):
             return
 
         options = [t("Watch again"), t("Cancel")]
-        choice = select_from_list(options, t("What would you like to do?"))
+        choice = select_from_list(
+            options, t("What would you like to do?"),
+            clear_on_back=False, inline=True,
+        )
 
         if choice == 1:
             return
@@ -336,7 +344,10 @@ def resume_coflix(data):
         f"{t('Watch again')} ({saved_ep_title})",
         t("Cancel"),
     ]
-    choice = select_from_list(options, t("What would you like to do?"))
+    choice = select_from_list(
+        options, t("What would you like to do?"),
+        clear_on_back=False, inline=True,
+    )
 
     if choice == 2:
         return
@@ -381,6 +392,7 @@ def resume_coflix(data):
                     select_from_list(
                         [t("Yes"), t("No")],
                         f"{t('Play next:')} {season.episodes[ep_idx+1].title}?",
+                        clear_on_back=False, inline=True,
                     )
                     == 0
                 ):

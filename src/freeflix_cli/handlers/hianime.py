@@ -89,7 +89,8 @@ def handle_hianime_episode(title, slug, start_episode, cover_url=None,
             if tracker.get_analyze_players() else {}
         )
         labels = _stream_labels(streams, quality_map) + [t("← Back")]
-        c_idx = select_from_list(labels, f"{icon('tv')} {t('Select Stream:')}")
+        c_idx = select_from_list(labels, f"{icon('tv')} {t('Select Stream:')}",
+                                 clear_on_back=False, inline=True)
         if c_idx >= len(streams):
             return
         if not _play_stream(title, slug, episode, streams[c_idx], cover_url):
@@ -98,8 +99,9 @@ def handle_hianime_episode(title, slug, start_episode, cover_url=None,
         if total_eps and nxt > total_eps:
             return
         choice = select_from_list(
-            [f"▶ {t('Play Episode')} {nxt}", t("← Back")],
+            [f"{icon('play')} {t('Play Episode')} {nxt}", t("← Back")],
             f"{t('Episode')} {episode} {t('finished:')}",
+            clear_on_back=False, inline=True,
         )
         if choice == 0:
             episode = nxt
@@ -191,6 +193,7 @@ def handle_hianime():
                     e_idx = select_from_list(
                         ep_labels, f"{icon('tv')} {t('Select Episode:')}",
                         default_index=min(ep_idx, len(episodes) - 1),
+                        clear_on_back=False, inline=True,
                     )
                 if e_idx >= len(episodes):
                     break  # → results
@@ -214,11 +217,14 @@ def resume_hianime(data):
 
     print_info(f"{t('Found progress:')} [cyan]{title}[/cyan] - {t('Episode')} {episode}")
     options = [
-        f"▶ {t('Continue')} ({t('Episode')} {episode + 1})",
-        f"🔁 {t('Watch again')} ({t('Episode')} {episode})",
+        f"{icon('play')} {t('Continue')} ({t('Episode')} {episode + 1})",
+        f"{icon('repeat')} {t('Watch again')} ({t('Episode')} {episode})",
         t("← Cancel"),
     ]
-    choice = select_from_list(options, t("What would you like to do?"))
+    choice = select_from_list(
+        options, t("What would you like to do?"),
+        clear_on_back=False, inline=True,
+    )
     if choice == 2:
         return
     start = episode + 1 if choice == 0 else episode

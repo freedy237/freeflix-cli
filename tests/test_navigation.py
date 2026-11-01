@@ -54,6 +54,8 @@ def test_anime_sama_back_stack(monkeypatch):
     monkeypatch.setattr(S, "get_series", lambda url: _Series())
     monkeypatch.setattr(S, "get_season", lambda url: _Season())
     monkeypatch.setattr(H, "play_episode_flow", lambda **kw: None)
+    # A local history entry would open the extra "saved progress" menu first.
+    monkeypatch.setattr(H.tracker, "get_series_progress", lambda *a, **k: None)
 
     from freeflix_cli import terminal_image
     monkeypatch.setattr(terminal_image, "show_poster", lambda *a, **k: False)
@@ -88,7 +90,7 @@ def test_anime_sama_back_stack(monkeypatch):
     assert sum(1 for e in events if e[0] == "results") == 2
     # Sequence: results → season → episode → season → results → search prompt.
     kinds = [e[0] for e in events]
-    assert kinds == ["search", "results", "menu", "menu", "menu", "results"]
+    assert kinds == ["search", "results", "menu", "menu", "menu", "results"], events
 
 
 def test_anime_sama_entry_shows_planning_menu(monkeypatch):
@@ -145,3 +147,40 @@ def test_leave_label_detection_is_multilingual_and_safe():
     assert not _looks_like_leave("Back to the Future (1985)", 2, 20)
     assert not _looks_like_leave("Auto (best)", 4, 5)
     assert not _looks_like_leave("Exit", 0, 20)  # not the last row
+
+
+def test_detail_menus_stay_inline():
+    """Every season/language/episode/stream/quality/player menu must render
+    inline (poster/context kept) and not wipe the screen on Back. Guards the
+    'provider clears the episode list after selecting an anime' regression."""
+    import ast
+    from pathlib import Path
+
+    wanted = (
+        "Select Season", "Select Episode", "Select Language", "Select Stream",
+        "Select Player", "Select Subtitle", "Select quality",
+    )
+    offenders = []
+    base = Path(__file__).resolve().parents[1] / "src" / "freeflix_cli"
+    roots = [base / "handlers", base]
+    files = {p for root in roots for p in root.glob("*.py")}
+    files |= {base / "main.py", base / "player_manager.py"}
+    for path in sorted(files):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "select_from_list"):
+                continue
+            if len(node.args) < 2:
+                continue
+            prompt = ast.unparse(node.args[1])
+            if not any(k in prompt for k in wanted):
+                continue
+            kw = {k.arg: k.value for k in node.keywords}
+            inline = kw.get("inline")
+            cob = kw.get("clear_on_back")
+            if not (isinstance(inline, ast.Constant) and inline.value is True
+                    and isinstance(cob, ast.Constant) and cob.value is False):
+                offenders.append(f"{path}:{node.lineno} {prompt[:60]}")
+    assert not offenders, "detail menus must use inline=True, clear_on_back=False:\n" + "\n".join(offenders)

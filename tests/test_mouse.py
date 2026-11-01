@@ -455,3 +455,81 @@ def test_batch_stage_is_shown_in_the_row():
     con = Console(width=100, record=True, force_terminal=False)
     con.print(view.render(0, "Avatar"))
     assert "sequential retry" in con.export_text()
+
+
+def test_mouse_reader_windows_split_report_is_reassembled(monkeypatch):
+    """Windows Terminal may deliver the SGR report one byte at a time."""
+    chars = list("\x1b[<35;12;9M")
+    fake = types.ModuleType("msvcrt")
+    state = {"i": 0}
+
+    def getwch():
+        c = chars[state["i"]]
+        state["i"] += 1
+        return c
+
+    fake.getwch = getwch
+    fake.kbhit = lambda: state["i"] < len(chars)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(cu.os, "name", "nt")
+    monkeypatch.setattr(cu, "_esc_carry", False)
+    ev = cu._read_menu_key()
+    assert isinstance(ev, cu.MouseEvent)
+    assert ev.motion and (ev.x, ev.y) == (12, 9)
+
+
+def test_mouse_tracking_never_needs_termios_on_windows(monkeypatch):
+    writes = []
+    monkeypatch.setattr(cu, "_mouse_available", lambda: True)
+    monkeypatch.setattr(cu, "_mouse_write", writes.append)
+    monkeypatch.setattr(cu, "_mouse_active", False)
+    monkeypatch.setattr(cu.os, "name", "nt")
+    with cu.mouse_tracking() as active:
+        assert active is True
+    assert writes == [cu._MOUSE_ON, cu._MOUSE_OFF]
+
+
+def test_escape_incomplete_survives_unknown_terminals():
+    """Unknown CSI tails must not be decoded as typed text in the filter."""
+    assert cu._escape_incomplete(b"\x1b[99~") is False
+    assert cu._escape_incomplete(b"\x1b[1;2C") is False
+    assert cu._escape_incomplete(b"\x1b[I") is False
+
+
+def test_windows_legacy_console_disables_mouse(monkeypatch):
+    """No VT support → keyboard-only, never literal escape garbage."""
+    monkeypatch.setattr(cu, "_VT_READY", None)
+    monkeypatch.setattr(cu.os, "name", "nt")
+    monkeypatch.setattr(cu, "_enable_windows_vt", lambda: False)
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    import sys as _sys
+    monkeypatch.setattr(_sys, "stdin", FakeStdin())
+    monkeypatch.setattr(_sys, "stdout", FakeStdin())
+    monkeypatch.delenv("FREEFLIX_NO_MOUSE", raising=False)
+    assert cu._mouse_available() is False
+
+
+def test_windows_vt_console_enables_mouse(monkeypatch):
+    monkeypatch.setattr(cu.os, "name", "nt")
+    monkeypatch.setattr(cu, "_enable_windows_vt", lambda: True)
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+    import sys as _sys
+    monkeypatch.setattr(_sys, "stdin", FakeStdin())
+    monkeypatch.setattr(_sys, "stdout", FakeStdin())
+    monkeypatch.delenv("FREEFLIX_NO_MOUSE", raising=False)
+    assert cu._mouse_available() is True
+
+
+def test_vt_enable_is_cached_and_noop_on_posix(monkeypatch):
+    monkeypatch.setattr(cu, "_VT_READY", None)
+    monkeypatch.setattr(cu.os, "name", "posix")
+    assert cu._enable_windows_vt() is False
+    assert cu._VT_READY is False

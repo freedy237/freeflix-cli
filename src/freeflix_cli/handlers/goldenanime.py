@@ -63,7 +63,10 @@ def search_imdb_id(title: str):
                 choices.append(t("Enter manually"))
                 choices.append(t("Skip Subtitles"))
 
-                idx = select_from_list(choices, f"{t('Select IMDB match for')} '{title}':")
+                idx = select_from_list(
+                    choices, f"{t('Select IMDB match for')} '{title}':",
+                    clear_on_back=False, inline=True,
+                )
                 if idx < len(valid_metas):
                     selected = valid_metas[idx]
                     return selected["imdb_id"], selected["type"] == "movie"
@@ -199,7 +202,8 @@ def handle_goldenanime():
                     ] + [t("Manual Input"), t("← Back")]
                     with crumb(title):
                         ep_idx = select_from_list(
-                            ep_options, f"{icon('tv')} {t('Select Episode:')}"
+                            ep_options, f"{icon('tv')} {t('Select Episode:')}",
+                            clear_on_back=False, inline=True,
                         )
                     if ep_idx < max_episodes:
                         episode = ep_idx + 1
@@ -313,7 +317,8 @@ def _flow_goldenanime_stream(
         stream_labels.append(base)
 
     choice_idx = select_from_list(
-        stream_labels + [t("← Back")], f"{icon('tv')} {t('Select Stream:')}"
+        stream_labels + [t("← Back")], f"{icon('tv')} {t('Select Stream:')}",
+        clear_on_back=False, inline=True,
     )
 
     if choice_idx == len(valid_results):  # Back
@@ -331,7 +336,8 @@ def _flow_goldenanime_stream(
     want_subs = 1  # default: No
     if tracker.get_subtitle_search():
         want_subs = select_from_list(
-            [t("Yes"), t("No")], f"{t('Search subtitles in')} {lang_name} ?"
+            [t("Yes"), t("No")], f"{t('Search subtitles in')} {lang_name} ?",
+            clear_on_back=False, inline=True,
         )
     if want_subs == 0:
         # Try to resolve title if missing
@@ -374,6 +380,7 @@ def _flow_goldenanime_stream(
                     season_options,
                     t("Select Season (for subtitles mapping):"),
                     default_index=default_season_idx,
+                    clear_on_back=False, inline=True,
                 )
                 skip_subs = False
                 if s_idx < 10:
@@ -398,7 +405,11 @@ def _flow_goldenanime_stream(
                     sub_choices = [
                         f"{s['source']} - {s.get('lang', lang_name)}" for s in subs[:5]
                     ] + [t("None")]
-                    sub_idx = select_from_list(sub_choices, f"📝 {t('Select Subtitle:')}")
+                    sub_idx = select_from_list(
+                        sub_choices,
+                        f"{icon('subtitle')} {t('Select Subtitle:')}",
+                        clear_on_back=False, inline=True,
+                    )
                     if sub_idx < len(sub_choices) - 1:
                         subtitle_url = subs[sub_idx]["url"]
                         print_info(f"{t('Selected subtitle from:')} {subs[sub_idx]['source']}")
@@ -498,8 +509,9 @@ def handle_goldenanime_episode(
         if success:
             next_ep = episode + 1
             choice = select_from_list(
-                [f"▶ {t('Play Episode')} {next_ep}", t("← Back")],
+                [f"{icon('play')} {t('Play Episode')} {next_ep}", t("← Back")],
                 f"{t('Episode')} {episode} {t('finished:')}",
+                clear_on_back=False, inline=True,
             )
             if choice == 0:
                 episode = next_ep
@@ -534,11 +546,14 @@ def resume_goldenanime(data):
     print_info(f"{t('Found progress:')} [cyan]{display_title}[/cyan] - {t('Episode')} {episode}")
 
     options = [
-        f"▶ {t('Continue')} ({t('Episode')} {episode + 1})",
-        f"🔁 {t('Watch again')} ({t('Episode')} {episode})",
+        f"{icon('play')} {t('Continue')} ({t('Episode')} {episode + 1})",
+        f"{icon('repeat')} {t('Watch again')} ({t('Episode')} {episode})",
         t("← Cancel"),
     ]
-    choice = select_from_list(options, t("What would you like to do?"))
+    choice = select_from_list(
+        options, t("What would you like to do?"),
+        clear_on_back=False, inline=True,
+    )
 
     if choice == 2:  # Cancel
         return

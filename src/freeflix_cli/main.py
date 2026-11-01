@@ -557,6 +557,13 @@ def _browse_new_releases(items=None):
         return
     it = items[idx]
 
+    # Keep the selected artwork on screen while choosing language/episode.
+    from . import terminal_image
+    terminal_image.show_poster(
+        it.get("poster", ""),
+        info_lines=[it.get("latest_season", "")],
+    )
+
     try:
         with spinner(f"{t('Loading')} {it['latest_season']}…"):
             season = anime_sama.get_season(it["season_url"])
@@ -576,8 +583,11 @@ def _browse_new_releases(items=None):
             if len(langs) == 1:
                 lang = langs[0]
             else:
-                li = select_from_list(langs + [t("← Back")],
-                                      f"{icon('globe')} {t('Select Language:')}")
+                li = select_from_list(
+                    langs + [t("← Back")],
+                    f"{icon('globe')} {t('Select Language:')}",
+                    clear_on_back=False, inline=True,
+                )
                 if li >= len(langs):
                     return
                 lang = langs[li]
@@ -593,6 +603,7 @@ def _browse_new_releases(items=None):
                         ep_labels + [t("← Back")],
                         f"{icon('tv')} {t('Select Episode:')}",
                         default_index=min(ep_idx, len(episodes) - 1),
+                        clear_on_back=False, inline=True,
                     )
                 if ep_idx >= len(episodes):
                     break
@@ -1292,10 +1303,33 @@ def main():
                             tracker.set_anilist_token("")
                             toast(t("AniList removed."))
                             return
-                    nt = get_user_input(t("Enter new AniList Token"))
+                    nt = get_user_input(
+                        t("Enter new AniList Token"),
+                    )
                     if nt:
-                        tracker.set_anilist_token(nt)
-                        toast(t("Token saved."))
+                        nt = nt.strip()
+                        if nt.lower().startswith("bearer "):
+                            nt = nt[7:].strip()
+                        # Guard against pasting the OAuth CLIENT SECRET from
+                        # anilist.co/apps/developer (a 40-char hex string):
+                        # it is not a user token, so AniList answers 400
+                        # "Invalid token" and every AniList screen fails.
+                        import re as _re
+                        if (32 <= len(nt) <= 64
+                                and _re.fullmatch(r"[A-Za-z0-9]+", nt)
+                                and "." not in nt):
+                            print_warning(t(
+                                "This looks like the API Client SECRET, not a user "
+                                "token. Open the AniList authorize page and copy "
+                                "the token from the URL."
+                            ))
+                            print_info(t(
+                                "AniList → Settings → Developer → Create client "
+                                "(use the authorize link)."
+                            ))
+                        else:
+                            tracker.set_anilist_token(nt)
+                            toast(t("Token saved."))
 
                 def _a_lang():
                     ls = get_all_languages()

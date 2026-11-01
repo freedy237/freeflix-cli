@@ -488,14 +488,21 @@ class AnimeExtractor:
                     break
             if not ep_id:
                 return []
-            r = _get(
-                f"{base}/api/theme/episode/servers?episodeId={ep_id}",
-                timeout=12,
-            )
-            try:
-                servers_html = r.json().get("html", "")
-            except Exception:
-                return []
+            skey = f"hianime:servers:{ep_id}"
+            cached = httpcache.get(skey, 300)
+            if cached is not None:
+                servers_html = cached
+            else:
+                r = _get(
+                    f"{base}/api/theme/episode/servers?episodeId={ep_id}",
+                    timeout=12,
+                )
+                try:
+                    servers_html = r.json().get("html", "")
+                except Exception:
+                    return []
+                if cacheable_body(servers_html):
+                    httpcache.store(skey, servers_html)
 
             for lang in ("sub", "dub"):
                 # ZokoAnime first (known payload layout), HD-1 as fallback.

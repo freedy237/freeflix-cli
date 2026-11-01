@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.16.0
+
+- **Navigation sans effacement** : les menus saison, langue, épisode, lecteur,
+  qualité et sous-titres sont désormais **inline partout** (Anime-Sama,
+  French-Stream, French-Manga, GoldenMS, GoldenAnime, HiAnime, Coflix,
+  Papystreaming, AniList, YTS/Nyaa, historique). Le poster et le contexte
+  restent affichés ; « Retour » ne nettoie plus l'écran. Le flux « Nouveautés »
+  (planning Anime-Sama) affiche lui aussi le poster avant les menus.
+- **Performances** :
+  - French-Stream : cache des pages/JSON (5 min) et sondage de vie des lecteurs
+    en **HEAD parallèle** (4 s max) au lieu d'une extraction complète :
+    sélection d'un film **93 s → 1,3 s** à froid, **0,03 s** au retour.
+  - French-Manga : cache des recherches (5 min) et des listes d'épisodes
+    (5 min) : recherche **7,4 s → 0,003 s**, épisodes **2,2 s → 0,003 s**.
+  - Durée HLS mémorisée (3 min) : l'analyse de qualité et la lecture ne
+    téléchargent plus deux fois la même playlist de 1100 segments.
+  - HiAnime : la liste des serveurs d'un épisode est mémorisée 5 min, donc
+    revenir sur un épisode ne relance plus la requête.
+  - Posters : seuls les 8 résultats autour du curseur sont rendus par chafa ;
+    les autres sont seulement téléchargés, ce qui garde les longues listes
+    fluides.
+- **Faux positifs** : après analyse, les lecteurs morts (`✗`) et les vidéos de
+  moins de 90 s sont retirés du menu ; s'ils échouent tous, un avertissement
+  clair s'affiche au lieu de laisser croire à une source valide.
+- **Faux positifs « vidéo de 30 s »** : l'analyse de qualité mesure désormais
+  la durée réelle du flux. Un flux HLS de moins de 90 s est affiché `⚠ 30s`
+  au lieu d'une fausse qualité `720p ~1.0 Mbps`, et le téléchargement refuse
+  de publier un extrait.
+- **Cohérence UI** : plus d'emoji codés en dur pour la langue, le lecteur, la
+  qualité et les sous-titres — tout passe par `icon()` (mode emoji/Nerd Font).
+- **AniList** : un jeton invalide ou expiré affiche maintenant un message
+  clair au lieu d'une erreur HTTP brute ; les erreurs passagères (timeout,
+  429, 5xx) sont réessayées 3 fois. Le flux « trending » n'envoie plus le
+  jeton personnel, donc un jeton mort ne masque plus les nouvelles sorties.
+  Le champ « nouveau jeton » refuse le **Secret du client API** et explique
+  où récupérer le vrai `access_token`.
+- **Windows — console sans VT** : FreeFlix active maintenant
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING` avant le suivi souris ; sur une console
+  classique qui refuse ce mode, il bascule proprement en navigation clavier.
+- **Sélection de texte** : un rappel « Shift+drag → sélectionner du texte »
+  est ajouté à l'aide (`?`). Maintenir Maj pendant le glissement utilise la
+  sélection native du terminal ; elle revient à la sortie de l'écran.
+- **Audit complet des sources et lecteurs** (12 sources, ~80 contrôles en
+  direct) : 2 faux positifs éliminés, 2 lecteurs réparés.
+- **xtremestream (Coflix « Vidéo HD et 1080p »)** : le manifeste `xs1.php`
+  répond 403 sans la page lecteur comme Referer. Le Referer/Origin est
+  maintenant conservé pour le manifeste ET les segments : le lecteur passe de
+  « qualité affichée puis 404 » à **3688 s en 720p**.
+- **LuluStream** : résolu à nouveau (3688 s, 720p ~1.4 Mbps).
+- **Manifestes sans extension** (`/player/xs1.php?data=…`) : la durée est
+  désormais lue et vérifiée, même sans `.m3u8` dans l'URL.
+- **Playlists volumineuses** : la limite de sonde passe de 2 à 4 Mo pour les
+  playlists HLS (One Piece ≈ 1100 segments), afin que la vérification de durée
+  ne soit plus silencieusement ignorée.
+- **uqload** : Referer/Origin transmis pour le flux, en plus du garde-fou de
+  durée.
+- **French-Stream** : les fiches gardent des lecteurs supprimés par le site
+  (voe répond 404). Ils sont maintenant retirés de la liste (404/410) au lieu
+  d'échouer à la lecture ; les autres erreurs réseau gardent la ligne.
+- **Coflix** : `Vidéo HD et 1080p` (xtremestream) lit la durée (3688 s) au
+  lieu d'afficher une qualité sans preuve ; `LuluStream` de nouveau résolu.
+  `VidMoly`, `coflix.upn`, `minochinos` et `Netu` restent indisponibles côté
+  hébergeur (marqués ✗, le lecteur suivant est proposé). `Veed` se résout mais
+  n'expose ni variante ni durée.
+- **Tests** : 493 tests au vert, ruff OK.
+
 ## 1.15.1
 
 - **Téléchargements en lot (Anime-Sama / uqload)** : les épisodes après les

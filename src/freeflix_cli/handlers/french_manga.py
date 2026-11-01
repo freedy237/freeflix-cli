@@ -61,7 +61,9 @@ def _play_episodes(series_title, series_url, lang, episodes, ep_nums, ep_idx, co
         if ep_idx + 1 < len(ep_nums):
             nxt = ep_nums[ep_idx + 1]
             if select_from_list(
-                [t("Yes"), t("No")], f"{t('Play next episode:')} {t('Episode')} {nxt}?"
+                [t("Yes"), t("No")],
+                f"{t('Play next episode:')} {t('Episode')} {nxt}?",
+                clear_on_back=False, inline=True,
             ) == 0:
                 ep_idx += 1
                 continue
@@ -141,6 +143,7 @@ def handle_french_manga():
                         lang_idx = select_from_list(
                             langs + [t("← Back")],
                             f"{icon('globe')} {t('Select Language:')}",
+                            clear_on_back=False, inline=True,
                         )
                     if lang_idx >= len(langs):
                         break  # → results
@@ -158,6 +161,7 @@ def handle_french_manga():
                         ep_idx = select_from_list(
                             ep_options, f"{icon('tv')} {t('Select Episode:')}",
                             default_index=min(ep_idx, len(ep_nums) - 1),
+                            clear_on_back=False, inline=True,
                         )
                     if ep_idx == len(ep_nums):  # Download ALL
                         ep_objects = [
@@ -236,10 +240,13 @@ def resume_french_manga(data):
     options = []
     if has_next:
         options.append(f"▶ {t('Continue')} ({t('Episode')} {ep_nums[cur_idx + 1]})")
-    options.append(f"🔁 {t('Watch again')} ({t('Episode')} {cur_ep})")
+    options.append(f"{icon('repeat')} {t('Watch again')} ({t('Episode')} {cur_ep})")
     options.append(t("← Cancel"))
 
-    choice = select_from_list(options, t("What would you like to do?"))
+    choice = select_from_list(
+        options, t("What would you like to do?"),
+        clear_on_back=False, inline=True,
+    )
     if options[choice] == t("← Cancel"):
         return
 

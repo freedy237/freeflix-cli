@@ -79,16 +79,25 @@ def handle_anilist_continue():
     else:
         print_info(f"{t('Target:')} [cyan]{media_title}[/cyan] - {t('Episode')} {next_episode_num}")
 
+    # Extract cover URL for both providers (extraLarge = sharpest) and keep
+    # the artwork visible while choosing the source.
+    _ci = selected_entry["media"].get("coverImage", {}) or {}
+    cover_url = _ci.get("extraLarge") or _ci.get("large") or _ci.get("medium")
+    from .. import terminal_image
+    terminal_image.show_poster(
+        cover_url or "",
+        info_lines=[f"{t('Episode')} {next_episode_num}"],
+    )
+
     # --- Provider Selection ---
     providers = ["Anime-Sama (VF/VOSTFR)", "GoldenAnime (VO)", t("← Back")]
-    p_choice = select_from_list(providers, t("Select a Provider:"))
+    p_choice = select_from_list(
+        providers, t("Select a Provider:"),
+        clear_on_back=False, inline=True,
+    )
 
     if p_choice == 2:  # Back
         return
-
-    # Extract cover URL for both providers (extraLarge = sharpest)
-    _ci = selected_entry["media"].get("coverImage", {}) or {}
-    cover_url = _ci.get("extraLarge") or _ci.get("large") or _ci.get("medium")
 
     if p_choice == 1:  # GoldenAnime
         goldenanime.handle_goldenanime_episode(
@@ -144,8 +153,11 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
 
     if not results:
         print_warning(t("No results found on Anime-Sama."))
-        if select_from_list([t("Try Manual Search"), t("← Back")],
-                            t("What would you like to do?")) != 0:
+        if select_from_list(
+            [t("Try Manual Search"), t("← Back")],
+            t("What would you like to do?"),
+            clear_on_back=False, inline=True,
+        ) != 0:
             return
         manual_query = get_user_input(t("Enter search query"))
         if not manual_query:
@@ -158,10 +170,21 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
     target_season_num = _anilist_target_season(media_title, romaji_title)
     from .playback import play_episode_flow
 
+    previews = [
+        make_preview(
+            cover=getattr(r, "img", ""),
+            title=r.title,
+            lines=[", ".join(getattr(r, "genres", []) or [])],
+            panel_title="AniList → Anime-Sama",
+        )
+        for r in results
+    ]
+
     while True:  # ── Match level ──
-        r_idx = select_from_list(
-            [r.title for r in results] + [t("← Back")],
+        r_idx = select_with_preview(
+            [r.title for r in results],
             t("Select the matching result:"),
+            previews,
         )
         if r_idx >= len(results):
             return  # → home
@@ -178,6 +201,16 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
             print_warning(t("No seasons found."))
             pause()
             continue
+
+        from .. import terminal_image
+        terminal_image.show_poster(
+            getattr(series, "img", "") or getattr(selection, "img", ""),
+            info_lines=[
+                f"{len(series.seasons)} "
+                f"{t('season') if len(series.seasons) == 1 else t('seasons')}",
+                ", ".join(getattr(series, "genres", []) or []),
+            ],
+        )
 
         default_season_idx = 0
         if target_season_num is not None:
@@ -198,6 +231,7 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
                 [sea.title for sea in series.seasons] + [t("← Back")],
                 f"{icon('tv')} {t('Select Season:')}",
                 default_index=default_season_idx,
+                clear_on_back=False, inline=True,
             )
             if season_idx >= len(series.seasons):
                 break  # → match list
@@ -227,6 +261,7 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
                     lang_idx = select_from_list(
                         langs + [t("← Back")],
                         f"{icon('globe')} {t('Select Language:')}",
+                        clear_on_back=False, inline=True,
                     )
                     if lang_idx >= len(langs):
                         break  # → season
@@ -247,6 +282,7 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
                     chosen = select_from_list(
                         [e.title for e in episodes] + [t("← Back")],
                         f"{icon('tv')} {t('Select Episode:')}",
+                        clear_on_back=False, inline=True,
                     )
                     if chosen >= len(episodes):
                         break  # → language
@@ -283,6 +319,7 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
                     if ep_idx + 1 < len(episodes) and select_from_list(
                         [t("Yes"), t("No")],
                         f"{t('Play next:')} {episodes[ep_idx + 1].title} ?",
+                        clear_on_back=False, inline=True,
                     ) == 0:
                         ep_idx += 1
                         continue

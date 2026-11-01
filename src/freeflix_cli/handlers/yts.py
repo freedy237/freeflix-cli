@@ -74,7 +74,8 @@ def _pick_quality(movie: dict):
         for q in movie["qualities"]
     ] + [t("← Back")]
     idx = select_from_list(
-        opts, f"{icon('download')} {t('Select quality:')} {movie['title'][:50]}"
+        opts, f"{icon('download')} {t('Select quality:')} {movie['title'][:50]}",
+        clear_on_back=False, inline=True,
     )
     if idx >= len(movie["qualities"]):
         return None
@@ -119,7 +120,10 @@ def _play_results(results, prompt_title):
                     f"{icon('play')} {t('Download + Watch')}",
                     t("← Back"),
                 ]
-                act = select_from_list(actions, f"{movie['title'][:55]} [{q['quality']}]")
+                act = select_from_list(
+                    actions, f"{movie['title'][:55]} [{q['quality']}]",
+                    clear_on_back=False, inline=True,
+                )
                 if act == 3:
                     continue  # → quality picker
                 if act == 0:
@@ -235,7 +239,10 @@ def _play_latest(latest: list) -> None:
                 f"{icon('play')} {t('Download + Watch')}",
                 t("← Back"),
             ]
-            act = select_from_list(actions, (r.get("show") or r["filename"])[:60])
+            act = select_from_list(
+                actions, (r.get("show") or r["filename"])[:60],
+                clear_on_back=False, inline=True,
+            )
             if act == 3:
                 break  # → episode list
             if act == 0:
@@ -324,7 +331,8 @@ def _handle_series():
             ]
             while True:  # ── Releases level ──
                 r_idx = select_from_list(
-                    opts + [t("← Back")], f"S{season:02d}E{episode:02d}"
+                    opts + [t("← Back")], f"S{season:02d}E{episode:02d}",
+                    clear_on_back=False, inline=True,
                 )
                 if r_idx >= len(rels):
                     break  # → results
@@ -338,7 +346,10 @@ def _handle_series():
                         f"{icon('play')} {t('Download + Watch')}",
                         t("← Back"),
                     ]
-                    act = select_from_list(actions, rel["filename"][:60])
+                    act = select_from_list(
+                        actions, rel["filename"][:60],
+                        clear_on_back=False, inline=True,
+                    )
                     if act == 3:
                         break  # → releases
                     if act == 0:

@@ -10,12 +10,14 @@ Players are plain host→embed maps (vidzy, luluvid, …) resolved by the
 shared player.get_hls_link extractors.
 """
 
+import json
 import re
 from curl_cffi import requests as cffi_requests
 from .objects import SearchResult, Player
 from ..net_config import DNS_OPTIONS
 from .config import portals
-from .utils import clean_text, parse_html
+from .utils import cacheable_body, clean_text, parse_html
+from .. import httpcache
 
 website_origin = portals.get("french-manga", "https://w16.french-manga.net").rstrip("/")
 
@@ -51,21 +53,31 @@ def _post(url, data=None, **kw):
 
 
 def search(query: str) -> list:
-    """Search via the DLE ajax endpoint. Returns a list of SearchResult."""
-    try:
-        r = _post(
-            f"{website_origin}/engine/ajax/search.php",
-            data={"query": query},
-            headers=_ajax_headers(),
-        )
-        r.raise_for_status()
-    except Exception:
-        return []
+    """Search via the DLE ajax endpoint. Returns a list of SearchResult.
+
+    Results are cached for 5 min: backing out of a series and re-opening the
+    same search used to re-run the DLE request every time.
+    """
+    ckey = f"french-manga:search:{query.strip().lower()}"
+    body = httpcache.get(ckey, 300)
+    if body is None:
+        try:
+            r = _post(
+                f"{website_origin}/engine/ajax/search.php",
+                data={"query": query},
+                headers=_ajax_headers(),
+            )
+            r.raise_for_status()
+        except Exception:
+            return []
+        body = r.text or ""
+        if cacheable_body(body):
+            httpcache.store(ckey, body)
 
     results = []
     # Par carte (BeautifulSoup) plutôt qu'une regex DOTALL inter-cartes qui
     # mélangeait les posters quand une carte n'avait pas de titre.
-    soup = parse_html(r.text)
+    soup = parse_html(body)
     for card in soup.find_all("div", {"class": "search-item"}):
         onclick = card.attrs.get("onclick", "")
         m = re.search(r"location\.href='([^']+)'", onclick)
@@ -147,18 +159,30 @@ def get_episodes(url: str) -> dict:
     out = {"title": "", "cover": "", "vf": {}, "vostfr": {}}
     url = _abs_url(url)
     try:
-        page = _get(url, timeout=20)
-        out["cover"] = _extract_cover(page.text)
-        news_id = _extract_news_id(page.text)
+        pkey = f"french-manga:page:{url}"
+        page_body = httpcache.get(pkey, 300)
+        if page_body is None:
+            page = _get(url, timeout=20)
+            page_body = page.text or ""
+            if cacheable_body(page_body):
+                httpcache.store(pkey, page_body)
+        out["cover"] = _extract_cover(page_body)
+        news_id = _extract_news_id(page_body)
         if not news_id:
             return out
 
-        api = _get(
-            f"{website_origin}/engine/ajax/manga_episodes_api.php?id={news_id}",
-            headers=_ajax_headers(),
-            timeout=15,
-        )
-        data = api.json()
+        akey = f"french-manga:episodes:{news_id}"
+        api_body = httpcache.get(akey, 300)
+        if api_body is None:
+            api = _get(
+                f"{website_origin}/engine/ajax/manga_episodes_api.php?id={news_id}",
+                headers=_ajax_headers(),
+                timeout=15,
+            )
+            api_body = api.text or ""
+            if cacheable_body(api_body):
+                httpcache.store(akey, api_body)
+        data = json.loads(api_body)
     except Exception:
         return out
 

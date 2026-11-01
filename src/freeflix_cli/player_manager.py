@@ -26,6 +26,7 @@ from .net_config import shared_session
 from typing import Dict
 from .tracker import tracker
 from .i18n import t
+from .icons import icon
 
 
 DEFAULT_USER_AGENT = (
@@ -471,14 +472,25 @@ def _probe_stream(stream_url: str, headers: dict,
 _PROBE_MAX_BYTES = 2_000_000  # une playlist HLS fait des Ko, jamais des Mo
 
 
-def _safe_probe_text(sess, url: str, headers: dict, timeout: int = 12) -> str | None:
-    """GET capé pour les sondes : HEAD d'abord (skip si > max), sinon GET.
-    Évite de charger des Go en RAM quand l'URL est une vidéo directe sans
-    extension. Fail-open : en cas de doute on tente le GET normal."""
+# HLS playlists can be huge on long series (One Piece: ~1100 segments), yet
+# they are text measured in a few hundred KB — never a video. Without this
+# exemption the 2 MB probe cap rejected them and the "expected duration"
+# check was skipped (so a 30 s or truncated file could pass).
+_HLS_LIST_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _safe_probe_text(sess, url: str, headers: dict, timeout: int = 12,
+                     sloppy: bool = False) -> str | None:
+    """GET capé pour les sondes : HEAD d'abord (skip si > _PROBE_MAX_BYTES),
+    sinon GET. Évite de charger des Go en RAM quand l'URL est une vidéo
+    directe sans extension. ``sloppy`` = appelant va parser un manifeste HLS :
+    un 404/403 ne casse plus tout (on réessaie), et la limite est élargie
+    (playlist texte volumineuse). Fail-open : en cas de doute on tente le GET."""
+    limit = _HLS_LIST_MAX_BYTES if sloppy else _PROBE_MAX_BYTES
     try:
         h = sess.head(url, headers=headers or {}, timeout=timeout)
         cl = h.headers.get("Content-Length") or h.headers.get("content-length")
-        if cl is not None and int(cl) > _PROBE_MAX_BYTES:
+        if cl is not None and int(cl) > limit:
             return None
     except Exception:
         pass
@@ -486,7 +498,7 @@ def _safe_probe_text(sess, url: str, headers: dict, timeout: int = 12) -> str | 
         text = sess.get(url, headers=headers or {}, timeout=timeout).text or ""
     except Exception:
         return None
-    if len(text) > _PROBE_MAX_BYTES:
+    if len(text) > limit:
         return None
     return text
 
@@ -504,7 +516,7 @@ def _prompt_hls_quality(variants: list):
     opts.append(t("Auto (best)"))
     opts.append(t("← Back"))
     idx = select_from_list(
-        opts, t("📺 Choisis la qualité :"),
+        opts, f"{icon('tv')} {t('Select quality:')}",
         clear_on_back=False, inline=True,
     )
     if idx == len(variants):  # Auto
@@ -614,6 +626,18 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
     if height:
         return {"height": height, "mbps": round(bitrate / 1_000_000, 1) if bitrate else 0}
     return None
+
+
+def is_likely_ad_placeholder(info: dict) -> bool:
+    """True when an analysed stream looks like a short ad/preview, not an episode.
+
+    Some hosts answer with a ~30 s clip instead of the episode (uqload ads,
+    wishonly 404 pages, xtremestream without its player Referer). The quality
+    menu used to show them as valid streams. Rule: a resolved HLS stream whose
+    real duration is shorter than 90 s. Unknown duration is never flagged.
+    """
+    dur = (info or {}).get("duration")
+    return isinstance(dur, (int, float)) and 0 < dur < 90
 
 
 def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: int = 9) -> dict:
@@ -730,6 +754,21 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
         out["probe_headers"] = probe_headers
         if variants:
             out["variant_uri"] = variants[0].get("uri")
+        # Short provenance: lets the quality menu flag a 30 s ad and lets
+        # playback/download reject it, instead of showing "720p ~1.0 Mbps"
+        # for what is actually a placeholder. ANY HLS-ish provider may point
+        # to an extension-less manifest (xtremestream: /player/xs1.php?data=…),
+        # so probe whenever the URL isn't a plain video file.
+        if not is_dash and not str(
+                stream_url.split("?")[0]).lower().endswith(_DIRECT_MEDIA_EXTS):
+            try:
+                _dur, _short = _expected_hls_info(
+                    stream_url, probe_headers, timeout=min(8, timeout)
+                )
+                if _dur:
+                    out["duration"] = round(float(_dur), 1)
+            except Exception:
+                pass
         out["ok"] = True
     except Exception:
         return out
@@ -820,6 +859,9 @@ def format_quality_label(info: dict) -> str:
     """
     if not info or not info.get("ok"):
         return "✗" if not (info or {}).get("blocked") else "🔒"
+    if is_likely_ad_placeholder(info):
+        # e.g. a 30 s ad served by uqload: show it instead of a fake quality.
+        return f"⚠ {info.get('duration')}s"
     qs = info.get("qualities") or []
     if not qs:
         return "✓"  # resolves, but resolution/bitrate couldn't be read
@@ -1462,8 +1504,26 @@ def _resolve_tool(name: str) -> str | None:
     return None
 
 
-def _expected_hls_info(stream_url: str, headers: dict = None,
-                       timeout: int = 12):
+def m3u8_has_variants(text: str) -> bool:
+    """True when a playlist text is a MASTER (variants), not a media list.
+
+    #EXT-X-STREAM-INF is the canonical marker, but a variant URI line can be
+    parsed by the m3u8 library even when a host emits a slightly different
+    header. Prefer the library's own parse, with a text fallback.
+    """
+    if not text:
+        return False
+    if "#EXT-X-STREAM-INF" in text or "#EXT-X-MEDIA:" in text:
+        return "#EXTM3U" in text[:4096]
+    try:
+        import m3u8 as _m3u8
+        return bool(_m3u8.loads(text).playlists)
+    except Exception:
+        return False
+
+
+def _expected_hls_info_uncached(stream_url: str, headers: dict = None,
+                                timeout: int = 12):
     """``(expected_duration, shortest_segment)`` for a VOD HLS stream.
 
     The shortest segment gives the verification tolerance: a tolerance smaller
@@ -1476,32 +1536,39 @@ def _expected_hls_info(stream_url: str, headers: dict = None,
         import m3u8 as _m3u8
 
         sess = shared_session()
-        text = _safe_probe_text(sess, stream_url, headers or {}, timeout=timeout)
+        text = _safe_probe_text(sess, stream_url, headers or {},
+                                timeout=timeout, sloppy=True)
         if not text or "#EXTM3U" not in text[:4096]:
             return (None, None)
-        obj = _m3u8.loads(text, uri=stream_url)
-        if obj.playlists:
-            # Duration is identical across variants; use the richest one to
-            # avoid an I-frame-only / audio-description playlist.
+        # A "#EXTM3U" without any variant IS a media playlist: parse it as-is.
+        # Same for a master whose variants are all unusable.
+        obj = None
+        # m3u8 always fills `.playlists` for #EXT-X-STREAM-INF, but some
+        # builds also expose variants without that tag in a direct child.
+        if m3u8_has_variants(text):
+            obj = _m3u8.loads(text, uri=stream_url)
             variants = sorted(
                 obj.playlists,
                 key=lambda p: (p.stream_info.bandwidth or 0),
                 reverse=True,
             )
-            text = None
             for p in variants[:4]:
                 try:
                     media = p.absolute_uri
                 except Exception:
                     media = p.uri
                 t2 = _safe_probe_text(sess, media, headers or {},
-                                      timeout=timeout)
+                                      timeout=timeout, sloppy=True)
                 if t2 and "#EXTINF" in t2:
                     text = t2
                     obj = _m3u8.loads(t2, uri=media)
                     break
-            if text is None:
+            else:
+                obj = None
+        if obj is None:
+            if "#EXTINF" not in (text or ""):
                 return (None, None)
+            obj = _m3u8.loads(text, uri=stream_url)
         is_vod = bool(getattr(obj, "is_endlist", False)) or (
             (getattr(obj, "playlist_type", "") or "").upper() == "VOD"
         )
@@ -1524,6 +1591,37 @@ def _expected_hls_info(stream_url: str, headers: dict = None,
         return (total, shortest)
     except Exception:
         return (None, None)
+
+
+_hls_info_cache: dict = {}
+_hls_info_lock = _threading.Lock()
+_HLS_INFO_TTL = 180.0
+
+
+def _expected_hls_info(stream_url: str, headers: dict = None,
+                       timeout: int = 12):
+    """Cached wrapper: quality analysis and the download both need the same
+    playlist duration; fetching a 1100-segment playlist twice per episode was
+    pure latency. Only successful VOD results are cached."""
+    import time as _time
+    try:
+        key = (stream_url, tuple(sorted((headers or {}).items())))
+    except Exception:
+        key = (stream_url, ())
+    now = _time.time()
+    with _hls_info_lock:
+        ent = _hls_info_cache.get(key)
+        if ent and now - ent[0] < _HLS_INFO_TTL:
+            return ent[1]
+    result = _expected_hls_info_uncached(stream_url, headers, timeout)
+    if result and result[0]:
+        with _hls_info_lock:
+            _hls_info_cache[key] = (now, result)
+            if len(_hls_info_cache) > 256:
+                for old in sorted(_hls_info_cache.items(),
+                                  key=lambda kv: kv[1][0])[:64]:
+                    _hls_info_cache.pop(old[0], None)
+    return result
 
 
 def _expected_hls_seconds(stream_url: str, headers: dict = None,
@@ -2154,6 +2252,20 @@ def _download_stream(
                 f"({_download_reason(reason)}). "
                 f"{t('Retrying to fetch the missing parts…')}"
             )
+        if reason == "short" and expected_duration:
+            # Often the host itself served an ad/preview instead of the
+            # episode: retrying the same URL cannot fix that. Tell the user
+            # to pick another player instead of pretending it is a gap.
+            _dur, _ = _ffprobe_file_info(staged, timeout=20)
+            if _dur and _dur < 90:
+                if not output_suppressed:
+                    print_error(t(
+                        "This player returned a very short video "
+                        "(ad/preview), not the episode. Pick another server."
+                    ))
+                _keep_incomplete(staged)
+                _purge_download_temp(frag_tmp)
+                return False
         # Keep it under a name yt-dlp/aria2c won't consider "already complete".
         _keep_incomplete(staged)
         staged = None
@@ -2647,7 +2759,8 @@ def play_video(
                         t("← Back"),
                     ]
                 player_choice = select_from_list(
-                    player_labels, t("🎮 Select video player:"),
+                    player_labels,
+                    f"{icon('gamepad')} {t('Select video player:')}",
                     clear_on_back=False, inline=True,
                 )
 

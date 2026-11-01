@@ -221,3 +221,27 @@ def test_vidzy_gate_appends_gk_and_remembers_cookie(monkeypatch):
         "Referer": "https://vidzy.cc/",
         "Origin": "https://vidzy.cc",
     }
+
+
+def test_uqload_stream_keeps_its_referer(monkeypatch):
+    """uqload edges 403 without the embed origin: keep it with the URL."""
+    from freeflix_cli.scraping import player as pl
+
+    real = ("https://strm1.uqload.vc/hls2/01/0195/abc_n/master.m3u8"
+            "?t=TOKEN&s=1&e=14400&v=1&i=0.0&sp=0")
+    class _R:
+        text = 'var player={file:"' + real + '"}'
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(pl, "_get", lambda *a, **k: _R())
+    monkeypatch.setattr(pl, "_hls_duration_seconds", lambda *a, **k: 1387.0)
+    out = pl.get_hls_link_uqload(
+        "https://uqload.vc/embed-abc.html",
+        {"Referer": "https://anime-sama.to/"},
+    )
+    assert out == real
+    h = pl.get_stream_headers(out)
+    assert h["Referer"] == "https://uqload.vc/"
+    assert h["Origin"] == "https://uqload.vc"

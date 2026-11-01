@@ -53,6 +53,7 @@ _FR = {
     "Yes": "Oui",
     "No": "Non",
     "OK": "OK",
+    "select text with the mouse": "sélectionner du texte à la souris",
     "Install it now?": "L'installer maintenant ?",
 
     # ── History ─────────────────────────────────────────────────
@@ -94,11 +95,15 @@ _FR = {
     "→ Pick ANOTHER source from the list (e.g. Vidlink, another server), or try again later.":
         "→ Choisis une AUTRE source dans la liste (ex: Vidlink, un autre serveur), ou réessaie plus tard.",
     "🎮 Select Player:": "🎮 Choisis le lecteur :",
+    "Select Player:": "Choisis le lecteur :",
+    "Select video player:": "Choisis le lecteur vidéo :",
+    "Nyaa.si Torrents": "Torrents Nyaa.si",
     "No results found.": "Aucun résultat trouvé.",
     "No seasons found.": "Aucune saison trouvée.",
     "No episodes found.": "Aucun épisode trouvé.",
     "No players found for this episode.": "Aucun lecteur trouvé pour cet épisode.",
     "No supported players found.": "Aucun lecteur supporté.",
+    "No player could be verified — trying anyway.": "Aucun lecteur n'a pu être vérifié — on essaie quand même.",
     "Mark which episode as watched?": "Marquer quel épisode comme vu ?",
     "✓ Mark an episode as watched (no play)": "✓ Marquer un épisode comme vu (sans le lire)",
     "Download ALL episodes": "Télécharger TOUS les épisodes",
@@ -350,7 +355,11 @@ _FR = {
     "manual": "manuel",
     "browser": "navigateur",
     "Select download quality:": "Choisis la qualité :",
-    "Enter new AniList Token": "Saisis le nouveau jeton AniList",
+    "Enter new AniList Token": "Saisis le nouveau jeton AniList (pas le Secret du client)",
+    "This looks like the API Client SECRET, not a user token. Open the AniList authorize page and copy the token from the URL.":
+        "On dirait le SECRET du client API, pas un jeton utilisateur. Ouvre la page d'autorisation AniList et copie le jeton depuis l'URL.",
+    "AniList → Settings → Developer → Create client (use the authorize link).":
+        "AniList → Settings → Developer → Create client, puis ouvre le lien authorize.",
     "Enter OpenSubtitles API key": "Saisis la clé API OpenSubtitles",
     "Token saved.": "Jeton enregistré.",
     "Change token": "Modifier le jeton",
@@ -608,6 +617,8 @@ _FR = {
         'Ce flux uqload est un extrait de 30 s. Choisis un autre lecteur.',
     'again to cancel': 'encore pour annuler',
     'sequential retry': 'nouvelle tentative séquentielle',
+    'This player returned a very short video (ad/preview), not the episode. Pick another server.':
+        "Ce lecteur a renvoyé une vidéo très courte (pub/aperçu), pas l'épisode. Choisis un autre serveur.",
     'sequential retry (1 fragment at a time)…': 'nouvelle tentative séquentielle (1 fragment à la fois)…',
     'Esc again to go back': 'Échap à nouveau pour retour',
     'Esc again to decline': 'Échap à nouveau pour refuser',
@@ -958,6 +969,10 @@ _FR = {
         'Astuce : ton suivi peut se synchroniser AniList depuis Réglages',
     'offline-mode : remote': 'mode hors-ligne : distant',
     'unavailable, using local defaults': 'indisponible, défauts locaux utilisés',
+    'AniList: your token is invalid or expired. Settings → AniList → Change token.':
+        "AniList : ton jeton est invalide ou expiré. "
+        "Réglages → AniList → Changer le jeton.",
+    'AniList is unreachable right now:': 'AniList est injoignable pour le moment :',
 }
 
 

@@ -334,6 +334,16 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     if not candidate:
         return None  # graceful : caller shows 'try another player'
 
+    # uqload always serves a signed fsvid-family HLS, so it gets the same
+    # Referer/Cookie treatment as fsvid (some edges 403 otherwise). It also
+    # sometimes answers with a ~30 s ad/preview instead of the episode: the
+    # duration probe below rejects it so the caller falls back to another
+    # player, and the text says why (it also runs in the ad check).
+    set_stream_headers(candidate, {
+        "Referer": f"https://{host}/",
+        "Origin": f"https://{host}",
+    })
+
     # Some uqload embeds answer with a ~30 s ad/preview placeholder instead of
     # the episode. It still looks like a valid HLS master and would otherwise
     # play. Probe the media playlist's total EXTINF and reject clearly-too-short
@@ -805,6 +815,13 @@ def get_hls_link_veev(url):
 
 
 def get_hls_link_xtremestream(url, headers):
+    """xtremestream (Coflix "Vidéo HD et 1080p") → xs1.php manifest.
+
+    The xs1.php endpoint answers **403** unless the *player page itself* is
+    the Referer; without it the probe said "resolved", showed a quality and
+    then played a 404 page. Keep that Referer for the manifest AND every
+    segment (stored with the URL, mpv/yt-dlp pick it up).
+    """
     try:
         data_id = url.split("?data=")[1].split("&")[0].split("#")[0]
     except IndexError:
@@ -815,7 +832,12 @@ def get_hls_link_xtremestream(url, headers):
     if not url_root:
         return None
 
-    return f"https://{url_root}/player/xs1.php?data={data_id}"
+    link = f"https://{url_root}/player/xs1.php?data={data_id}"
+    h = dict(headers or {})
+    h["Referer"] = url
+    h.setdefault("Origin", f"https://{url_root}")
+    set_stream_headers(link, h)
+    return link
 
 
 def get_hls_link_dood(url: str, headers: dict) -> str | None:
@@ -905,6 +927,27 @@ def _voe_decode_config(text: str) -> str | None:
     except Exception:
         return None
     return step4.decode("utf-8", "ignore")
+
+
+def embed_status(status: int) -> str:
+    """Coarse state of an embed page: ``ok`` / ``dead`` (404/410) / ``blocked``.
+
+    Hosts (voe, lulustream, vidmoly…) keep the embed row in the source API
+    long after the file is gone: the page answers 404. Showing it in the
+    player list then fails on play, so extractors use this to tell "gone"
+    apart from "temporary error" (keep the row on a hiccup).
+    """
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return "blocked"
+    if status in (404, 410):
+        return "dead"
+    if status in (401, 403, 429):
+        return "blocked"
+    if status == 200:
+        return "ok"
+    return "blocked"
 
 
 def get_hls_link_voe(url: str, headers: dict) -> str | None:

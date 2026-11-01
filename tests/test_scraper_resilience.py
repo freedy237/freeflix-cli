@@ -452,7 +452,11 @@ class TestFrenchStreamPlayerFilter:
             "netu": {"vf": "BafWadqiVSI2"},
         }}
         orig = french_stream._get
+        orig_alive = french_stream._player_alive
         french_stream._get = lambda url, **kw: self._mock_json(payload)
+        # HEAD probe is network: the stub considers every *usable* link alive.
+        # Dead hosts are already dropped by _is_usable_player_link().
+        french_stream._player_alive = lambda link: True
         try:
             movie = french_stream.get_movie("https://french-stream.net/1022-x.html", "")
             names = [p.name for p in movie.players]
@@ -460,6 +464,7 @@ class TestFrenchStreamPlayerFilter:
             assert not any("voe" in n or "dood" in n or "netu" in n for n in names)
         finally:
             french_stream._get = orig
+            french_stream._player_alive = orig_alive
 
     def test_get_series_season_drops_dead_players(self):
         from freeflix_cli.scraping import french_stream

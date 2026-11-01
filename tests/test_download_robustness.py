@@ -43,7 +43,7 @@ media1080.m3u8
 def test_expected_hls_seconds_sums_vod_segments(monkeypatch):
     seen = []
 
-    def fake_probe(_sess, url, _headers, timeout=12):
+    def fake_probe(_sess, url, _headers, timeout=12, **kw):
         seen.append(url)
         return VOD_PLAYLIST
 
@@ -53,7 +53,7 @@ def test_expected_hls_seconds_sums_vod_segments(monkeypatch):
 
 
 def test_expected_hls_seconds_descends_master(monkeypatch):
-    def fake_probe(_sess, url, _headers, timeout=12):
+    def fake_probe(_sess, url, _headers, timeout=12, **kw):
         if url.endswith("master.m3u8"):
             return MASTER_PLAYLIST
         return VOD_PLAYLIST

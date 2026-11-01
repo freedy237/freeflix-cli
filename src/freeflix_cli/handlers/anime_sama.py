@@ -44,6 +44,7 @@ def _update_anilist_progress(series, season, selected_episode):
         link_choice = select_from_list(
             [t("Yes"), t("No")],
             f"{t('Link to AniList for auto-tracking?')} ({series.title})",
+            clear_on_back=False, inline=True,
         )
         if link_choice == 0:
             results = anilist_client.search_media(series.title)
@@ -52,7 +53,10 @@ def _update_anilist_progress(series, season, selected_episode):
                     f"{m['title']['english'] or m['title']['romaji']} ({m['seasonYear']})"
                     for m in results
                 ] + [t("Cancel")]
-                m_idx = select_from_list(media_options, t("Select AniList Match:"))
+                m_idx = select_from_list(
+                    media_options, t("Select AniList Match:"),
+                    clear_on_back=False, inline=True,
+                )
                 if m_idx < len(results):
                     media_id = results[m_idx]["id"]
                     tracker.set_anilist_mapping(
@@ -102,6 +106,7 @@ def _update_anilist_progress(series, season, selected_episode):
                     select_from_list(
                         [t("Yes"), t("No")],
                         f"{t('Switch AniList mapping to sequel')} '{sequel_title}' ?",
+                        clear_on_back=False, inline=True,
                     )
                     == 0
                 ):
@@ -319,7 +324,7 @@ def _planning_entry_actions(entry, day, date_label) -> None:
             t("← Back"),
         ],
         entry.title,
-        inline=True,
+        clear_on_back=False, inline=True,
     )
     if choice >= 2:
         return
@@ -558,7 +563,7 @@ def _anime_sama_series_flow(series) -> bool:
                         preferred_player=preferred,
                     )
                     continue
-                if ep_idx > len(episodes):
+                if ep_idx >= len(episodes) + 1:
                     break  # back to language picker
 
                 # ── Play (with next-episode chaining) ──
@@ -589,7 +594,9 @@ def _anime_sama_series_flow(series) -> bool:
                         else:
                             go = select_from_list(
                                 [t("Yes"), t("No")],
-                                f"{t('Play next episode:')} {nxt}?") == 0
+                                f"{t('Play next episode:')} {nxt}?",
+                                clear_on_back=False, inline=True,
+                            ) == 0
                         if go:
                             ep_idx += 1
                             continue
@@ -628,7 +635,9 @@ def resume_anime_sama(data):
         selected_lang = langs[0]
     else:
         lang_idx = select_from_list(
-            langs + [t("← Back")], t("🌍 Select Language:")
+            langs + [t("← Back")],
+            f"{icon('globe')} {t('Select Language:')}",
+            clear_on_back=False, inline=True,
         )
         if lang_idx >= len(langs):
             return  # → history list
@@ -655,7 +664,10 @@ def resume_anime_sama(data):
         f"{t('Watch again')} ({saved_ep_title})",
         t("Cancel"),
     ]
-    choice = select_from_list(options, t("What would you like to do?"))
+    choice = select_from_list(
+        options, t("What would you like to do?"),
+        clear_on_back=False, inline=True,
+    )
 
     if choice == 2:  # Cancel
         return
@@ -697,7 +709,8 @@ def resume_anime_sama(data):
             if ep_idx + 1 < len(episodes):
                 next_ep = episodes[ep_idx + 1]
                 choice = select_from_list(
-                    [t("Yes"), t("No")], f"{t('Play next episode:')} {next_ep.title}?"
+                    [t("Yes"), t("No")], f"{t('Play next episode:')} {next_ep.title}?",
+                    clear_on_back=False, inline=True,
                 )
                 if choice == 0:
                     ep_idx += 1

@@ -15,6 +15,7 @@ from ..cli_utils import (
 from ..player_manager import (
     play_video, analyze_stream_quality, format_quality_label,
     estimate_episode_seconds, clean_season_title, clean_episode_title,
+    is_likely_ad_placeholder,
 )
 from ..tracker import tracker
 from ..scraping import player
@@ -35,7 +36,10 @@ def _search_subtitle(series_title, season_title, episode_title):
     from ..scraping.subtitles import subtitle_extractor
 
     lang = tracker.get_anime_language() or tracker.get_language() or "en"
-    if select_from_list([t("Yes"), t("No")], t("Search for subtitles?")) != 0:
+    if select_from_list(
+        [t("Yes"), t("No")], t("Search for subtitles?"),
+        clear_on_back=False, inline=True,
+    ) != 0:
         return None
 
     imdb_id, is_movie = None, False
@@ -83,20 +87,28 @@ def _search_subtitle(series_title, season_title, episode_title):
         print_warning(t("No subtitles found."))
         return None
     choices = [f"{s.get('source', '?')} - {s.get('lang', lang)}" for s in subs[:6]] + [t("None")]
-    idx = select_from_list(choices, f"{icon('subtitle')} {t('Select Subtitle:')}")
+    idx = select_from_list(
+        choices, f"{icon('subtitle')} {t('Select Subtitle:')}",
+        clear_on_back=False, inline=True,
+    )
     if idx < len(subs[:6]):
         print_info(f"{t('Selected subtitle from:')} {subs[idx].get('source', '?')}")
         return subs[idx]["url"]
     return None
 
 
-def quality_suffix(label: str) -> str:
+def quality_suffix(label: str, info: dict = None) -> str:
     """Suffix for a menu row when the probe found real resolution/bitrate.
 
     ``✓`` means "resolved but no resolution/bitrate", ``✗`` means "failed";
     neither adds useful information to the row, so both are skipped.
     """
-    return f"  —  {label}" if label and label not in ("✓", "✗") else ""
+    if not label or label in ("✓", "✗", "🔒"):
+        return ""
+    from ..player_manager import is_likely_ad_placeholder
+    if is_likely_ad_placeholder(info):
+        return f"  —  ⚠ {info.get('duration')}s"
+    return f"  —  {label}"
 
 
 def analyze_stream_choices(streams, budget: int = 40, timeout: int = 25) -> dict:
@@ -204,6 +216,7 @@ def play_episode_flow(
     # needed for stable playback, shown next to each player. Runs in
     # parallel (thread-safe extractor) behind a spinner.
     quality_map = {}
+    quality_info = {}
     if tracker.get_analyze_players():
         from concurrent.futures import (
             ThreadPoolExecutor,
@@ -229,12 +242,32 @@ def play_episode_flow(
                 for fut in as_completed(futs, timeout=ANALYSIS_BUDGET):
                     p = futs[fut]
                     try:
-                        quality_map[p.url] = format_quality_label(fut.result())
+                        info = fut.result()
+                        quality_info[p.url] = info
+                        quality_map[p.url] = format_quality_label(info)
                     except Exception:
                         quality_map[p.url] = "✗"
             except _FTimeout:
                 pass  # budget hit — remaining players show no quality tag
         ex.shutdown(wait=False)
+
+        # Drop players the analysis proved dead (unresolved) or fake (a 30 s
+        # ad placeholder). The listing probe is only a cheap HEAD now, so this
+        # is where fsvid/vidzy decoys and uqload ads disappear — without
+        # adding 10-90 s to the series selection. If EVERY player failed, keep
+        # the list and let the user retry (a transient host hiccup must not
+        # hide the only source).
+        if quality_info:
+            verified = [
+                p for p in supported_players
+                if p.url not in quality_info
+                or (quality_info[p.url].get("ok")
+                    and not is_likely_ad_placeholder(quality_info[p.url]))
+            ]
+            if verified:
+                supported_players = verified
+            else:
+                print_warning(t("No player could be verified — trying anyway."))
 
     # Offer external subtitles (all sources now, not just GoldenAnime).
     subtitle_url = None
@@ -271,7 +304,7 @@ def play_episode_flow(
 
         player_idx = select_from_list(
             player_options,
-            t("🎮 Select Player:"),
+            f"{icon('gamepad')} {t('Select Player:')}",
             default_index=default_idx,
             clear_on_back=False,  # Back → episode list, same series view
             inline=True,
@@ -466,7 +499,7 @@ def _pick_player_for_batch(
 
     idx = select_from_list(
         opts, f"{icon('download')} {t('Select quality for batch download:')}",
-        inline=True,
+        clear_on_back=False, inline=True,
     )
     if idx >= len(heights):
         return None

@@ -17,6 +17,7 @@ from .handlers import (
     hianime,
 )
 from .i18n import t
+from .icons import icon
 
 
 def _show_entry_poster(data):
@@ -60,7 +61,7 @@ def handle_history():
     """Display history list and allow resume/delete."""
     while True:
         clear_screen()
-        print_header(t("📜 My History"))
+        print_header(f"{icon('history')} {t('My History')}")
 
         history = tracker.get_history()
         if not history:
@@ -115,7 +116,13 @@ def handle_history():
         _show_entry_poster(selected_entry)
 
         action = select_from_list(
-            [t("▶ Resume"), t("❌ Delete"), t("← Cancel")], t("Action:")
+            [
+                f"{icon('play')} {t('Resume')}",
+                f"{icon('exit')} {t('Delete')}",
+                t("← Cancel"),
+            ],
+            t("Action:"),
+            clear_on_back=False, inline=True,
         )
 
         if action == 0:  # Resume — poster already shown above.

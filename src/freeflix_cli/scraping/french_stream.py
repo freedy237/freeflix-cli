@@ -1,3 +1,5 @@
+import json
+
 from .objects import (
     SearchResult,
     FrenchStreamMovie,
@@ -258,6 +260,91 @@ def _parse_search_cards(body: str) -> list[SearchResult]:
     return results
 
 
+def _cached_json(url: str, ttl: int = 300):
+    """Small JSON GET cache for the studio API (ep-data/film_api).
+
+    Backing out of a season and selecting it again used to re-download the
+    same JSON every time. 5 min is short enough for new episodes to appear.
+    """
+    key = f"french-stream:json:{url}"
+    cached = httpcache.get(key, ttl)
+    if cached is not None:
+        try:
+            data = json.loads(cached)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    try:
+        r = _get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            httpcache.store(key, json.dumps(data))
+            return data
+    except Exception:
+        pass
+    return None
+
+
+_player_alive_cache: dict = {}
+_player_alive_lock = __import__("threading").Lock()
+_PLAYER_ALIVE_TTL = 300.0
+_PLAYER_DEAD_TTL = 120.0
+
+
+def _probe_embed(link: str):
+    """One cheap HEAD on an embed page (per-thread session, hard timeout)."""
+    from . import player as _player
+    host = link.split("/")[2]
+    return _player._scraper().head(
+        link,
+        headers={"Referer": f"https://{host}/"},
+        impersonate="chrome",
+        timeout=(3, 4),
+    )
+
+
+def _player_alive(link: str) -> bool:
+    """Fast cached liveness probe for one embed row.
+
+    The studio API keeps deleted embeds for a long time (voe → 404); probing
+    every row on every content load used to cost 8-30 s. This is now a HEAD
+    with a hard 4 s budget, never a full stream extraction: the expensive
+    resolution (and the 30 s-ad check) already runs in parallel in the player
+    menu, where the user expects a short wait. A slow/blocked host is kept
+    (fail-open) so a hiccup never hides a working source.
+    """
+    import time as _time
+    now = _time.time()
+    with _player_alive_lock:
+        ent = _player_alive_cache.get(link)
+        if ent and now - ent[1] < ent[2]:
+            return ent[0]
+    from . import player as _player
+    ok = True
+    try:
+        r = _probe_embed(link)
+        ok = _player.embed_status(getattr(r, "status_code", 0)) != "dead"
+    except Exception as exc:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code is None:
+            import re as _re
+            m = _re.search(r"\b(40[0-9]|41[0-9])\b", str(exc))
+            code = int(m.group(1)) if m else None
+        if code and _player.embed_status(code) == "dead":
+            ok = False
+        # Any other failure: keep the row (do not hide a working source).
+    ttl = _PLAYER_ALIVE_TTL if ok else _PLAYER_DEAD_TTL
+    with _player_alive_lock:
+        _player_alive_cache[link] = (ok, now, ttl)
+        if len(_player_alive_cache) > 400:
+            for old in sorted(_player_alive_cache.items(),
+                              key=lambda kv: kv[1][1])[:80]:
+                _player_alive_cache.pop(old[0], None)
+    return ok
+
+
 def get_movie(url: str, content: str) -> FrenchStreamMovie:
     soup = parse_html(content)
 
@@ -284,40 +371,42 @@ def get_movie(url: str, content: str) -> FrenchStreamMovie:
     players: list[Player] = []
     movie_id = url.rstrip("/").split("/")[-1].split("-")[0]
 
-    try:
-        movie_info_response = _get(
-            f"{website_origin}/engine/ajax/film_api.php?id={movie_id}",
-            timeout=15,
-        )
-        movie_info_response.raise_for_status()
-        movie_info = movie_info_response.json()
-    except Exception:
+    movie_info = _cached_json(
+        f"{website_origin}/engine/ajax/film_api.php?id={movie_id}"
+    )
+    if not movie_info:
         return FrenchStreamMovie(title, url, img, genres, players)
 
     raw_players = movie_info.get("players") if isinstance(movie_info, dict) else None
     if not isinstance(raw_players, dict):
         return FrenchStreamMovie(title, url, img, genres, players)
+    # Build the candidate rows first, then probe them CONCURRENTLY. The
+    # probes are independent network calls (2-8 s each on slow hosts); doing
+    # them one after another made the first movie selection take 7-30 s.
+    # Order is preserved so the player menu stays stable between visits.
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for player_name, player_links in raw_players.items():
         if not isinstance(player_links, dict):
             continue
         for lang, link in player_links.items():
-            if not _is_usable_player_link(link):
+            if not _is_usable_player_link(link) or link in seen:
                 continue  # dead host (trakx/netu) or non-URL code
             # dedup: most films expose the SAME embed under default/vostfr/vff,
             # which used to show 3 indistinguishable rows.
-            if any(p.url == link for p in players):
-                continue
-            # Drop embeds that are temporarily "banned" (vidzy/fsvid answers
-            # 200 with only the /troll/ decoy): they used to appear in the
-            # list, then fail on play AND download.
-            if "vidzy" in link.lower() or "fsvid" in link.lower():
-                try:
-                    from . import player as _player
-                    if not _player.get_hls_link(link, {"Referer": link}):
-                        continue
-                except Exception:
-                    pass  # network hiccup → keep it (don't hide the source)
-            players.append(Player(player_name + " " + lang, link))
+            seen.add(link)
+            rows.append((player_name + " " + lang, link))
+
+    if rows:
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(8, len(rows))) as pool:
+                alive = list(pool.map(lambda row: _player_alive(row[1]), rows))
+        except Exception:
+            alive = [_player_alive(row[1]) for row in rows]
+        for (label, link), ok in zip(rows, alive):
+            if ok:
+                players.append(Player(label, link))
 
     return FrenchStreamMovie(title, url, img, genres, players)
 
@@ -332,15 +421,7 @@ def get_series_season(url: str, content: str) -> FrenchStreamSeason:
         title = soup.title.get_text(strip=True) if soup.title else url.rstrip("/").split("/")[-1].replace("-", " ").title()
     serie_id = url.rstrip("/").split("/")[-1].split("-")[0]
 
-    try:
-        serie_info_response = _get(
-            f"{website_origin}/ep-data.php?id={serie_id}",
-            timeout=15,
-        )
-        serie_info_response.raise_for_status()
-        serie_info = serie_info_response.json()
-    except Exception:
-        return FrenchStreamSeason(title, url, {})
+    serie_info = _cached_json(f"{website_origin}/ep-data.php?id={serie_id}")
     if not isinstance(serie_info, dict):
         return FrenchStreamSeason(title, url, {})
 
@@ -390,9 +471,14 @@ def get_episodes_from_lang(lang: str, serie_info: dict):
 
 
 def get_content(url: str):
-    response = _get(url)
-    response.raise_for_status()
-    content = response.text
+    ckey = f"french-stream:content:{url}"
+    content = httpcache.get(ckey, 300)
+    if content is None:
+        response = _get(url)
+        response.raise_for_status()
+        content = response.text or ""
+        if cacheable_body(content):
+            httpcache.store(ckey, content)
 
     if '"episodes-' in content:
         return get_series_season(url, content)

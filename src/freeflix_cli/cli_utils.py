@@ -465,6 +465,12 @@ def flush_input_settled(settle: float = 0.03):
 # the menu cursor follows the physical mouse (hover), not just clicks.
 # Tracking is switched off as soon as the screen exits, so the user's shell
 # keeps its normal mouse selection.
+#
+# Selecting text INSIDE FreeFlix: hold Shift while dragging. Every mainstream
+# terminal (kitty, WezTerm, Konsole, GNOME Terminal, iTerm2, Windows Terminal)
+# bypasses the application's mouse tracking when Shift is held, so the normal
+# native selection works. Releasing the mouse and exiting the screen also
+# restore it immediately.
 _MOUSE_RE_S = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _MOUSE_RE_B = re.compile(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _MOUSE_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h"
@@ -540,9 +546,60 @@ def _mouse_available() -> bool:
     if os.environ.get("FREEFLIX_NO_MOUSE", "").lower() in ("1", "true", "yes", "on"):
         return False
     try:
-        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
     except Exception:
         return False
+    # A legacy Windows console would only print the escape sequences (mouse
+    # dead, text garbage). Enable VT first, or fall back to keyboard-only.
+    if os.name == "nt" and not _enable_windows_vt():
+        return False
+    return True
+
+
+# Cached console capability probe (Windows only). None = not probed yet.
+_VT_READY = None
+
+
+def _enable_windows_vt() -> bool:
+    """Turn on ENABLE_VIRTUAL_TERMINAL_PROCESSING on the Windows console.
+
+    Without it (a plain cmd.exe / old Windows 10 build, or a legacy console)
+    the SGR mouse sequences are written as literal text and Windows Terminal
+    never reports clicks: the mouse simply does nothing. Enabling VT makes the
+    SAME SGR protocol FreeFlix uses everywhere work on Windows too. Best-effort
+    and cached: any failure means "no VT" and the caller keeps the keyboard
+    menu. No-op on POSIX.
+    """
+    global _VT_READY
+    if _VT_READY is not None:
+        return _VT_READY
+    _VT_READY = False
+    if os.name != "nt":
+        return _VT_READY
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        STD_OUTPUT_HANDLE = -11
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+
+        h = k32.GetStdHandle(STD_OUTPUT_HANDLE)
+        if not h or h == wintypes.HANDLE(-1).value:
+            return _VT_READY
+        mode = wintypes.DWORD()
+        if not k32.GetConsoleMode(h, ctypes.byref(mode)):
+            return _VT_READY
+        if not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+            if not k32.SetConsoleMode(
+                h, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            ):
+                return _VT_READY
+        _VT_READY = True
+    except Exception:
+        _VT_READY = False
+    return _VT_READY
 
 
 def _mouse_write(seq: str) -> None:
@@ -898,6 +955,7 @@ def _help_overlay() -> Panel:
         ("Esc Esc",    _t("cancel a running download")),
         ("Ctrl+C",     _t("quit FreeFlix")),
         ("? ",         _t("show / hide this help")),
+        ("Shift+drag", _t("select text with the mouse")),
     ]
     player_rows = [
         ("CTRL+1/2", _t("Anime4K quality (max / light)")),
@@ -2024,21 +2082,29 @@ def select_with_preview(labels, prompt, previews, default_index=0):
     pending_at = [0.0]
 
     def _prewarm(p_cols=None, p_rows=None):
-        """Render ALL posters in the background (parallel) at the given size so
-        navigation hits the cache instead of waiting per item. Submissions are
-        deduped per (cover, cols, rows), so calling this repeatedly is cheap."""
+        """Warm the posters around the cursor, not the whole result list.
+
+        Rendering 50+ covers through chafa in the background (even with only
+        2 workers) competed with the input loop and made the first seconds of
+        a long list sluggish. We now DOWNLOAD every cover (cheap, I/O-bound)
+        but RENDER only the selected one ±7; a distant row is rendered on
+        demand when the cursor reaches it.
+        """
         if not terminal_image.chafa_available():
             return
         if p_cols is None or p_rows is None:
             _, _, _, p_cols, p_rows = _dims()
         warmed_size[0] = (p_cols, p_rows)
-        # Prioritise what the user is actually looking at : submit the selected
-        # poster first, then fan out to its neighbours, then the rest. So the
-        # visible cover (and the next/prev ones) render before far-off items.
+        # Prioritise what the user is actually looking at: render the visible
+        # poster and its closest neighbours first; only download the rest.
         cur = visible[selected] if visible else 0
         order = sorted(range(len(previews)), key=lambda i: abs(i - cur))
-        for i in order:
-            _submit(previews[i].get("cover", ""), p_cols, p_rows)
+        for rank, i in enumerate(order):
+            cover = previews[i].get("cover", "")
+            if rank < 8:
+                _submit(cover, p_cols, p_rows)
+            else:
+                _prefetch_cover(cover)
 
     def _apply_filter():
         nonlocal visible, selected, start

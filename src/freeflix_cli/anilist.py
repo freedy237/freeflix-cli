@@ -12,6 +12,11 @@ class AniListClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        # Last HTTP status (0 = network/other failure). Used to tell a dead
+        # token (401/400 "Invalid token") from a real outage, so the UI shows
+        # ONE actionable message instead of a raw "404/401" dump.
+        self.last_status = 0
+        self.last_error = ""
         if self.token:
             self.headers["Authorization"] = f"Bearer {self.token}"
 
@@ -23,23 +28,74 @@ class AniListClient:
     def _query(
         self, query: str, variables: Dict[str, Any] = None
     ) -> Optional[Dict[str, Any]]:
-        """Send a GraphQL query to AniList."""
-        try:
-            response = requests.post(
-                self.url,
-                json={"query": query, "variables": variables},
-                headers=self.headers,
-                timeout=10,
-            )
-            response.raise_for_status()
-            data = response.json()
-            if "errors" in data:
-                print(f"{t('AniList API Error:')} {data['errors']}")
+        """Send a GraphQL query to AniList.
+
+        Retries transient failures (timeouts, 429, 5xx) with a short backoff;
+        a 400 "Invalid token" / 401 is reported once, clearly, without a raw
+        traceback. Returns None on any failure (callers already handle it).
+        """
+        import time as _t
+        self.last_status = 0
+        self.last_error = ""
+        payload = {"query": query, "variables": variables}
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    self.url,
+                    json=payload,
+                    headers=self.headers,
+                    timeout=(10, 20),
+                    impersonate="chrome",
+                )
+                self.last_status = response.status_code
+                if response.status_code in (429, 500, 502, 503, 504):
+                    if attempt < 2:
+                        _t.sleep(1.5 * (attempt + 1))
+                        continue
+                try:
+                    data = response.json()
+                except Exception:
+                    data = None
+                if isinstance(data, dict) and data.get("errors"):
+                    msgs = [
+                        str(e.get("message") or e)
+                        for e in data["errors"] if isinstance(e, dict)
+                    ] or [str(data["errors"])]
+                    self.last_error = " · ".join(msgs)[:300]
+                    status = 0
+                    for e in data["errors"]:
+                        if isinstance(e, dict) and e.get("status"):
+                            status = int(e["status"])
+                            break
+                    if status:
+                        self.last_status = status
+                    # AniList reports an expired/revoked token as HTTP 400
+                    # "Invalid token" (or 401). That is NOT a network outage:
+                    # it needs a new token, so say so once — no retry.
+                    if (status in (400, 401) or self.last_status in (401, 403)
+                            or "invalid token" in self.last_error.lower()
+                            or "unauthorized" in self.last_error.lower()):
+                        print(t("AniList: your token is invalid or expired. "
+                                "Settings → AniList → Change token."))
+                        return None
+                    print(f"{t('AniList API Error:')} {self.last_error}")
+                    return None
+                if response.status_code >= 400:
+                    self.last_error = f"HTTP {response.status_code}"
+                    if attempt < 2:
+                        _t.sleep(1.5 * (attempt + 1))
+                        continue
+                    print(f"{t('AniList is unreachable right now:')} {self.last_error}")
+                    return None
+                return (data or {}).get("data")
+            except Exception as e:
+                self.last_error = f"{type(e).__name__}: {e}"
+                if attempt < 2:
+                    _t.sleep(1.5 * (attempt + 1))
+                    continue
+                print(f"{t('AniList is unreachable right now:')} {self.last_error}")
                 return None
-            return data["data"]
-        except Exception as e:
-            print(f"{t('Request Error:')} {e}")
-            return None
+        return None
 
     def validate_token(self) -> Optional[Dict[str, Any]]:
         """Check if the current token is valid and return user info."""
@@ -92,7 +148,11 @@ class AniListClient:
         return []
 
     def trending(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Trending-now anime (no query needed) for the Latest view."""
+        """Trending-now anime (no query needed) for the Latest view.
+
+        Public data: never send the (possibly dead) user token here, otherwise
+        an expired token would also hide the home's new-releases feed.
+        """
         query = """
         query {
             Page(page: 1, perPage: %d) {
@@ -117,12 +177,16 @@ class AniListClient:
             }
         }
         """ % max(1, min(25, limit))
+        saved = dict(self.headers)
+        self.headers.pop("Authorization", None)
         try:
             data = self._query(query)
             if data and data.get("Page") and data.get("Page", {}).get("media"):
                 return data["Page"]["media"]
         except Exception:
             pass
+        finally:
+            self.headers = saved
         return []
 
 

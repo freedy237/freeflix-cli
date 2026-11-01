@@ -238,7 +238,9 @@ def resume_french_stream(data):
             lang = langs[0]
         else:
             l_idx = select_from_list(
-                langs + [t("← Back")], t("🌍 Select Language:")
+                langs + [t("← Back")],
+                f"{icon('globe')} {t('Select Language:')}",
+                clear_on_back=False, inline=True,
             )
             if l_idx >= len(langs):
                 return  # → history list
@@ -261,7 +263,10 @@ def resume_french_stream(data):
             f"{t('Watch again')} ({data['episode_title']})",
             t("Cancel"),
         ]
-        choice = select_from_list(options, t("What would you like to do?"))
+        choice = select_from_list(
+            options, t("What would you like to do?"),
+            clear_on_back=False, inline=True,
+        )
         if choice == 2:
             return
         elif choice == 0:
@@ -290,7 +295,9 @@ def resume_french_stream(data):
                 if ep_idx + 1 < len(episodes):
                     if (
                         select_from_list(
-                            [t("Yes"), t("No")], f"{t('Play next:')} {episodes[ep_idx+1].title} ?"
+                            [t("Yes"), t("No")],
+                            f"{t('Play next:')} {episodes[ep_idx+1].title} ?",
+                            clear_on_back=False, inline=True,
                         )
                         == 0
                     ):

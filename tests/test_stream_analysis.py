@@ -177,10 +177,11 @@ def test_french_stream_dedups_same_embed_across_languages(monkeypatch):
             return body
 
     monkeypatch.setattr(fs, "_get", lambda *a, **k: _Resp())
-    # Embed-liveness check (vidzy/fsvid) is network: pretend they answer.
-    from freeflix_cli.scraping import player as _pl
+    # Embed liveness is now a cheap HEAD: keep every usable row in this test.
+    monkeypatch.setattr(fs, "_player_alive", lambda link: True)
+    from freeflix_cli.scraping import player as _p2
     monkeypatch.setattr(
-        _pl, "get_hls_link", lambda url, headers=None: "https://cdn/master.m3u8"
+        _p2, "_get", lambda *a, **k: _Resp()
     )
     movie = fs.get_movie("https://french-stream.net/1-nightborn.html", html)
     assert [(p.name, p.url) for p in movie.players] == [

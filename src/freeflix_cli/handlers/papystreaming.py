@@ -62,7 +62,8 @@ def _pick_season_episode(title: str, year: str):
 
     while True:  # ── Season level ──
         s_opts = [f"{t('Season')} {s}" for s in seasons] + [t("← Back")]
-        s_idx = select_from_list(s_opts, f"{icon('tv')} {t('Select Season:')}")
+        s_idx = select_from_list(s_opts, f"{icon('tv')} {t('Select Season:')}",
+                                 clear_on_back=False, inline=True)
         if s_idx >= len(seasons):
             return (None, None)  # → caller (results / provider)
         season = seasons[s_idx]
@@ -71,7 +72,8 @@ def _pick_season_episode(title: str, year: str):
         while True:  # ── Episode level ──
             e_opts = [f"E{ep[0]:02d} - {ep[1]}" for ep in eps] + [t("← Back")]
             with crumb(f"{t('Season')} {season}"):
-                e_idx = select_from_list(e_opts, f"{icon('tv')} {t('Select Episode:')}")
+                e_idx = select_from_list(e_opts, f"{icon('tv')} {t('Select Episode:')}",
+                                         clear_on_back=False, inline=True)
             if e_idx >= len(eps):
                 break  # → season list (one level up)
             return (season, eps[e_idx][0])
