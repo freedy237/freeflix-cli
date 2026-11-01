@@ -553,6 +553,25 @@ class TestProbeCap:
         assert "#EXTM3U" in pm._safe_probe_text(_FakeSess(), "https://cdn.test/a.m3u8", {})
 
 
+class TestAnimeSamaNetworkCascade:
+    """_get must use the shared cf_get cascade (retries + DoH)."""
+
+    def test_get_uses_cf_get(self, monkeypatch):
+        from freeflix_cli.scraping import anime_sama
+
+        calls = []
+        resp = _mock_response("<html><body>ok</body></html>")
+
+        def _cf_get(session, url, **kw):
+            calls.append((url, kw))
+            return resp
+
+        monkeypatch.setattr(anime_sama.cloudflare, "cf_get", _cf_get)
+        out = anime_sama._get("https://anime-sama.to/catalogue/?search=x")
+        assert out is resp
+        assert calls and calls[0][0].endswith("/catalogue/?search=x")
+
+
 class TestAnimeSamaSeasonLang:
     """URL d'entrée en vf : plus de duplication, 500 par langue = skip."""
 

@@ -39,14 +39,12 @@ def _get(url, cache_ttl=0, cache_key=None, **kw):
     base_headers = kw.pop("headers", {})
     kw.setdefault("timeout", 20)  # never hang on a dead host
 
-    def _fetch():
-        cf = cloudflare.get_cf_headers(url)
-        h = {**cf, **base_headers} if cf else dict(base_headers)
-        return scraper.get(url, headers=h, **kw) if h else scraper.get(url, **kw)
-
-    resp = _fetch()
-    if cloudflare.is_blocked(resp) and cloudflare.solve_and_store(url):
-        resp = _fetch()
+    # Route through the shared cascade (retries + plain request + DoH) instead
+    # of calling scraper.get() directly. Without it a transient DNS/connection
+    # hiccup on anime-sama.to made the WHOLE source look dead ("Could not
+    # connect"), even though the site answers fine a second later / via DoH.
+    # cf_get also carries the cf_clearance cookie and FlareSolverr retry.
+    resp = cloudflare.cf_get(scraper, url, headers=base_headers, **kw)
     if (cache_ttl and getattr(resp, "status_code", None) == 200
             and cacheable_body(resp.text)):
         httpcache.store(ckey, resp.text)

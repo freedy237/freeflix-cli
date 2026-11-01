@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.16.1
+
+- **Anime-Sama réparé** : la recherche, les fiches et les saisons passent
+  désormais par la cascade réseau partagée (`cf_get` : réessais, requête
+  simple puis DNS-over-HTTPS) au lieu d'un `scraper.get()` direct. Une
+  coupure DNS/TLS passagère sur `anime-sama.to` faisait croire que toute la
+  source était morte (« Could not connect ») alors que le site répondait
+  normalement une seconde plus tard. Vérifié en direct : recherche,
+  `get_series()` et `get_season()` (293 épisodes VOSTFR/VF sur Boruto).
+- **Tests** : 494 tests au vert, ruff OK.
+
 ## 1.16.0
 
 - **Navigation sans effacement** : les menus saison, langue, épisode, lecteur,
