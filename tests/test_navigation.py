@@ -166,7 +166,7 @@ def test_detail_menus_stay_inline():
     files = {p for root in roots for p in root.glob("*.py")}
     files |= {base / "main.py", base / "player_manager.py"}
     for path in sorted(files):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Name)
