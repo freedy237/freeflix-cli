@@ -204,6 +204,12 @@ def play_episode_flow(
     supported_players = _dedup_players(
         [p for p in episode.players if player.is_supported(p.url)]
     )
+    # Hosts known dead upstream never play (placeholder pages / dead CDNs):
+    # hide them instead of showing a row that always fails.
+    live_players = [p for p in supported_players
+                    if not player.is_known_offline(p.url)]
+    if live_players:
+        supported_players = live_players
     if not supported_players:
         print_warning(t("No supported players found."))
         return False

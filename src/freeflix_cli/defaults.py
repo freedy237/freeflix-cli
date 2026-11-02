@@ -79,19 +79,28 @@ DEFAULT_PLAYERS = {
         "sec_headers": "Sec-Fetch-Dest:empty;Sec-Fetch-Mode:cors;Sec-Fetch-Site:same-site",
         "ext": "mp4",
     },
+    # Byse Frontend family (2026): the old AES/JSON filemoon payload is
+    # gone — the shell loads a React bundle and the stream comes from
+    # /api/videos/<code>/embed/playback. "byse" = JSON probe + placeholder
+    # detection (removed files answer HTTP 200 with "video record missing").
     "filemoon": {
-        "type": "filemoon",
-        "referrer": "https://ico3c.com/",
+        "type": "byse",
+        "referrer": "https://filemoon.sx",
         "no-header": True,
     },
     "bysebuho": {
-        "type": "filemoon",
-        "referrer": "https://ico3c.com/",
+        "type": "byse",
+        "referrer": "https://bysebuho.com",
         "no-header": True,
     },
     "bysekoze": {
-        "type": "filemoon",
-        "referrer": "https://ico3c.com/",
+        "type": "byse",
+        "referrer": "https://bysekoze.com",
+        "no-header": True,
+    },
+    "bysewihe": {
+        "type": "byse",
+        "referrer": "https://bysewihe.com",
         "no-header": True,
     },
     "kakaflix": {"type": "kakaflix"},
@@ -120,7 +129,11 @@ DEFAULT_PLAYERS = {
     # on its final host.
     "kokoflix": {"type": "kokoflix"},
     # DoodStream mirrors (playmogo.com…) : /e/ page + pass_md5 AJAX token.
-    "playmogo": {"type": "dood", "ext": "mp4"},
+    # `referrer` names the REAL player host so a kokoflix proxy link
+    # (*_go.php?id=…) asks pass_md5 on the mirror, not on the proxy.
+    "playmogo": {"type": "dood", "ext": "mp4", "referrer": "https://playmogo.com"},
+    "dood": {"type": "dood", "ext": "mp4", "referrer": "https://dood.li"},
+    "doodstream": {"type": "dood", "ext": "mp4", "referrer": "https://dood.li"},
     # Voe mirrors (luluvdo.com, lulust.com…) : word-substitution packed
     # JWPlayer setup. French-Anime's "luluvid" player rotates between them.
     "luluvdo": {"type": "voe"},

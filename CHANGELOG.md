@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.16.2
+
+- **Vidzy réparé (la vraie cause)** : le lecteur d'un embed vidzy est encodé
+  dans un « packer » JS (Dean Edwards). La vraie URL `sources:[{src:"…"}]`
+  était donc invisible, et le seul m3u8 présent dans la page était le leurre
+  `s1.fsvid.lol/troll/master.m3u8` d'où « ça marche sur certains films,
+  jamais sur d'autres ». Un décodeur du packer est ajouté : **vidzy et
+  vidzy.live se résolvent désormais systématiquement** (master + segments
+  vérifiés).
+- **fsvid / premium** : même décodeur, même résultat — **13/13 films**
+  ouverts au lieu de « parfois ».
+- **Faux positifs supprimés** : les embeds qui ne peuvent jamais lire
+  (`File was locked by administrator`, `File Not Found`, `File expired`,
+  `We can't find the video`, `video record missing`) sont détectés et
+  retirés du menu au lieu d'afficher une fausse qualité. Les hôtes morts en
+  amont (filemoon/byse, mixdrop, minochinos, netu…) ne sont plus proposés.
+- **DoodStream** : une URL proxy kokoflix (`*_go.php?id=…`) demande
+  maintenant `pass_md5` sur le vrai lecteur (playmogo) et reconstruit l'URL
+  média comme le navigateur (suffixe + token) — vérifié **206 + 65 Ko lus**.
+- **Voe** : le stub `Loading...` (redirect JS + jeton) est résolu : plus de
+  ligne inutilisable affichée.
+- **Qualité plus juste** : l'intro `.mp4` renvoyée par certains lecteurs
+  n'est plus prise pour le flux de l'épisode.
+- **Vérification en direct** (6 films, tous les lecteurs) : fsvid 13/13,
+  vidzy 15/15, uqload 11/11 valides — les 1 uqload et 2 voe restants sont
+  des fichiers réellement supprimés/lockés chez l'hébergeur et sont
+  maintenant masqués.
+- **Tests** : 502 tests au vert, ruff OK.
+
 ## 1.16.1
 
 - **Anime-Sama réparé** : la recherche, les fiches et les saisons passent

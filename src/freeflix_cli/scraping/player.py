@@ -310,6 +310,8 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     response.raise_for_status()
 
     text = response.text
+    if embed_is_placeholder(text):
+        return None  # locked / deleted file: the row must not look playable
     # uqload now ships the player JS packed (dean-edwards). Unpack first.
     try:
         code = deobfuscate(text)
@@ -840,7 +842,7 @@ def get_hls_link_xtremestream(url, headers):
     return link
 
 
-def get_hls_link_dood(url: str, headers: dict) -> str | None:
+def get_hls_link_dood(url: str, headers: dict, player_host: str = None) -> str | None:
     """
     DoodStream mirrors (playmogo.com, doodstream mirrors reached via
     french-stream's kokoflix proxy).
@@ -849,11 +851,15 @@ def get_hls_link_dood(url: str, headers: dict) -> str | None:
     via AJAX (``$.get('/pass_md5/<token>')``) ; that endpoint answers the
     DIRECT mp4 URL as plain text. Reproduce both calls with the browser's
     headers (Referer + X-Requested-With).
+
+    *player_host* is the CONFIGURED mirror (e.g. ``playmogo.com``) when
+    *url* is a signed proxy link (kokoflix ``*_go.php?id=…``): the
+    ``pass_md5`` token lives on that host, not on the proxy.
     """
     h = dict(headers or {})
-    try:
-        host = url.split("/")[2]
-    except Exception:
+    url_host = _url_host(url)
+    host = player_host or url_host
+    if not host:
         return None
     h.setdefault("Referer", f"https://{host}/")
     resp = _get(url, headers=h, impersonate="chrome")
@@ -861,19 +867,131 @@ def get_hls_link_dood(url: str, headers: dict) -> str | None:
         resp.raise_for_status()
     except Exception:
         return None
-    m = re.search(r"/pass_md5/[^\"'\s]*", resp.text or "")
+    body = resp.text or ""
+    if embed_is_placeholder(body):
+        return None  # "We can't find the video" → dead row, not a player
+    m = re.search(r"/pass_md5/[^\"'\s]*", body)
     if not m:
         return None
     h2 = dict(h)
     h2["X-Requested-With"] = "XMLHttpRequest"
+    # The AJAX token lives on the page that SERVES the player: the mirror
+    # itself, or the proxy host that redirected there (kokoflix → playmogo).
+    token_host = url_host if player_host else host
     try:
-        r2 = _get(f"https://{host}" + m.group(0), headers=h2,
+        r2 = _get(f"https://{token_host}" + m.group(0), headers=h2,
                   impersonate="chrome")
         r2.raise_for_status()
     except Exception:
         return None
     link = (r2.text or "").strip()
-    return link if link.startswith("http") else None
+    if not link.startswith("http"):
+        return None
+    # DoodStream serves the media only when the URL looks like the browser
+    # one: a random 10-char suffix + the page's token as a query parameter.
+    if not re.search(r"\.mp4($|\?)", link):
+        import random
+        import string
+        token = re.search(r'\?token=([^&"\'\s]+)', body) or re.search(
+            r"token[\"']?\s*[:=]\s*[\"']([^\"']+)", body)
+        suffix = "".join(random.choices(string.ascii_letters + string.digits, k=10))
+        link += suffix + "?token=" + (token.group(1) if token else "")
+    set_stream_headers(link, {
+        "Referer": f"https://{url_host or host}/",
+        "Origin": f"https://{url_host or host}",
+    })
+    return link
+
+
+_OFFLINE_HOST_MARKERS = (
+    "filemoon", "byse", "minochinos", "netu", "upn", "vidmoly",
+    "coflix.upn", "mixdrop", "streamtape", "dood.li", "d0000d", "d000d",
+)
+
+
+def is_known_offline(url: str) -> bool:
+    """True when a host is known DEAD upstream (2026-11 audit).
+
+    Those embeds answer with placeholders (or hang on dead CDNs). Listing
+    them with a fake quality badge was the #1 false positive on
+    French-Stream, so the player menu hides them instead of offering a
+    stream that can never start. The user explicitly asked for them not to
+    be shown again.
+    """
+    host = _url_host(url)
+    if not host:
+        return False
+    return any(marker in host for marker in _OFFLINE_HOST_MARKERS)
+
+
+_BYSE_API_RE = re.compile(r"/api/videos/([A-Za-z0-9_-]+)/embed/details")
+
+
+def get_hls_link_byse(url: str, headers: dict) -> str | None:
+    """Byse Frontend embeds (filemoon.sx, bysewihe.com, bysebuho.com…).
+
+    The 2026 filemoon family dropped the AES/JSON payload: the shell page
+    only loads a React bundle, and the "video record missing" placeholder is
+    served with HTTP **200** for removed files. So :
+      1. ask the JSON API ``/api/videos/<code>/embed/details`` (Referer must
+         be the embed) — a 404 means the file is gone → None ;
+      2. otherwise the playback config comes from a POST to
+         ``/api/videos/<code>/embed/playback`` (AES-GCM keyed by key_parts).
+         That endpoint answers 405 from the datacenter/CLI path, so we fall
+         back to any plain ``sources:"…"`` left in the shell and, failing
+         that, return None (the player is reported unavailable) instead of
+         showing a row that will never play.
+    """
+    h = dict(headers or {})
+    host = _url_host(url) or "filemoon.sx"
+    h.setdefault("Referer", url)
+    h.setdefault("Origin", f"https://{host}")
+    try:
+        resp = _get(url, headers=h, impersonate="chrome", timeout=20)
+        body = resp.text or ""
+    except Exception:
+        return None
+    if embed_is_placeholder(body):
+        return None
+
+    m = _BYSE_API_RE.search(body)
+    code = None
+    if m:
+        code = m.group(1)
+    else:
+        cm = re.search(r"/e/([A-Za-z0-9_-]+)", url or "")
+        code = cm.group(1) if cm else None
+
+    if code:
+        api = f"https://{host}/api/videos/{code}/embed/details"
+        try:
+            ar = _get(api, headers={"Referer": url, "Origin": f"https://{host}",
+                                    "Accept": "application/json"},
+                      impersonate="chrome", timeout=15)
+            if getattr(ar, "status_code", 0) == 404:
+                return None  # video record missing → dead embed (HTTP 200 shell)
+        except Exception:
+            pass  # transient API hiccup: try the page payload below
+
+    # Plain (non-obfuscated) sources line, when the shell ships one.
+    packed = unpack_dean_edwards(body)
+    for text in (packed, body):
+        for hit in re.finditer(
+            r'sources\s*:\s*\[?\{?\s*(?:src|file)\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"',
+            text or "",
+        ):
+            link = hit.group(1)
+            if _is_decoy_stream(link) or not _looks_like_stream(link):
+                continue
+            intro = re.search(r"intro|teaser|trailer|preview", link, re.I)
+            if intro:
+                continue
+            set_stream_headers(link, {
+                "Referer": f"https://{host}/",
+                "Origin": f"https://{host}",
+            })
+            return link
+    return None
 
 
 def _voe_substitution_decode(payload: str, radix: int, table: list) -> str:
@@ -973,6 +1091,8 @@ def get_hls_link_voe(url: str, headers: dict) -> str | None:
     except Exception:
         return None
     body = resp.text or ""
+    if embed_is_placeholder(body):
+        return None  # removed / locked file → dead row, not a player
 
     # 2026 voe: /e/<code> is now a stub that redirects to a rotating mirror
     # (derricknationtop.com, …) which ships a plain jwplayer config
@@ -1067,16 +1187,141 @@ def get_hls_link_kokoflix(url: str, headers: dict) -> str | None:
     return get_hls_link(final, h)
 
 
+_UNPACK_TOKEN = (
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
+_UNPACK_RE = re.compile(
+    r"eval\(function\(p,a,c,k,e,d\).*?\}\('(.*?)',(\d+),(\d+),'(.*?)'\.split\('\|'\)",
+    re.S,
+)
+
+
+def unpack_dean_edwards(page: str) -> str:
+    """Resolve Dean Edwards packer `eval(function(p,a,c,k,e,d){…})` blocks.
+
+    fsvid/vidzy now ship their player inside the classic packer: every
+    token (``sources``, ``src``, ``var``, ``t``, ``e``, the numbers of the
+    signed query…) is replaced by a base-N index into the word list. Without
+    unpacking, the plain ``sources:[{src:"…"}]`` line is INVISIBLE and the
+    only m3u8 left in the page is the ``/troll/`` decoy — that is exactly the
+    "vidzy sometimes fails" bug. This is a pure-JS transform, mirrored in
+    Python: repeated until no more packed blocks remain.
+    """
+    out = page or ""
+    for _ in range(5):
+        m = _UNPACK_RE.search(out)
+        if not m:
+            break
+        payload, base = m.group(1).replace("\\'", "'"), int(m.group(2))
+        words = m.group(4).split("|")
+        # Replace the HIGHEST indices first so "1" never eats a "10".
+        # The packer's regex is \b<N>\b — a WORD BOUNDARY only — so ".1" or
+        # "?s=1" inside a URL ARE substituted by the browser too. Use the same
+        # rule: an alphanumeric look-behind would leave stale digits behind.
+        for idx in range(len(words) - 1, -1, -1):
+            if not words[idx]:
+                continue
+            num, tok = idx, ""
+            if idx == 0:
+                tok = "0"
+            while num:
+                tok = _UNPACK_TOKEN[num % base] + tok
+                num //= base
+            value = words[idx].replace("\\", "\\\\")
+            # NEVER substitute inside a long digit run ("00032" ≠ "0…032"):
+            # the packer's \b<N>\b does match a "1" glued to digits, but the
+            # real payload never relies on it and it corrupts signed URLs.
+            payload = re.sub(
+                r"(?<![0-9A-Za-z_])" + re.escape(tok) + r"(?![0-9A-Za-z_])",
+                lambda _m, v=value: v,
+                payload,
+            )
+        out = out[: m.start()] + payload + out[m.end():]
+    return out
+
+
+_NON_STREAM_VIDEO_EXTS = (
+    ".mp4", ".m4v", ".webm", ".mkv", ".avi", ".mov", ".flv", ".ts", ".m4s",
+)
+
+
+def _looks_like_stream(link: str) -> bool:
+    """True for a playable media URL (HLS manifest or a video file).
+
+    Byse API responses carry an ``intro.mp4`` hook as well as the real
+    stream; picking the first ``.mp4`` in a page would play the ad.
+    """
+    low = (link or "").split("?")[0].lower()
+    return low.endswith(".m3u8") or low.endswith(_NON_STREAM_VIDEO_EXTS)
+
+
+def _js_context(page: str) -> str:
+    """Only the JavaScript part of an embed page.
+
+    Unpacked code is JavaScript, so the CSS/HTML around it must NOT take part
+    in the source regexes: a stylesheet rule like ``src:url(…)`` or an
+    ``img src="…m3u8"`` would otherwise win over the real player payload.
+    """
+    chunks = re.findall(r"<script[^>]*>(.*?)</script>", page or "", re.S)
+    if not chunks:
+        return page or ""
+    return "\n".join(chunks)
+
+
+def _fsvid_candidates(body: str, host: str = "fsvid.lol") -> list[str]:
+    """Every REAL stream URL a fsvid/vidzy embed exposes (decoy excluded).
+
+    Tried in order : unpacked page (current layout), obfuscated IIFE (older
+    layout), raw page. Returns [] when the embed only serves the decoy.
+    """
+    js = _js_context(body)
+    code = unpack_dean_edwards(js)
+    urls: list[str] = []
+
+    for text in (code, js):
+        for m in re.finditer(
+            r'(?:sources\s*:\s*\[?\{?\s*src|src)\s*[:=]\s*"([^"]+\.m3u8[^"]*)"',
+            text or "",
+        ):
+            urls.append(m.group(1))
+        hit = extract_hls_url(text or "")
+        if hit:
+            urls.append(hit)
+    try:
+        decoded = _fsvid_decode(code, host)
+    except Exception:
+        decoded = None
+    if decoded:
+        urls.append(decoded)
+
+    clean: list[str] = []
+    for u in urls:
+        if not u or "/troll/" in u.lower() or u in clean:
+            continue
+        if u.startswith("//"):
+            u = "https:" + u
+        if not _looks_like_stream(u):
+            continue  # intro/teaser .mp4, analytics URL, not the episode
+        clean.append(u)
+    return clean
+
+
 def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
     """
-    fsvid.lol / vidzy.org (french-stream's "premium" host).
+    fsvid.lol / vidzy.cc / vidzy.live (french-stream's "premium" hosts).
 
-    The embed page ships a DECOY ``…/troll/master.m3u8`` in plain sight, but the
-    REAL stream is built at runtime by the video.js `sources` IIFE :
-        src = (function(s){ var k=[…]; b=atob(s); r="";
-                            for(i…) r+=chr(b[i]^k[i%8]); return r })("<base64>")
-    i.e. base64-decode the payload, then XOR each byte with an 8-byte key. We
-    reproduce that here to get the actual multi-quality/-language master.m3u8.
+    Two embedding layouts coexist and BOTH are handled :
+
+    CURRENT (2026-11) — the whole player is inside Dean Edwards' packer
+    ``eval(function(p,a,c,k,e,d){…})``; resolving it (``unpack_dean_edwards``)
+    exposes a plain ``sources:[{src:"…master.m3u8?…"}]`` with a REAL stream.
+    The page also contains ``var _fsvHls="…/troll/master.m3u8"`` — a DECOY.
+
+    OLDER — the real URL is built at runtime from a base64+XOR IIFE, which we
+    reproduce (``_fsvid_decode``).
+
+    Both return None when the host only serves the decoy (banned mirror), so
+    the player is reported unavailable instead of returning a troll video.
     """
     h = dict(headers or {})
     # The embed 403s without a Referer ; the embed's own origin is accepted
@@ -1089,74 +1334,104 @@ def get_hls_link_fsvid(url: str, headers: dict) -> str | None:
     resp = _get(url, headers=h, impersonate="chrome")
     resp.raise_for_status()
 
-    # Some mirrors (vidzy) answer 200 with EVERY embed link pointing at a
-    # /troll/ decoy when they don't like the request (temporary ban, foreign
-    # IP…). Surface it instead of returning the decoy as a real stream.
     body = resp.text or ""
-    if "/troll/" in body and not _has_real_player_payload(body):
-        return None
-
-    try:
-        code = deobfuscate(resp.text)
-    except Exception:
-        code = resp.text or ""
-
-    # The current algorithm derives its key from the EMBED HOST (location.
-    # hostname in the browser), so pass it through for an exact reproduction.
+    if embed_is_placeholder(body):
+        return None  # removed / locked file, never a real stream
     try:
         host = url.split("/")[2]
     except Exception:
         host = "fsvid.lol"
-    stream_url = _fsvid_decode(code, host)
-    if not stream_url:
+    candidates = _fsvid_candidates(body, host)
+    if not candidates:
         return None
 
-    # fsvid's player sets this cookie before creating the video.js instance.
-    # The CDN usually tolerates its absence, but mpv/yt-dlp are more likely to
-    # be rejected on some edges — carry it with the resolved URL.
-    if "fsvid" in host.lower():
-        set_stream_headers(stream_url, {
-            "Cookie": "fsv_pe=1",
-            "Referer": f"https://{host}/",
-            "Origin": f"https://{host}",
-        })
+    stream_url = candidates[0]
+    return _remember_premium_headers(host, stream_url, h) or stream_url
 
-    # Vidzy's player runs a browser "gate" that returns a short-lived gk and
-    # sets a vz_ok cookie. Without it the CDN answers 403 to mpv/yt-dlp even
-    # though the decoded master URL looks valid. Reproduce the gate with the
-    # same per-thread session, then append gk and remember the Cookie for
-    # playback AND download.
+
+def _remember_premium_headers(host: str, stream_url: str, h: dict):
+    """Carry the cookies/headers the browser player sets before playing.
+
+    fsvid sets ``fsv_pe=1`` and vidzy's gate returns a short-lived ``gk``
+    appended to the CDN URL (with a ``vz_ok`` cookie). The CDN usually
+    tolerates their absence, but mpv/yt-dlp are more likely to be rejected
+    on some edges — so keep them attached to the resolved URL.
+    """
     try:
-        base_domain = ".".join(host.split(".")[-2:])
-        gate = f"https://v6.{base_domain}/gate.php?" + urllib.parse.urlencode({
-            "v": "p1",
-            "cw": "100", "cw2": "100", "wg": "1", "dpr": "1",
-            "sw": "1920", "hw": "8", "ft": "TOP", "rf": host,
-        })
-        gh = dict(h)
-        gh.setdefault("Origin", f"https://{host}")
-        gr = _get(gate, headers=gh, impersonate="chrome")
-        gk = (gr.json() or {}).get("gk") if gr.status_code == 200 else None
-        if gk:
-            sep = "&" if "?" in stream_url else "?"
-            stream_url += f"{sep}gk={urllib.parse.quote(gk)}"
+        if "fsvid" in host.lower():
             set_stream_headers(stream_url, {
-                "Cookie": f"vz_ok={gk}",
+                "Cookie": "fsv_pe=1",
                 "Referer": f"https://{host}/",
                 "Origin": f"https://{host}",
             })
+        if "vidzy" in host.lower():
+            # The embed's current gate answers {"ok":0} and the CDN now
+            # serves the master (and every segment) with just the embed
+            # Referer/Origin. Only append gk when the gate really returns one.
+            headers = {"Referer": f"https://{host}/", "Origin": f"https://{host}"}
+            try:
+                base_domain = ".".join(host.split(".")[-2:])
+                gate = f"https://v6.{base_domain}/gate.php?" + urllib.parse.urlencode({
+                    "v": "p1",
+                    "cw": "100", "cw2": "100", "wg": "1", "dpr": "1",
+                    "sw": "1920", "hw": "8", "ft": "TOP", "rf": host,
+                })
+                gh = dict(h)
+                gh.setdefault("Origin", f"https://{host}")
+                gr = _get(gate, headers=gh, impersonate="chrome", timeout=8)
+                gk = (gr.json() or {}).get("gk") if gr.status_code == 200 else None
+            except Exception:
+                gk = None
+            if gk and stream_url.startswith("http") and "hls2" in stream_url:
+                sep = "&" if "?" in stream_url else "?"
+                stream_url = stream_url + f"{sep}gk={urllib.parse.quote(gk)}"
+                headers["Cookie"] = f"vz_ok={gk}"
+            set_stream_headers(stream_url, headers)
     except Exception:
-        pass
+        return None
     return stream_url
+
+
+# Placeholder an embed shows INSTEAD of the player when it will never play
+# for anyone (file locked/removed, preview not ready…). Listing such a player
+# with a quality badge would be a false positive.
+_EMBED_DEAD_TEXT_MARKERS = (
+    "file was locked by administrator",
+    "file was deleted",
+    "file expired",
+    "file not found",
+    "the file you are looking for",
+    "video was removed",
+    "video not found",
+    "this video has been removed",
+    "can't find the video",
+    "we can't find the video",
+)
+
+
+def embed_is_placeholder(body: str) -> bool:
+    """True when an embed page is a "file removed/locked" placeholder.
+
+    uqload keeps listing locked files (``over_player_msg`` = "File was locked
+    by administrator"), mixdrop answers "We can't find the video". Resolving
+    them is wasted time and, worse, they used to appear as playable rows.
+    """
+    low = (body or "").lower()
+    return any(marker in low for marker in _EMBED_DEAD_TEXT_MARKERS)
 
 
 def _has_real_player_payload(body: str) -> bool:
     """True when the embed actually carries the obfuscated player payload.
 
-    A healthy fsvid/vidzy embed ships a base64 ``sources.src`` IIFE; the
-    "banned" variant only has the decoy /troll/ URL.
+    A healthy embed ships either the packed player (Dean Edwards' packer
+    holding ``sources.src``) or the older base64 IIFE; the "banned" variant
+    only has the decoy /troll/ URL.
     """
-    return bool(re.search(r"\}\)\(\\?\"[A-Za-z0-9+/=]{40,}\\?\"\)", body or ""))
+    body = body or ""
+    if re.search(r"\}\)\(\\?\"[A-Za-z0-9+/=]{40,}\\?\"\)", body):
+        return True
+    packed = unpack_dean_edwards(body)
+    return bool(re.search(r"sources\s*:\s*\[?\{?\s*src\s*:", packed))
 
 
 def _fsvid_decode(code: str, hostname: str = "fsvid.lol"):
@@ -1318,8 +1593,13 @@ def get_hls_link(url: str, headers: dict = None) -> str | None:
                 link = get_hls_link_xtremestream(url, headers)
             elif parse_type == "fsvid":
                 link = get_hls_link_fsvid(url, headers)
+            elif parse_type == "byse":
+                link = get_hls_link_byse(url, headers)
             elif parse_type == "dood":
-                link = get_hls_link_dood(url, headers)
+                link = get_hls_link_dood(
+                    url, headers,
+                    player_host=(config.get("referrer") or "").split("//")[-1].strip("/"),
+                )
             elif parse_type == "voe":
                 link = get_hls_link_voe(url, headers)
             elif parse_type == "kokoflix":
