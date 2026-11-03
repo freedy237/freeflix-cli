@@ -518,6 +518,24 @@ class ProgressTracker:
     def is_episode_watched(self, key: str) -> bool:
         return key in self.data.get("watched_episodes", [])
 
+    # ── "Nouveautés" seen markers ────────────────────────────────────
+    # An item is identified by series + season + latest episode. Dismissing
+    # it stores that exact key, so a LATER episode changes the key and the
+    # show comes back in New releases.
+    def get_seen_releases(self) -> set[str]:
+        return set(self.data.get("seen_releases", []) or [])
+
+    def mark_release_seen(self, key: str):
+        if not key:
+            return
+        seen = self.data.setdefault("seen_releases", [])
+        if key not in seen:
+            seen.append(key)
+            # bound the list so it cannot grow forever on long installs
+            if len(seen) > 500:
+                del seen[:len(seen) - 500]
+            self._save_data()
+
     def get_anilist_mapping(
         self, provider: str, series_title: str, season_title: Optional[str] = None
     ) -> Optional[int]:

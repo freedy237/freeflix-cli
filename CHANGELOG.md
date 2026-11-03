@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.16.8
+
+- **Nouveautés = nouveaux épisodes des animes que tu regardes** : le flux ne
+  se contente plus de détecter une nouvelle saison. Pour chaque série
+  Anime-Sama de l'historique, il compare le **dernier épisode disponible**
+  avec l'épisode que tu as regardé. Exemple : tu t'arrêtes à l'épisode 5,
+  l'épisode 12 sort → il apparaît dans Nouveautés.
+- **Libellé clair** : « Série — Saison 1 · Épisode 12 ». En ouvrant l'élément,
+  le menu des épisodes se positionne directement sur le nouvel épisode.
+- **Ça part quand tu l'as vu** : ouvrir un élément de Nouveautés le marque
+  comme lu et le retire du badge d'accueil. La clé contient le numéro
+  d'épisode : quand un **épisode suivant** sort, il réapparaît tout seul.
+- **Vérifié en direct** : deux nouveautés détectées (Avatar — Saison 1 ·
+  Épisode 9, Sentai Daishikkaku — Saison 2 · Épisode 12).
+- **Tests** : 518 tests au vert, ruff OK, tests Python 3.9 OK.
+
 ## 1.16.7
 
 - **Retour à une première page, comme sur le site** : French-Stream affiche

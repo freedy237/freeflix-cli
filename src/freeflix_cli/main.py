@@ -542,16 +542,25 @@ def _browse_new_releases(items=None):
         pause()
         return
 
+    def _item_label(it):
+        label = f"{it['title']} — {it['latest_season']}"
+        if it.get("latest_episode"):
+            label += f" · {it['latest_episode']}"
+        return label
+
     previews = [
         make_preview(
             cover=it.get("poster", ""),
             title=it["title"],
-            lines=[f"{icon('sparkle')} {it['latest_season']}"],
+            lines=[
+                f"{icon('sparkle')} {it['latest_season']}",
+                str(it.get("latest_episode") or ""),
+            ],
             panel_title=t("New releases"),
         )
         for it in items
     ]
-    labels = [f"{it['title']} — {it['latest_season']}" for it in items]
+    labels = [_item_label(it) for it in items]
     idx = select_with_preview(labels, f"{icon('sparkle')} {t('New releases')}", previews)
     if idx >= len(items):
         return
@@ -578,6 +587,22 @@ def _browse_new_releases(items=None):
         pause()
         return
 
+    # The user has opened/seen this release: remove it from the home badge.
+    # A later episode gets a different key and reappears automatically.
+    from . import recent
+    recent.dismiss(it)
+
+    def _default_ep_idx(episodes):
+        wanted = it.get("latest_episode") or ""
+        wanted_num = recent._ep_num(wanted)
+        for i, ep in enumerate(episodes):
+            title = getattr(ep, "title", "")
+            if title == wanted or (
+                wanted_num and recent._ep_num(title) == wanted_num
+            ):
+                return i
+        return 0
+
     with crumb(it["title"]), crumb(it["latest_season"]):
         while True:  # ── Language ──
             if len(langs) == 1:
@@ -592,7 +617,7 @@ def _browse_new_releases(items=None):
                     return
                 lang = langs[li]
             episodes = season.episodes[lang]
-            ep_idx = 0
+            ep_idx = _default_ep_idx(episodes)
             while True:  # ── Episode ──
                 ep_labels = [
                     e.title + episode_badges(it["title"], it["latest_season"], e.title)
