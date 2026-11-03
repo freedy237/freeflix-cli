@@ -177,99 +177,88 @@ def _is_usable_player_link(link: str) -> bool:
     return not any(p in low for p in _DEAD_PLAYER_PATHS)
 
 
-def search(query: str) -> list[SearchResult]:
-    page_search = "/engine/ajax/search.php"
+def _page_has_more(body: str) -> bool:
+    """True when the AJAX page carries the site's "Afficher la suite" card."""
+    try:
+        soup = parse_html(body)
+        return soup.select_one(".search-item.search-more") is not None
+    except Exception:
+        return "search-more" in (body or "") or 'data-page="' in (body or "")
 
-    headers = {
-        "Referer": f"{website_origin}/",
-    }
+
+def search_page(query: str, page: int = 1):
+    """One result page + whether the site has a next page.
+
+    The endpoint is paginated (page 1 = 19 cards, then 25/page). The UI now
+    shows ONE page at a time with an "Afficher la suite" row, exactly like the
+    site — instead of dumping 191 rows (or, before 1.16.5, stopping at page 1).
+    """
+    page_search = "/engine/ajax/search.php"
+    headers = {"Referer": f"{website_origin}/"}
 
     def _diag(msg: str):
-        # Fichier log uniquement (jamais l'UI) : la recherche vide sur
-        # certaines machines se diagnostique via le log, pas à l'aveugle.
         try:
             from .. import logsetup as _ls
             _ls.warning(f"french-stream search: {msg}")
         except Exception:
             pass
 
-    # Only a NON-EMPTY list is cached. Caching the raw body stored blocking /
-    # challenge pages too, whose "0 cards" answer then stuck for 5 minutes.
-    ckey = f"french-stream:search-cards-v3:{query.strip().lower()}"
-    cached_cards = httpcache.get(ckey, 300)
-    if cached_cards is not None:
+    page = max(1, int(page or 1))
+    ckey = f"french-stream:search-page-v4:{query.strip().lower()}:{page}"
+    cached = httpcache.get(ckey, 300)
+    if cached is not None:
         try:
-            data_cached = json.loads(cached_cards)
-            if isinstance(data_cached, list) and data_cached:
-                return [
-                    SearchResult(c[0], c[1], c[2], list(c[3] or []),
-                                 (c[4] if len(c) > 4 else None))
-                    for c in data_cached
-                ]
+            data = json.loads(cached)
+            cards = [
+                SearchResult(c[0], c[1], c[2], list(c[3] or []),
+                             (c[4] if len(c) > 4 else None))
+                for c in (data.get("cards") or [])
+            ]
+            if cards:
+                return cards, bool(data.get("has_more"))
         except Exception:
             pass
-    # ── Pagination ────────────────────────────────────────────────────
-    # The AJAX endpoint returns ONE page per request (19 cards for page 1,
-    # then 25 per page). The app used to stop at page 1: a search for "from"
-    # showed 19 results while the site had 185. Walk every page until the
-    # endpoint answers empty (or repeats the previous page), with a hard cap
-    # so a broad query cannot hammer the site forever.
-    import time as _time
 
-    MAX_PAGES = 20
-    TIME_BUDGET = 12.0  # seconds; return what we have rather than nothing
-    deadline = _time.monotonic() + TIME_BUDGET
-    results: list[SearchResult] = []
-    seen: set[str] = set()
-    response = None
+    try:
+        response = _post(
+            website_origin + page_search,
+            data={"query": query, "page": page},
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
+    except Exception as e:
+        _diag(f"request failed page={page} err={type(e).__name__}: {e}")
+        return [], False
 
-    for page in range(1, MAX_PAGES + 1):
-        if page > 1 and _time.monotonic() > deadline:
-            _diag(f"page budget reached at page {page} ({len(results)} cards)")
-            break
+    body = response.text or ""
+    low = body.lower()
+    if "verification" in low and "anti-robot" in low:
+        _diag(f"anti-robot challenge page (page {page}, {len(body)} bytes)")
+    elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
+        _diag(f"cloudflare challenge page (page {page}, {len(body)} bytes)")
+
+    cards = _parse_search_cards(body)
+    has_more = bool(cards) and _page_has_more(body)
+    if cards:
         try:
-            response = _post(
-                website_origin + page_search,
-                data={"query": query, "page": page},
-                headers=headers,
-                timeout=15,
-            )
-            response.raise_for_status()
-        except Exception as e:
-            _diag(f"request failed page={page} err={type(e).__name__}: {e}")
-            if page == 1:
-                return []  # nothing to show, and do NOT cache an empty list
-            break  # keep the pages already collected
-
-        body = response.text or ""
-        low = body.lower()
-        if "verification" in low and "anti-robot" in low:
-            _diag(f"anti-robot challenge page (page {page}, {len(body)} bytes)")
-        elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
-            _diag(f"cloudflare challenge page (page {page}, {len(body)} bytes)")
-
-        cards = _parse_search_cards(body)
-        if not cards:
-            break  # past the last page
-        new_cards = [c for c in cards if c.url not in seen]
-        if not new_cards:
-            break  # endpoint repeats the last page when page is out of range
-        for card in new_cards:
-            seen.add(card.url)
-            results.append(card)
-
-    if results:
-        try:
-            httpcache.store(ckey, json.dumps(
-                [[r.title, r.url, r.img, r.genres, r.seasons] for r in results],
-                ensure_ascii=False,
-            ))
+            httpcache.store(ckey, json.dumps({
+                "cards": [[r.title, r.url, r.img, r.genres, r.seasons]
+                          for r in cards],
+                "has_more": has_more,
+            }, ensure_ascii=False))
         except Exception:
             pass
     else:
-        _diag(f"0 results parsed from {len(body or '')}-byte response "
-              f"(status={getattr(response, 'status_code', '?')})")
-    return results
+        _diag(f"0 results parsed from {len(body)}-byte response "
+              f"(page {page}, status={getattr(response, 'status_code', '?')})")
+    return cards, has_more
+
+
+def search(query: str) -> list[SearchResult]:
+    """Backward-compatible helper: the FIRST page (the UI paginates)."""
+    cards, _has_more = search_page(query, 1)
+    return cards
 
 
 def _parse_search_cards(body: str) -> list[SearchResult]:

@@ -49,7 +49,7 @@ def handle_french_stream():
         tracker.add_search_query(query)
 
         with skeleton(f"{t('Searching for')} {query}…"):
-            results = french_stream.search(query)
+            results, has_more = french_stream.search_page(query, 1)
         # Live counter: an empty/short list must never look like a silent
         # failure (the site sometimes answers a blocking page with 0 cards).
         print_info(f"{icon('search')} {len(results)} "
@@ -61,21 +61,43 @@ def handle_french_stream():
             pause()
             continue
 
-        previews = [
-            make_preview(
-                cover=getattr(r, "img", ""),
-                title=r.title,
-                lines=[", ".join(getattr(r, "genres", []) or [])],
-                panel_title="French-Stream",
-            )
-            for r in results
-        ]
+        page = 1
+        while True:  # ── Results level (one page at a time) ──
+            labels = [r.title for r in results]
+            previews = [
+                make_preview(
+                    cover=getattr(r, "img", ""),
+                    title=r.title,
+                    lines=[", ".join(getattr(r, "genres", []) or [])],
+                    panel_title="French-Stream",
+                )
+                for r in results
+            ]
+            if has_more:
+                labels.append(f"{icon('list')} {t('Show more')}")
+                previews.append(make_preview(
+                    title=t("Show more"),
+                    lines=[t("Load the next page")],
+                    panel_title="French-Stream",
+                ))
 
-        while True:  # ── Results level ──
             choice_idx = select_with_preview(
-                [r.title for r in results],
-                f"{icon('tv')} {t('Search Results:')}", previews,
+                labels, f"{icon('tv')} {t('Search Results:')}", previews,
             )
+            if has_more and choice_idx == len(results):
+                page += 1
+                with skeleton(f"{t('Loading')}…"):
+                    more, has_more = french_stream.search_page(query, page)
+                if not more:
+                    has_more = False
+                    print_warning(t("No more results."))
+                    continue
+                known = {r.url for r in results}
+                added = [r for r in more if r.url not in known]
+                results.extend(added)
+                print_info(f"{icon('search')} {len(results)} "
+                           f"{t('result(s) found')}")
+                continue
             if choice_idx >= len(results):
                 break  # → search input
             selection = results[choice_idx]

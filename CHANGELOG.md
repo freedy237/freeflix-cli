@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.16.7
+
+- **Retour à une première page, comme sur le site** : French-Stream affiche
+  désormais **une page de résultats** (25 cartes : les séries d'abord, puis
+  les films) avec une ligne **« Afficher la suite »**, au lieu de charger les
+  191 résultats d'un coup. Chaque clic charge la page suivante et l'ajoute à
+  la liste ; le compteur se met à jour.
+- **FROM reste en premier** : les 6 séries de la première page (FROM,
+  From Dusk Till Dawn, Stranger Things…) sont conservées, avec leur choix de
+  saison. Le correctif 1.16.6 n'est donc pas perdu.
+- **Cache par page** : revenir sur une page déjà vue est instantané ; une
+  ancienne liste complète (v3) n'est plus utilisée (clé `search-page-v4`).
+- **Tests** : 512 tests au vert, ruff OK, imports Python 3.9 OK.
+
 ## 1.16.6
 
 - **Séries French-Stream visibles** : les cartes « série » du site

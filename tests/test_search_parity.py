@@ -76,23 +76,18 @@ def test_coflix_skips_same_work_under_another_type(monkeypatch):
     assert len(coflix.search("dune")) == 1
 
 
-def test_french_stream_walks_every_page(monkeypatch):
-    """A search must aggregate ALL pages, not just page 1.
-
-    Real case: "from" → 19 cards on page 1, then 25/page up to page 8
-    (185 total). The app used to show only the 19 from page 1.
-    """
+def test_french_stream_search_page_is_one_page_at_a_time(monkeypatch):
+    """The UI shows page 1 + "Afficher la suite", not 191 rows at once."""
     from freeflix_cli import httpcache
 
     def card(n):
         return (f"<div class='search-item' onclick=\"location.href='/{n}-x.html'\">"
                 f"<div class='search-title'>Title {n}</div></div>")
 
-    pages = {
-        1: card(1) + card(2) + card(3),
-        2: card(4) + card(5),
-        3: "",  # past the last page
-    }
+    more = ('<div class="search-item search-more" data-page="2" data-q="from">'
+            '<div>Afficher la suite</div></div>')
+    pages = {1: card(1) + card(2) + card(3) + more,
+             2: card(4) + card(5)}
 
     class _Resp:
         status_code = 200
@@ -114,17 +109,23 @@ def test_french_stream_walks_every_page(monkeypatch):
     monkeypatch.setattr(httpcache, "get", lambda *a, **k: None)
     monkeypatch.setattr(httpcache, "store", lambda *a, **k: None)
 
-    out = french_stream.search("from")
-    assert [r.title for r in out] == ["Title 1", "Title 2", "Title 3", "Title 4", "Title 5"]
-    assert calls == [1, 2, 3]
+    first, has_more = french_stream.search_page("from", 1)
+    assert [r.title for r in first] == ["Title 1", "Title 2", "Title 3"]
+    assert has_more is True
+    assert calls == [1]
+
+    second, has_more2 = french_stream.search_page("from", 2)
+    assert [r.title for r in second] == ["Title 4", "Title 5"]
+    assert has_more2 is False
+    assert calls == [1, 2]
 
 
-def test_french_stream_stops_when_pages_repeat(monkeypatch):
-    """Out-of-range pages may repeat the last page: never loop forever."""
+def test_french_stream_search_returns_first_page_only(monkeypatch):
     from freeflix_cli import httpcache
 
     card = ("<div class='search-item' onclick=\"location.href='/9-x.html'\">"
             "<div class='search-title'>Same</div></div>")
+    called = []
 
     class _Resp:
         status_code = 200
@@ -133,10 +134,8 @@ def test_french_stream_stops_when_pages_repeat(monkeypatch):
         def raise_for_status(self):
             return None
 
-    calls = []
-
     def fake_post(url, data=None, **kw):
-        calls.append((data or {}).get("page"))
+        called.append((data or {}).get("page"))
         return _Resp()
 
     monkeypatch.setattr(french_stream, "_post", fake_post)
@@ -145,42 +144,7 @@ def test_french_stream_stops_when_pages_repeat(monkeypatch):
 
     out = french_stream.search("same")
     assert [r.title for r in out] == ["Same"]
-    assert calls == [1, 2]  # page 2 repeated page 1 → stop
-
-
-def test_hianime_search_walks_pages(monkeypatch):
-    """HiAnime search is paginated too (34 on page 1, 30 on page 2…)."""
-    from freeflix_cli import httpcache
-    from freeflix_cli.scraping import goldenanime
-
-    def block(n):
-        return (f'<div class="flw-item"><img src="https://cdn/{n}.jpg">'
-                f'<div class="tick-item tick-sub">1</div>'
-                f'<a href="https://hianime.at/watch/show-{n}" '
-                f'title="Show {n}"></a></div>')
-
-    pages = {1: block(1) + block(2), 2: block(3), 3: "", 4: ""}
-
-    class _Resp:
-        status_code = 200
-
-        def __init__(self, text):
-            self.text = text
-
-    calls = []
-
-    def fake_get(url, **kw):
-        page = int(url.rsplit("page=", 1)[-1]) if "page=" in url else 1
-        calls.append(page)
-        return _Resp(pages.get(page, ""))
-
-    monkeypatch.setattr(goldenanime, "_get", fake_get)
-    monkeypatch.setattr(httpcache, "get", lambda *a, **k: None)
-    monkeypatch.setattr(httpcache, "store", lambda *a, **k: None)
-
-    out = goldenanime.goldenanime.search_hianime_shows("show")
-    assert [x["title"] for x in out] == ["Show 1", "Show 2", "Show 3"]
-    assert calls == [1, 2, 3]
+    assert called == [1]  # never fetches page 2 behind the user's back
 
 
 def test_french_stream_parses_series_cards_with_seasons():
@@ -242,7 +206,8 @@ def test_french_stream_handler_offers_series_seasons(monkeypatch):
             episodes={"vf": [SimpleNamespace(title="Episode 1", players=[])]},
         )
 
-    monkeypatch.setattr(H.french_stream, "search", lambda q: [series])
+    monkeypatch.setattr(H.french_stream, "search_page",
+                        lambda q, page=1: ([series], False))
     monkeypatch.setattr(H.french_stream, "get_content", fake_content)
     monkeypatch.setattr(H, "play_episode_flow", lambda **kw: False)
     monkeypatch.setattr(H.tracker, "get_search_history", lambda: [])
