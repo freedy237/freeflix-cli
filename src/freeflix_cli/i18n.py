@@ -99,6 +99,7 @@ _FR = {
     "Select video player:": "Choisis le lecteur vidéo :",
     "Nyaa.si Torrents": "Torrents Nyaa.si",
     "No results found.": "Aucun résultat trouvé.",
+    "result(s) found": "résultat(s) trouvé(s)",
     "No seasons found.": "Aucune saison trouvée.",
     "No episodes found.": "Aucun épisode trouvé.",
     "No players found for this episode.": "Aucun lecteur trouvé pour cet épisode.",

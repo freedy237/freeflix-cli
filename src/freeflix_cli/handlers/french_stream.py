@@ -50,6 +50,10 @@ def handle_french_stream():
 
         with skeleton(f"{t('Searching for')} {query}…"):
             results = french_stream.search(query)
+        # Live counter: an empty/short list must never look like a silent
+        # failure (the site sometimes answers a blocking page with 0 cards).
+        print_info(f"{icon('search')} {len(results)} "
+                   f"{t('result(s) found')}")
 
         if not results:
             print_warning(t("No results found."))

@@ -166,40 +166,97 @@ def _search_html(query: str) -> list[SearchResult]:
     return _cards_from_soup(parse_html(body))
 
 
-def search(query: str) -> list[SearchResult]:
-    """
-    Search Coflix (now a WordPress site — the old /suggest.php 500s). Primary:
-    the HTML results page, which carries posters + titles. Fallback: the WP REST
-    search endpoint (titles only) if the HTML layout ever yields nothing.
-    """
-    try:
-        results = _search_html(query)
-        if results:
-            return results
-    except Exception:
-        pass
+def _search_rest(query: str, per_page: int = 50) -> list[SearchResult]:
+    """WordPress REST search: titles + URLs, up to ``per_page`` items.
 
-    # Fallback : WP REST search (no poster, but reliable titles/urls).
-    try:
-        page = (website_origin.rstrip("/")
-                + "/wp-json/wp/v2/search?per_page=20&search=" + urllib.parse.quote(query))
-        response = _get(page)
-        if getattr(response, "status_code", None) == 429:
-            raise RuntimeError("Coflix 429 — search temporarily blocked by the site")
-        response.raise_for_status()
-        data = response.json()
-    except RuntimeError:
-        raise
-    except Exception:
-        return []
-
+    This is the COMPLETE index — the ``/?s=`` results page only renders a
+    handful of cards (coflix.ac lists 3 for "Naruto" while the index has 5),
+    which silently hid series (Boruto Next Generations, Shippuden) and the
+    ``/anime/`` URLs that ``_cards_from_soup`` ignores. Titles only (no
+    poster), but missing results are worse than a plain row.
+    """
+    page = (website_origin.rstrip("/")
+            + f"/wp-json/wp/v2/search?per_page={per_page}&search="
+            + urllib.parse.quote(query))
+    response = _get(page)
+    if getattr(response, "status_code", None) == 429:
+        raise RuntimeError("Coflix 429 — search temporarily blocked by the site")
+    response.raise_for_status()
+    data = response.json()
     if not isinstance(data, list):
         return []
     out: list[SearchResult] = []
     for r in data:
         if isinstance(r, dict) and r.get("title") and r.get("url"):
-            out.append(SearchResult(r["title"], r["url"], "", []))
+            title = r["title"]
+            if isinstance(title, dict):
+                title = title.get("rendered") or ""
+            out.append(SearchResult(str(title), r["url"], "", []))
     return out
+
+
+def search(query: str) -> list[SearchResult]:
+    """
+    Search Coflix (WordPress site — the old /suggest.php 500s).
+
+    BOTH indexes are merged, not swapped: the HTML page carries posters but
+    only a few cards, while the REST endpoint is complete (series +
+    ``/anime/`` pages included). HTML rows keep their poster; REST-only rows
+    are appended, so the list is never shorter than the catalogue.
+
+    The MERGED list is cached (10 min): re-running the same search used to
+    re-hit the 400 KB results page AND the REST index (~44 s on a slow link).
+    """
+    ckey = f"coflix:search-merged:{query.strip().lower()}"
+    cached = httpcache.get(ckey, 600)
+    if cached is not None:
+        try:
+            import json as _json
+            rows = _json.loads(cached)
+            if isinstance(rows, list) and rows:
+                return [SearchResult(r[0], r[1], r[2], list(r[3] or []))
+                        for r in rows]
+        except Exception:
+            pass
+    html_results: list[SearchResult] = []
+    try:
+        html_results = _search_html(query)
+    except Exception:
+        html_results = []
+
+    try:
+        rest_results = _search_rest(query)
+    except RuntimeError:
+        if not html_results:
+            raise
+        rest_results = []
+    except Exception:
+        rest_results = []
+
+    if not html_results and not rest_results:
+        return []
+
+    def _norm(u: str) -> str:
+        return (u or "").rstrip("/").lower()
+
+    have = {_norm(r.url) for r in html_results}
+    # A film/serie card and its /anime/ REST twin are the SAME work.
+    slugs = {_norm(r.url).rsplit("/", 1)[-1] for r in html_results}
+    merged = list(html_results)
+    for r in rest_results:
+        if _norm(r.url) in have or _norm(r.url).rsplit("/", 1)[-1] in slugs:
+            continue
+        have.add(_norm(r.url))
+        merged.append(r)
+    try:
+        import json as _json
+        httpcache.store(ckey, _json.dumps(
+            [[r.title, r.url, r.img, r.genres] for r in merged],
+            ensure_ascii=False,
+        ))
+    except Exception:
+        pass
+    return merged
 
 
 def get_players(players_url: str) -> list[Player]:

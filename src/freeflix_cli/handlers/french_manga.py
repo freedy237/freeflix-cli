@@ -7,6 +7,7 @@ from ..cli_utils import (
     select_with_preview,
     make_preview,
     print_warning,
+    print_info,
     get_user_input,
     pause,
     skeleton,
@@ -91,6 +92,7 @@ def handle_french_manga():
 
         with skeleton(f"{t('Searching for')} {query}…"):
             results = french_manga.search(query)
+        print_info(f"{icon('search')} {len(results)} {t('result(s) found')}")
         if not results:
             print_warning(t("No results found."))
             pause()

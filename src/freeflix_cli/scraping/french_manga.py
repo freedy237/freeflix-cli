@@ -74,20 +74,35 @@ def search(query: str) -> list:
         if cacheable_body(body):
             httpcache.store(ckey, body)
 
+    results = _parse_search_cards(body)
+    return results
+
+
+def _parse_search_cards(body: str) -> list:
+    """Cards of a DLE search response → SearchResult list (tolerant)."""
     results = []
     # Par carte (BeautifulSoup) plutôt qu'une regex DOTALL inter-cartes qui
     # mélangeait les posters quand une carte n'avait pas de titre.
     soup = parse_html(body)
     for card in soup.find_all("div", {"class": "search-item"}):
-        onclick = card.attrs.get("onclick", "")
-        m = re.search(r"location\.href='([^']+)'", onclick)
+        # DLE uses single quotes on some templates and double quotes on
+        # others: a single-quote-only parser silently rendered 0 results.
+        m = re.search(r"""location\.href\s*=\s*['"]([^'"]+)['"]""",
+                      card.attrs.get("onclick", "") or "")
         if not m:
-            continue
-        url = m.group(1)
+            # Some cards are a plain <a href> instead of an onclick handler.
+            anchor = card.find("a", href=True)
+            if anchor is None:
+                continue
+            url = anchor["href"]
+        else:
+            url = m.group(1)
         if not url.startswith("http"):
             url = website_origin + url
         title_tag = card.find("div", {"class": "search-title"})
         title = clean_text(title_tag.get_text(strip=True)) if title_tag else ""
+        if not title:
+            title = clean_text(card.get_text(" ", strip=True))[:120]
         if not title:
             continue
         # Pull the card's poster (TMDB thumbnail) so the preview pane has a cover.

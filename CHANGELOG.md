@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.16.3
+
+- **Plus de résultats perdus** : l'app peut maintenant afficher PLUS de
+  résultats que le site, jamais moins.
+  - **Coflix** : la page `/?s=` ne rend que quelques cartes (3 pour
+    « Naruto ») alors que l'index WordPress en contient 5, dont les séries et
+    les pages `/anime/`. Les deux index sont désormais **fusionnés**
+    (posters de la page HTML + complétude du REST), sans doublon. Et la liste
+    fusionnée est mise en cache 10 min : **44 s → 0 s** pour la même
+    recherche.
+  - **French-Stream** : la recherche mettait en cache le corps brut, y
+    compris la page anti-robot → « Aucun résultat » pendant 5 minutes. Seule
+    une liste **non vide** est maintenant mise en cache. Le parseur accepte
+    les deux styles de guillemets, les cartes sans `.search-title` (titre pris
+    dans l'image/l'URL) et fusionne les cartes dupliquées.
+  - **Anime-Sama** : une coupure réseau passagère vidait la recherche ; la
+    dernière copie valide du catalogue est maintenant servie à la place.
+- **Compteur visible** : French-Stream, French-Manga et Coflix affichent
+  désormais « N résultat(s) trouvé(s) » après chaque recherche — un résultat
+  vide ne peut plus passer pour une panne silencieuse.
+- **AniList** : la recherche de correspondance remonte 20 candidats au lieu
+  de 10 (moins de « aucun match » sur les titres longs).
+- **Audit complet des sources** (28 contrôles en direct) : **27 OK**. Seul
+  Papystreaming reste bloqué par Cloudflare (403 upstream), les autres
+  sources (Anime-Sama, French-Stream, GoldenMS, HiAnime, GoldenAnime,
+  Coflix, French-Manga, YTS, EZTV, Nyaa) répondent.
+- **Tests** : 508 tests au vert, ruff OK.
+
 ## 1.16.2
 
 - **Vidzy réparé (la vraie cause)** : le lecteur d'un embed vidzy est encodé

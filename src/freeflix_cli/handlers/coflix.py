@@ -51,6 +51,7 @@ def handle_coflix():
                 pause()
                 continue
 
+        print_info(f"{icon('search')} {len(results)} {t('result(s) found')}")
         if not results:
             print_warning(t("No results found."))
             pause()

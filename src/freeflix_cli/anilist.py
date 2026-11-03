@@ -119,7 +119,7 @@ class AniListClient:
         """Search for an anime/manga by title."""
         query = """
         query ($search: String) {
-            Page(page: 1, perPage: 10) {
+            Page(page: 1, perPage: 20) {
                 media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
                     id
                     title {
@@ -142,6 +142,8 @@ class AniListClient:
         }
         """
         variables = {"search": search}
+        # NOT cached: AniList must never answer a new query from the previous
+        # one (that silently returned the wrong show's candidates).
         data = self._query(query, variables)
         if data and data.get("Page") and data.get("Page", {}).get("media"):
             return data["Page"]["media"]

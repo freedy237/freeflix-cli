@@ -1,4 +1,5 @@
 import json
+import re
 
 from .objects import (
     SearchResult,
@@ -197,10 +198,20 @@ def search(query: str) -> list[SearchResult]:
         except Exception:
             pass
 
-    ckey = f"french-stream:search:{query.strip().lower()}"
-    body = httpcache.get(ckey, 300)
-    if body is not None:
-        return _parse_search_cards(body)
+    # Only a NON-EMPTY list is cached. Caching the raw body stored blocking /
+    # challenge pages too, whose "0 cards" answer then stuck for 5 minutes.
+    ckey = f"french-stream:search-cards:{query.strip().lower()}"
+    cached_cards = httpcache.get(ckey, 300)
+    if cached_cards is not None:
+        try:
+            data_cached = json.loads(cached_cards)
+            if isinstance(data_cached, list) and data_cached:
+                return [
+                    SearchResult(c[0], c[1], c[2], list(c[3] or []))
+                    for c in data_cached
+                ]
+        except Exception:
+            pass
     try:
         response = _post(
             website_origin + page_search,
@@ -220,10 +231,16 @@ def search(query: str) -> list[SearchResult]:
     elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
         _diag(f"cloudflare challenge page ({len(body)} bytes)")
 
-    if cacheable_body(body):
-        httpcache.store(ckey, body)
     results = _parse_search_cards(body)
-    if not results:
+    if results:
+        try:
+            httpcache.store(ckey, json.dumps(
+                [[r.title, r.url, r.img, r.genres] for r in results],
+                ensure_ascii=False,
+            ))
+        except Exception:
+            pass
+    else:
         _diag(f"0 results parsed from {len(body)}-byte response "
               f"(status={getattr(response, 'status_code', '?')})")
     return results
@@ -235,18 +252,33 @@ def _parse_search_cards(body: str) -> list[SearchResult]:
     soup = parse_html(body)
 
     for result in soup.find_all("div", {"class": "search-item"}):
-        try:
-            title: str = clean_text(result.find("div", {"class": "search-title"}).text)
-        except AttributeError:
-            continue  # carte promo sans titre : on saute, pas tout le reste
+        title_tag = result.find("div", {"class": "search-title"})
+        title: str = clean_text(title_tag.text) if title_tag is not None else ""
+        if not title:
+            # Une carte sans .search-title mais avec un <img alt>/<a> reste
+            # un résultat : on la garde au lieu de la jeter.
+            img_alt = result.find("img")
+            title = clean_text(
+                (img_alt.get("alt") or "") if img_alt is not None else ""
+            )
 
-        onclick = result.attrs.get("onclick", "")
-        if "location.href='" not in onclick:
-            continue
-        link: str = (
-            website_origin
-            + onclick.split("location.href='")[1].split("'")[0]
-        )
+        # Single or double quotes, and an <a href> template as a fallback:
+        # the skin has shipped both layouts.
+        onclick = result.attrs.get("onclick", "") or ""
+        if "location.href" not in onclick:
+            onclick = str(
+                [v for k, v in result.attrs.items() if k == "onclick"] or ""
+            )
+        m = re.search(r"""location\.href\s*=\s*['"]([^'"]+)['"]""", onclick)
+        rel = m.group(1) if m else ""
+        if not rel:
+            anchor = result.find("a", href=True)
+            rel = anchor["href"] if anchor is not None else ""
+        if not rel:
+            continue  # bandeau pub sans lien : on saute, pas tout le reste
+        if not title:
+            title = clean_text(rel.rstrip("/").rsplit("/", 1)[-1].split("-", 1)[-1])
+        link: str = rel if rel.startswith("http") else website_origin + rel
         try:
             img_tag = result.find("img")
             img: str = _abs_img((img_tag.attrs.get("src") or "") if img_tag else "")
@@ -255,6 +287,8 @@ def _parse_search_cards(body: str) -> list[SearchResult]:
 
         genres: list[str] = []  # unknow
 
+        if any(r.url == link for r in results):
+            continue  # site sends the same card twice (promo + real)
         results.append(SearchResult(title, link, img, genres))
 
     return results

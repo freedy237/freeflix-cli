@@ -95,12 +95,38 @@ def get_website_url(portal=portals["anime-sama"]):
     store_origin("anime-sama", website_origin)
 
 
+def _archived_body(url: str) -> str | None:
+    """Any archived copy of *url*, whatever its age (offline fallback)."""
+    try:
+        import json
+        from .. import httpcache
+        path = httpcache._path(url)
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("text")
+    except Exception:
+        return None
+
+
 def search(query: str) -> list[SearchResult]:
     import urllib.parse as _up
     page = website_origin + f"/catalogue/?search={_up.quote(query)}"
 
-    response = _get(page, cache_ttl=1800)
-    response.raise_for_status()
+    try:
+        response = _get(page, cache_ttl=1800)
+        response.raise_for_status()
+    except Exception:
+        # A hiccup on anime-sama.to used to empty the whole search. Serve the
+        # last good catalogue answer instead (7 days), like GoldenMS does.
+        from .. import httpcache
+        stale = _archived_body(page)
+        if stale is None:
+            raise
+        try:
+            from .. import logsetup
+            logsetup.warning("anime-sama search: serving stale catalogue copy")
+        except Exception:
+            pass
+        response = httpcache.CachedResponse(stale)
 
     results: list[SearchResult] = []
 
