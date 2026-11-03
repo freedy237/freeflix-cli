@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.16.4
+
+- **Correctif Python 3.9** : `scraping/anime_sama.py` utilisait une annotation
+  `str | None` sans `from __future__ import annotations`, ce qui faisait
+  échouer l'import du module (donc de l'app) sur Python 3.9. Le filet de
+  sécurité « dernière copie du catalogue servie si le réseau tombe » de
+  1.16.3 est conservé.
+- **Vérifié** : imports complets + **508 tests** passent sous **Python 3.9**
+  et sous Python 3.12, ruff OK.
+
 ## 1.16.3
 
 - **Plus de résultats perdus** : l'app peut maintenant afficher PLUS de

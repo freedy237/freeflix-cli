@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from curl_cffi import requests as cffi_requests
 from .objects import SearchResult, SamaSeason, SamaSeries, SeasonAccess, Episode
 from .utils import (
