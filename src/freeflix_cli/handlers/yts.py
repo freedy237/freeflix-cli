@@ -175,7 +175,7 @@ def handle_yts():
 
         if mode == 0:
             with skeleton(f"{t('Loading latest movies…')}"):
-                results = yts.latest(20)
+                results = yts.latest(50)
             if not results:
                 print_warning(t("Latest is empty right now — falling back to search."))
                 mode = 1  # fall through to search
@@ -201,7 +201,7 @@ def handle_yts():
             last_query = query
             tracker.add_search_query(query)
             with skeleton(f"{t('Searching for')} {query}…"):
-                results = yts.search(query)
+                results = yts.search(query, limit=50)
             if not results:
                 print_warning(t("No results found."))
                 pause()

@@ -349,48 +349,65 @@ class AnimeExtractor:
             return []
 
     def search_hianime_shows(self, title):
-        """HiAnime catalogue search → [{slug, title, poster, sub, dub}]."""
+        """HiAnime catalogue search → [{slug, title, poster, sub, dub}].
+
+        The search page is paginated (34 items page 1, 30 page 2, …). The
+        app used to show only page 1; walk up to 4 pages (≈120 shows) and
+        dedupe, so a broad title search matches the site's "next page".
+        """
         import html as _html
         import urllib.parse as _up
 
         base = (self.hianime_base or "https://hianime.at").rstrip("/")
         out = []
+        seen = set()
+        query = (title or "").strip()
+        if not query:
+            return out
         try:
-            ckey = f"hianime:search:{(title or '').lower()}"
-            body = httpcache.get(ckey, 900)
-            if body is None:
-                r = _get(f"{base}/search?keyword={_up.quote(title or '')}",
-                         timeout=12)
-                if r.status_code != 200:
-                    return out
-                body = r.text or ""
-                if cacheable_body(body):
-                    httpcache.store(ckey, body)
-            txt = body
-            # The top-10 sidebar repeats result markup — cut it off first
-            # (same trick as ani-cli).
-            txt = txt.split('id="main-sidebar"')[0]
-            # One flw-item block per result : poster + ticks + film-detail.
-            blocks = re.split(r'<div class="flw-item', txt)[1:]
-            for b in blocks:
-                m = re.search(
-                    r'<a href="[^"]*/([^"/]*)"[^>]*title="([^"]*)"', b)
-                if not m:
-                    continue
-                slug = m.group(1)
-                name = clean_text(_html.unescape(m.group(2)))
-                if not slug or not name:
-                    continue
-                im = re.search(r'<img[^>]+src="([^"]+)"', b)
-                sub = re.search(r'tick-sub">\s*<i[^>]*></i>\s*(\d+)', b)
-                dub = re.search(r'tick-dub">\s*<i[^>]*></i>\s*(\d+)', b)
-                out.append({
-                    "slug": slug,
-                    "title": name,
-                    "poster": im.group(1) if im else "",
-                    "sub": sub.group(1) if sub else "",
-                    "dub": dub.group(1) if dub else "",
-                })
+            for page in range(1, 5):
+                ckey = f"hianime:search:{query.lower()}:p{page}"
+                body = httpcache.get(ckey, 900)
+                if body is None:
+                    r = _get(
+                        f"{base}/search?keyword={_up.quote(query)}&page={page}",
+                        timeout=12,
+                    )
+                    if r.status_code != 200:
+                        break
+                    body = r.text or ""
+                    if cacheable_body(body):
+                        httpcache.store(ckey, body)
+                # The top-10 sidebar repeats result markup — cut it off first
+                # (same trick as ani-cli).
+                txt = body.split('id="main-sidebar"')[0]
+                blocks = re.split(r'<div class="flw-item', txt)[1:]
+                if not blocks:
+                    break
+                new = 0
+                for b in blocks:
+                    m = re.search(
+                        r'<a href="[^"]*/([^"/]*)"[^>]*title="([^"]*)"', b)
+                    if not m:
+                        continue
+                    slug = m.group(1)
+                    name = clean_text(_html.unescape(m.group(2)))
+                    if not slug or not name or slug in seen:
+                        continue
+                    seen.add(slug)
+                    im = re.search(r'<img[^>]+src="([^"]+)"', b)
+                    sub = re.search(r'tick-sub">\s*<i[^>]*></i>\s*(\d+)', b)
+                    dub = re.search(r'tick-dub">\s*<i[^>]*></i>\s*(\d+)', b)
+                    out.append({
+                        "slug": slug,
+                        "title": name,
+                        "poster": im.group(1) if im else "",
+                        "sub": sub.group(1) if sub else "",
+                        "dub": dub.group(1) if dub else "",
+                    })
+                    new += 1
+                if not new:
+                    break  # out-of-range page repeats the previous one
         except Exception:
             pass
         return out

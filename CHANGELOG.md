@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.16.5
+
+- **French-Stream : TOUS les résultats** (le vrai « 19 au lieu de 185 »).
+  L'endpoint AJAX renvoie **une page par requête** : 19 cartes page 1, puis
+  25 par page. L'app s'arrêtait à la page 1, d'où « From » → 19 résultats
+  alors que le site en a **185**. La recherche parcourt maintenant les pages
+  jusqu'à la dernière (arrêt sur page vide ou répétée), avec un plafond de
+  20 pages / 12 s pour ne pas marteler le site. Vérifié : **From = 185
+  résultats** (page 8), Naruto = 12, Avatar = 7 ; la liste complète est mise
+  en cache 5 min (2ᵉ recherche instantanée).
+- **Cache invalidé** : une ancienne liste tronquée (issue de la page 1) ne
+  peut plus être resservie — nouvelle clé de cache `search-cards-v2`.
+- **Même vérification sur les autres sources** :
+  - **Coflix** : l'index REST passe à **100 résultats** (la page `/?s=`
+    n'affiche que 16 cartes pour « the ») et reste fusionné avec les
+    posters de la page HTML.
+  - **HiAnime** : la recherche est paginée (34 page 1, 30 page 2…) ;
+    l'app parcourt maintenant **4 pages (~120 séries)** au lieu de la
+    première seulement.
+  - **Nyaa** : **75 torrents** au lieu de 20 (la page du site en liste 75).
+  - **YTS** : **50 films** au lieu de 20 (limite de l'API YTS).
+  - **Anime-Sama** : tout le catalogue tient sur une page (48 cartes, 46
+    watchables) — aucun changement nécessaire.
+  - **French-Manga** : l'AJAX du site ignore le paramètre `page` et plafonne
+    à 20 ; l'app affiche donc la même liste que le site.
+  - **Papystreaming** : toujours bloqué par Cloudflare (403 upstream).
+- **Tests** : 511 tests au vert (pagination French-Stream + HiAnime, arrêt
+  sur page répétée), ruff OK, import complet vérifié sous Python 3.9.
+
 ## 1.16.4
 
 - **Correctif Python 3.9** : `scraping/anime_sama.py` utilisait une annotation

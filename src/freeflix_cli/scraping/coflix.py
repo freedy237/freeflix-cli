@@ -166,14 +166,17 @@ def _search_html(query: str) -> list[SearchResult]:
     return _cards_from_soup(parse_html(body))
 
 
-def _search_rest(query: str, per_page: int = 50) -> list[SearchResult]:
-    """WordPress REST search: titles + URLs, up to ``per_page`` items.
+def _search_rest(query: str, per_page: int = 100) -> list[SearchResult]:
+    """WordPress REST search: titles + URLs, up to 100 items.
 
     This is the COMPLETE index — the ``/?s=`` results page only renders a
     handful of cards (coflix.ac lists 3 for "Naruto" while the index has 5),
     which silently hid series (Boruto Next Generations, Shippuden) and the
-    ``/anime/`` URLs that ``_cards_from_soup`` ignores. Titles only (no
-    poster), but missing results are worse than a plain row.
+    ``/anime/`` URLs that ``_cards_from_soup`` ignores.
+
+    100 is enough to exceed the site's visible first page (16 cards for
+    "the") without the 15-18 s per-page cost of walking pages 2+; the HTML
+    page + this index are merged below.
     """
     page = (website_origin.rstrip("/")
             + f"/wp-json/wp/v2/search?per_page={per_page}&search="
@@ -186,12 +189,18 @@ def _search_rest(query: str, per_page: int = 50) -> list[SearchResult]:
     if not isinstance(data, list):
         return []
     out: list[SearchResult] = []
+    seen: set[str] = set()
     for r in data:
-        if isinstance(r, dict) and r.get("title") and r.get("url"):
-            title = r["title"]
-            if isinstance(title, dict):
-                title = title.get("rendered") or ""
-            out.append(SearchResult(str(title), r["url"], "", []))
+        if not (isinstance(r, dict) and r.get("title") and r.get("url")):
+            continue
+        title = r["title"]
+        if isinstance(title, dict):
+            title = title.get("rendered") or ""
+        key = str(r["url"]).rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(SearchResult(str(title), r["url"], "", []))
     return out
 
 

@@ -180,11 +180,6 @@ def _is_usable_player_link(link: str) -> bool:
 def search(query: str) -> list[SearchResult]:
     page_search = "/engine/ajax/search.php"
 
-    data = {
-        "query": query,
-        "page": 1,
-    }
-
     headers = {
         "Referer": f"{website_origin}/",
     }
@@ -200,7 +195,7 @@ def search(query: str) -> list[SearchResult]:
 
     # Only a NON-EMPTY list is cached. Caching the raw body stored blocking /
     # challenge pages too, whose "0 cards" answer then stuck for 5 minutes.
-    ckey = f"french-stream:search-cards:{query.strip().lower()}"
+    ckey = f"french-stream:search-cards-v2:{query.strip().lower()}"
     cached_cards = httpcache.get(ckey, 300)
     if cached_cards is not None:
         try:
@@ -212,26 +207,56 @@ def search(query: str) -> list[SearchResult]:
                 ]
         except Exception:
             pass
-    try:
-        response = _post(
-            website_origin + page_search,
-            data=data,
-            headers=headers,
-            timeout=15,
-        )
-        response.raise_for_status()
-    except Exception as e:
-        _diag(f"request failed url={website_origin + page_search} err={type(e).__name__}: {e}")
-        return []
+    # ── Pagination ────────────────────────────────────────────────────
+    # The AJAX endpoint returns ONE page per request (19 cards for page 1,
+    # then 25 per page). The app used to stop at page 1: a search for "from"
+    # showed 19 results while the site had 185. Walk every page until the
+    # endpoint answers empty (or repeats the previous page), with a hard cap
+    # so a broad query cannot hammer the site forever.
+    import time as _time
 
-    body = response.text or ""
-    low = body.lower()
-    if "verification" in low and "anti-robot" in low:
-        _diag(f"anti-robot challenge page ({len(body)} bytes)")
-    elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
-        _diag(f"cloudflare challenge page ({len(body)} bytes)")
+    MAX_PAGES = 20
+    TIME_BUDGET = 12.0  # seconds; return what we have rather than nothing
+    deadline = _time.monotonic() + TIME_BUDGET
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+    response = None
 
-    results = _parse_search_cards(body)
+    for page in range(1, MAX_PAGES + 1):
+        if page > 1 and _time.monotonic() > deadline:
+            _diag(f"page budget reached at page {page} ({len(results)} cards)")
+            break
+        try:
+            response = _post(
+                website_origin + page_search,
+                data={"query": query, "page": page},
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            _diag(f"request failed page={page} err={type(e).__name__}: {e}")
+            if page == 1:
+                return []  # nothing to show, and do NOT cache an empty list
+            break  # keep the pages already collected
+
+        body = response.text or ""
+        low = body.lower()
+        if "verification" in low and "anti-robot" in low:
+            _diag(f"anti-robot challenge page (page {page}, {len(body)} bytes)")
+        elif "cloudflare" in low or "cf-ray" in low or "just a moment" in low:
+            _diag(f"cloudflare challenge page (page {page}, {len(body)} bytes)")
+
+        cards = _parse_search_cards(body)
+        if not cards:
+            break  # past the last page
+        new_cards = [c for c in cards if c.url not in seen]
+        if not new_cards:
+            break  # endpoint repeats the last page when page is out of range
+        for card in new_cards:
+            seen.add(card.url)
+            results.append(card)
+
     if results:
         try:
             httpcache.store(ckey, json.dumps(
@@ -241,7 +266,7 @@ def search(query: str) -> list[SearchResult]:
         except Exception:
             pass
     else:
-        _diag(f"0 results parsed from {len(body)}-byte response "
+        _diag(f"0 results parsed from {len(body or '')}-byte response "
               f"(status={getattr(response, 'status_code', '?')})")
     return results
 

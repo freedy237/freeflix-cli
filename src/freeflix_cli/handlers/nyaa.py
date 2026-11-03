@@ -265,7 +265,7 @@ def handle_nyaa():
 
         if mode == 0:
             with skeleton(f"{t('Loading latest torrents…')}"):
-                results = nyaa.latest(category, max_results=20)
+                results = nyaa.latest(category, max_results=75)
             if not results:
                 print_warning(t("No results."))
                 pause()
@@ -287,7 +287,7 @@ def handle_nyaa():
             last_query = query
             tracker.add_search_query(query)
             print_info(f"{t('Searching nyaa.si for')} [cyan]{query}[/cyan] ...")
-            results = nyaa.search(query, max_results=20, category=category,
+            results = nyaa.search(query, max_results=75, category=category,
                                   trusted_only=trusted_only)
             if not results:
                 if nyaa.last_error:
