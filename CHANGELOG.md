@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.16.6
+
+- **Séries French-Stream visibles** : les cartes « série » du site
+  (`search-item search-series`) n'ont ni `onclick` ni `<a>` — les saisons
+  sont dans un attribut `data-seasons`. L'app les ignorait donc totalement :
+  « FROM », la première série du site pour la recherche *from*, n'apparaissait
+  pas. Le parseur lit maintenant ces cartes ; **FROM arrive en premier** avec
+  ses **4 saisons**.
+- **Choix de la saison** : sélectionner une série affiche d'abord
+  « Saison 1…N » (menu inline, poster conservé), puis la langue et les
+  épisodes de la saison choisie. Avant, même en forçant l'URL, seule la
+  saison 1 était accessible.
+- **Recherche complète** : *from* renvoie désormais **191 résultats**
+  (185 films + 6 séries) au lieu de 19, et le cache inclut les saisons
+  (clé `search-cards-v3`, les anciennes listes tronquées sont ignorées).
+- **Vérifié en direct** : FROM saisons 1 à 4 → 10 VF + 10 VOSTFR chacune.
+- **Tests** : 513 tests au vert, ruff OK, imports Python 3.9 OK.
+
 ## 1.16.5
 
 - **French-Stream : TOUS les résultats** (le vrai « 19 au lieu de 185 »).

@@ -181,3 +181,89 @@ def test_hianime_search_walks_pages(monkeypatch):
     out = goldenanime.goldenanime.search_hianime_shows("show")
     assert [x["title"] for x in out] == ["Show 1", "Show 2", "Show 3"]
     assert calls == [1, 2, 3]
+
+
+def test_french_stream_parses_series_cards_with_seasons():
+    """A `search-item search-series` has no onclick: seasons live in
+    data-seasons. Skipping it hid whole shows (e.g. "FROM - série")."""
+    import json
+    from freeflix_cli.scraping import french_stream
+
+    seasons = [
+        {"n": 1, "l": "/15110779-from-saison-1.html",
+         "p": "https://img/from1.jpg"},
+        {"n": 2, "l": "/15113990-from-saison-2.html",
+         "p": "https://img/from2.jpg"},
+    ]
+    body = (
+        '<div class="search-item search-series" data-seasons=\''
+        + json.dumps(seasons).replace("'", "&#39;")
+        + '\' onclick="showSeasons(this)">'
+        '<div class="search-poster"><img alt="FROM" src="https://img/from1.jpg"></div>'
+        '<div class="search-info"><div class="search-title">FROM - série</div></div>'
+        '</div>'
+    )
+    out = french_stream._parse_search_cards(body)
+    assert len(out) == 1
+    assert out[0].title == "FROM - série"
+    assert out[0].url.endswith("/15110779-from-saison-1.html")
+    assert [s["n"] for s in out[0].seasons] == [1, 2]
+    assert out[0].seasons[1]["url"].endswith("/15113990-from-saison-2.html")
+
+
+def test_french_stream_handler_offers_series_seasons(monkeypatch):
+    """Selecting "FROM - série" must ask for a season and load ITS URL."""
+    from types import SimpleNamespace
+    from freeflix_cli.handlers import french_stream as H
+    from freeflix_cli.scraping.objects import SearchResult
+
+    series = SearchResult(
+        "FROM - série",
+        "https://french-stream.net/15110779-from-saison-1.html",
+        "https://img/from1.jpg",
+        [],
+        [
+            {"n": 1, "url": "https://french-stream.net/15110779-from-saison-1.html",
+             "poster": "https://img/from1.jpg"},
+            {"n": 2, "url": "https://french-stream.net/15113990-from-saison-2.html",
+             "poster": "https://img/from2.jpg"},
+            {"n": 3, "url": "https://french-stream.net/15118486-from-saison-3-2022.html",
+             "poster": "https://img/from3.jpg"},
+        ],
+    )
+    loaded = []
+
+    def fake_content(url):
+        loaded.append(url)
+        return SimpleNamespace(
+            title="FROM - Saison 3",
+            url=url,
+            img="https://img/from3.jpg",
+            episodes={"vf": [SimpleNamespace(title="Episode 1", players=[])]},
+        )
+
+    monkeypatch.setattr(H.french_stream, "search", lambda q: [series])
+    monkeypatch.setattr(H.french_stream, "get_content", fake_content)
+    monkeypatch.setattr(H, "play_episode_flow", lambda **kw: False)
+    monkeypatch.setattr(H.tracker, "get_search_history", lambda: [])
+    monkeypatch.setattr(H.tracker, "add_search_query", lambda q: None)
+    monkeypatch.setattr(H.tracker, "get_series_progress", lambda *a, **k: None)
+    from freeflix_cli import terminal_image
+    monkeypatch.setattr(terminal_image, "show_poster", lambda *a, **k: None)
+
+    inputs = iter(["from", "exit"])
+    monkeypatch.setattr(H, "get_user_input", lambda *a, **k: next(inputs))
+    previews = iter([0, 1])  # pick first result, then Back to search
+    monkeypatch.setattr(H, "select_with_preview", lambda *a, **k: next(previews))
+    menus = iter([2, 2])  # season 3, then episode-list Back
+    prompts = []
+
+    def fake_select(opts, prompt, **kw):
+        prompts.append(prompt)
+        return next(menus)
+
+    monkeypatch.setattr(H, "select_from_list", fake_select)
+
+    H.handle_french_stream()
+    assert any(("Season" in p or "aison" in p) for p in prompts)
+    assert loaded == ["https://french-stream.net/15118486-from-saison-3-2022.html"]

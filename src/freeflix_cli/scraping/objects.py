@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 class SearchResult:
-    def __init__(self, title: str, url: str, img: str, genres: list[str]):
+    def __init__(self, title: str, url: str, img: str, genres: list[str],
+                 seasons: list | None = None):
         self.title = title
         self.url = url
         self.img = img
         self.genres = genres
+        # French-Stream series cards carry every season; the handler offers
+        # the season picker before loading episodes. Empty for movies/others.
+        self.seasons = seasons or []
 
     def __str__(self):
         return f"SearchResult(title='{self.title}', url='{self.url}', img='{self.img}', genres={self.genres})"

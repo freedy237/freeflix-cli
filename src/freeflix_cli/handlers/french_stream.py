@@ -80,18 +80,51 @@ def handle_french_stream():
                 break  # → search input
             selection = results[choice_idx]
 
+            from .. import terminal_image
+
+            # ── Series card: choose the season FIRST ──────────────────
+            # French-Stream search returns whole shows as one card with a
+            # data-seasons list (e.g. "FROM - série", 4 seasons). Without this
+            # picker the app only ever opened season 1 — or, before the parser
+            # fix, hid the show entirely.
+            season_url = selection.url
+            season_poster = getattr(selection, "img", "")
+            season_info = [", ".join(getattr(selection, "genres", []) or [])]
+            if getattr(selection, "seasons", None):
+                terminal_image.show_poster(
+                    season_poster,
+                    info_lines=season_info[:1] + [
+                        f"{len(selection.seasons)} "
+                        f"{t('season') if len(selection.seasons) == 1 else t('seasons')}"
+                    ],
+                )
+                s_labels = [
+                    f"{icon('tv')} {t('Season')} {s.get('n')}"
+                    for s in selection.seasons
+                ] + [t("← Back")]
+                s_idx = select_from_list(
+                    s_labels,
+                    f"{icon('tv')} {t('Select Season:')}",
+                    clear_on_back=False, inline=True,
+                )
+                if s_idx >= len(selection.seasons):
+                    continue  # → results
+                chosen = selection.seasons[s_idx]
+                season_url = chosen.get("url") or season_url
+                season_poster = chosen.get("poster") or season_poster
+                season_info = [f"{t('Season')} {chosen.get('n')}"]
+
             try:
                 with spinner(f"{t('Loading')} {selection.title}…"):
-                    content = french_stream.get_content(selection.url)
+                    content = french_stream.get_content(season_url)
             except Exception:
                 print_warning(t("Failed to load (network/source issue)."))
                 pause()
                 continue
 
-            from .. import terminal_image
             terminal_image.show_poster(
-                getattr(content, "img", "") or getattr(selection, "img", ""),
-                info_lines=[", ".join(getattr(selection, "genres", []) or [])],
+                getattr(content, "img", "") or season_poster,
+                info_lines=season_info,
             )
 
             if isinstance(content, FrenchStreamMovie):

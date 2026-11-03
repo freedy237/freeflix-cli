@@ -195,14 +195,15 @@ def search(query: str) -> list[SearchResult]:
 
     # Only a NON-EMPTY list is cached. Caching the raw body stored blocking /
     # challenge pages too, whose "0 cards" answer then stuck for 5 minutes.
-    ckey = f"french-stream:search-cards-v2:{query.strip().lower()}"
+    ckey = f"french-stream:search-cards-v3:{query.strip().lower()}"
     cached_cards = httpcache.get(ckey, 300)
     if cached_cards is not None:
         try:
             data_cached = json.loads(cached_cards)
             if isinstance(data_cached, list) and data_cached:
                 return [
-                    SearchResult(c[0], c[1], c[2], list(c[3] or []))
+                    SearchResult(c[0], c[1], c[2], list(c[3] or []),
+                                 (c[4] if len(c) > 4 else None))
                     for c in data_cached
                 ]
         except Exception:
@@ -260,7 +261,7 @@ def search(query: str) -> list[SearchResult]:
     if results:
         try:
             httpcache.store(ckey, json.dumps(
-                [[r.title, r.url, r.img, r.genres] for r in results],
+                [[r.title, r.url, r.img, r.genres, r.seasons] for r in results],
                 ensure_ascii=False,
             ))
         except Exception:
@@ -286,6 +287,42 @@ def _parse_search_cards(body: str) -> list[SearchResult]:
             title = clean_text(
                 (img_alt.get("alt") or "") if img_alt is not None else ""
             )
+
+        # ── Series card ──────────────────────────────────────────────
+        # `search-item search-series` has NO onclick/<a>: the seasons live in
+        # a data-seasons JSON attribute. Skipping it hid whole shows (e.g.
+        # "FROM - série", first result on the site) from the app.
+        classes = result.get("class") or []
+        raw_seasons = result.attrs.get("data-seasons")
+        if raw_seasons or "search-series" in classes:
+            seasons = []
+            try:
+                parsed = json.loads(raw_seasons or "[]")
+                for season in parsed if isinstance(parsed, list) else []:
+                    if not isinstance(season, dict):
+                        continue
+                    rel = season.get("l") or ""
+                    if not rel:
+                        continue
+                    url = rel if str(rel).startswith("http") else website_origin + rel
+                    seasons.append({
+                        "n": season.get("n") or len(seasons) + 1,
+                        "url": url,
+                        "poster": _abs_img(season.get("p") or ""),
+                    })
+            except Exception:
+                seasons = []
+            if seasons:
+                first = seasons[0]
+                if not title:
+                    title = clean_text(first["url"].rstrip("/").rsplit("/", 1)[-1])
+                link = first["url"]
+                if any(r.url == link for r in results):
+                    continue
+                results.append(SearchResult(
+                    title, link, first.get("poster") or "", [], seasons,
+                ))
+            continue
 
         # Single or double quotes, and an <a href> template as a fallback:
         # the skin has shipped both layouts.
