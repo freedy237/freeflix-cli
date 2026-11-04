@@ -1147,8 +1147,9 @@ def main():
         has_anime_history = any(
             e.get("provider") == "Anime-Sama" for e in tracker.get_history()
         )
+        has_follows = bool(tracker.get_followed_series())
         new_idx = -1
-        if new_releases or has_anime_history:
+        if new_releases or has_anime_history or has_follows:
             label = f"{icon('sparkle')} {t('New releases')}"
             if new_releases:
                 label += f" ({len(new_releases)})"

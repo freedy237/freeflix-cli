@@ -168,7 +168,7 @@ def test_planning_entry_actions_offer_follow_and_browse(monkeypatch):
 
     def fake_select(opts, prompt, **kw):
         picked["opts"] = opts
-        return 2  # Back
+        return 3  # Back
 
     class _Series:
         title = entry.title
@@ -178,14 +178,16 @@ def test_planning_entry_actions_offer_follow_and_browse(monkeypatch):
 
     monkeypatch.setattr(H, "select_from_list", fake_select)
     monkeypatch.setattr(H, "print_info", lambda *a, **k: None)
+    monkeypatch.setattr(H.tracker, "is_following", lambda *a, **k: False)
     monkeypatch.setattr(H.anime_sama, "get_series", lambda url: _Series())
     monkeypatch.setattr(H, "spinner",
                         lambda _m: __import__("contextlib").nullcontext())
     monkeypatch.setattr("freeflix_cli.terminal_image.show_poster",
                         lambda *a, **k: None)
     H._planning_entry_actions(entry, "Lundi", "19/10")
-    assert len(picked["opts"]) == 3
+    assert len(picked["opts"]) == 4
     joined = " ".join(picked["opts"]).lower()
+    assert t("Follow this anime").lower() in joined
     assert t("Follow the latest released episode").lower() in joined
     assert t("Browse seasons").lower() in joined
 
@@ -278,3 +280,41 @@ def test_follow_latest_episode_opens_last_episode(monkeypatch):
     H._follow_latest_episode(Series())
     assert played["season_title"] == "Saison 2"
     assert played["episode"] == "ep3"
+
+
+def test_toggle_follow_stores_baseline_and_can_unfollow(monkeypatch):
+    from types import SimpleNamespace
+    from contextlib import nullcontext
+
+    calls = {"follow": [], "unfollow": []}
+    state = {"following": False}
+    series = SimpleNamespace(
+        title="Frieren",
+        url="https://anime-sama.to/catalogue/frieren",
+        img="https://img/frieren.jpg",
+        seasons=[SimpleNamespace(title="Saison 1", url="https://x/s1")],
+    )
+    season = SimpleNamespace(
+        title="Saison 1",
+        episodes={"vostfr": [SimpleNamespace(title="Episode 9", url="u")]},
+    )
+    monkeypatch.setattr(H.tracker, "is_following", lambda *a: state["following"])
+    monkeypatch.setattr(H.tracker, "follow_series", lambda *a, **k:
+                        calls["follow"].append((a, k)))
+    monkeypatch.setattr(H.tracker, "unfollow_series", lambda *a:
+                        calls["unfollow"].append(a))
+    monkeypatch.setattr(H.anime_sama, "get_season", lambda url: season)
+    monkeypatch.setattr(H, "spinner", lambda _m: nullcontext())
+    monkeypatch.setattr(H, "print_success", lambda *a, **k: None)
+    monkeypatch.setattr(H, "print_info", lambda *a, **k: None)
+
+    H._toggle_follow(series)
+    assert calls["follow"]
+    args, kwargs = calls["follow"][0]
+    assert args[:2] == ("Anime-Sama", "Frieren")
+    assert kwargs["last_season"] == "Saison 1"
+    assert kwargs["last_episode_num"] == 9
+
+    state["following"] = True
+    H._toggle_follow(series)
+    assert calls["unfollow"] == [("Anime-Sama", "Frieren")]

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.16.10
+
+- **Suivre un anime depuis le planning** : le menu d'un anime du planning
+  propose maintenant **« Suivre cet anime »** (et « Ne plus suivre »). Plus
+  besoin de lancer un épisode : la série entre dans Nouveautés.
+- **Base de suivi** : au moment du suivi, l'app mémorise le dernier épisode
+  actuellement listé. Quand un **épisode suivant** sort, il apparaît dans
+  Nouveautés (« Série — Saison · Épisode »).
+- **Historique + suivis** : Nouveautés combine les animes déjà regardés et
+  ceux suivis depuis le planning, sans doublon. Regarder un épisode met aussi
+  à jour la base du suivi.
+- **Quand tu le vois, ça part** : ouvrir l'élément le retire du badge et met
+  à jour la base ; l'épisode de la semaine suivante réapparaît tout seul.
+- **Vérifié** : suivi sans historique, nouveau épisode, épisode non encore
+  sorti (planning `released=false`), épisode déjà vu et désabonnement.
+- **Tests** : 525 tests au vert, ruff OK, imports Python 3.9 OK.
+
 ## 1.16.9
 
 - **Nouveautés respecte le planning** : Anime-Sama pré-crée la page du

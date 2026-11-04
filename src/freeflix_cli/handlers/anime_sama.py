@@ -317,8 +317,14 @@ def _planning_entry_actions(entry, day, date_label) -> None:
         ],
     )
 
+    following = tracker.is_following("Anime-Sama", series.title)
+    follow_label = (
+        f"{icon('star')} {t('Unfollow this anime')}" if following
+        else f"{icon('star')} {t('Follow this anime')}"
+    )
     choice = select_from_list(
         [
+            follow_label,
             f"{icon('play')} {t('Follow the latest released episode')}",
             f"{icon('list')} {t('Browse seasons')}",
             t("← Back"),
@@ -326,12 +332,50 @@ def _planning_entry_actions(entry, day, date_label) -> None:
         entry.title,
         clear_on_back=False, inline=True,
     )
-    if choice >= 2:
+    if choice >= 3:
         return
     if choice == 0:
+        _toggle_follow(series)
+    elif choice == 1:
         _follow_latest_episode(series)
     else:
         _anime_sama_series_flow(series)
+
+
+def _toggle_follow(series) -> None:
+    """Follow/unfollow a planning show WITHOUT requiring an episode watch.
+
+    The follow baseline is the newest episode currently listed, so the next
+    released episode (number > baseline) shows up in Nouveautés.
+    """
+    from .. import recent
+
+    if tracker.is_following("Anime-Sama", series.title):
+        tracker.unfollow_series("Anime-Sama", series.title)
+        print_success(f"{t('No longer following:')} {series.title}")
+        return
+
+    latest = (series.seasons or [])[-1] if series.seasons else None
+    last_season = ""
+    last_num, last_title = 0, ""
+    if latest is not None:
+        try:
+            with spinner(f"{t('Loading')} {latest.title}…"):
+                season = anime_sama.get_season(latest.url)
+            last_season = latest.title
+            last_title, last_num = recent._latest_episode(season)
+        except Exception:
+            pass
+    tracker.follow_series(
+        "Anime-Sama", series.title, series.url,
+        season_url=getattr(latest, "url", "") if latest is not None else "",
+        logo_url=getattr(series, "img", ""),
+        last_season=last_season,
+        last_episode_num=last_num,
+        last_episode_title=last_title,
+    )
+    print_success(f"{t('Now following:')} {series.title}")
+    print_info(t("New episodes will appear in New releases."))
 
 def _follow_latest_episode(series) -> None:
     """Open the newest season at its last released episode (with sync check).

@@ -101,6 +101,12 @@ _FR = {
     "No results found.": "Aucun résultat trouvé.",
     "result(s) found": "résultat(s) trouvé(s)",
     "Show more": "Afficher la suite",
+    "Follow this anime": "Suivre cet anime",
+    "Unfollow this anime": "Ne plus suivre cet anime",
+    "Now following:": "Tu suis maintenant :",
+    "No longer following:": "Tu ne suis plus :",
+    "New episodes will appear in New releases.":
+        "Les nouveaux épisodes apparaîtront dans Nouveautés.",
     "Load the next page": "Charger la page suivante",
     "No more results.": "Plus de résultats.",
     "No seasons found.": "Aucune saison trouvée.",

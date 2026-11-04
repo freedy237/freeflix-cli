@@ -19,7 +19,7 @@ def _season(title, episodes, url="https://x/saison1"):
 
 def _setup(monkeypatch, watched_episode="Episode 5", watched_season="Saison 1",
            latest_season="Saison 1", latest_eps=None,
-           seen=None, planning=None):
+           seen=None, planning=None, followed=None):
     if latest_eps is None:
         latest_eps = range(1, 13)
     hist = [{
@@ -29,7 +29,7 @@ def _setup(monkeypatch, watched_episode="Episode 5", watched_season="Saison 1",
         "episode_title": watched_episode,
         "series_url": "https://anime-sama.to/catalogue/frieren",
         "season_url": "https://anime-sama.to/catalogue/frieren/saison1/vostfr",
-    }]
+    }] if followed is None else []
     series = SimpleNamespace(
         title="Frieren",
         url="https://anime-sama.to/catalogue/frieren",
@@ -39,6 +39,7 @@ def _setup(monkeypatch, watched_episode="Episode 5", watched_season="Saison 1",
     )
     season = _season(latest_season, latest_eps)
     monkeypatch.setattr(tracker, "get_history", lambda: hist)
+    monkeypatch.setattr(tracker, "get_followed_series", lambda: list(followed or []))
     monkeypatch.setattr(tracker, "get_seen_releases", lambda: set(seen or ()))
     monkeypatch.setattr(anime_sama, "get_website_url", lambda: None)
     monkeypatch.setattr(anime_sama, "get_series", lambda url: series)
@@ -131,3 +132,47 @@ def test_released_planning_episode_is_announced(monkeypatch):
                    latest_eps=range(1, 13), planning=[entry])
     assert len(items) == 1
     assert items[0]["latest_episode"] == "Episode 12"
+
+
+def test_followed_series_without_history_is_tracked(monkeypatch):
+    followed = [{
+        "provider": "Anime-Sama",
+        "title": "Frieren",
+        "series_url": "https://anime-sama.to/catalogue/frieren",
+        "season_url": "https://x/latest",
+        "logo_url": "https://img/frieren.jpg",
+        "last_season": "Saison 1",
+        "last_episode_num": 5,
+        "last_episode_title": "Episode 5",
+    }]
+    items = _setup(monkeypatch, followed=followed)
+    assert len(items) == 1
+    assert items[0]["latest_episode"] == "Episode 12"
+    assert items[0]["provider"] == "Anime-Sama"
+
+
+def test_tracker_follow_unfollow_and_progress(monkeypatch):
+    monkeypatch.setattr(tracker, "data", {})
+    monkeypatch.setattr(tracker, "_save_data", lambda: None)
+    tracker.follow_series("Anime-Sama", "Frieren", "https://x/frieren",
+                          last_season="Saison 1", last_episode_num=5,
+                          last_episode_title="Episode 5")
+    assert tracker.is_following("Anime-Sama", "Frieren") is True
+    assert tracker.get_followed_series()[0]["last_episode_num"] == 5
+    tracker.update_followed_progress("Anime-Sama", "Frieren",
+                                     "Saison 1", "Episode 9")
+    assert tracker.get_followed_series()[0]["last_episode_num"] == 9
+    tracker.unfollow_series("Anime-Sama", "Frieren")
+    assert tracker.is_following("Anime-Sama", "Frieren") is False
+
+
+def test_dismiss_updates_follow_baseline(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tracker, "mark_release_seen", lambda key: None)
+    monkeypatch.setattr(tracker, "update_followed_progress",
+                        lambda *a: calls.append(a))
+    item = {"key": "k", "provider": "Anime-Sama", "title": "Frieren",
+            "latest_season": "Saison 1", "latest_episode": "Episode 9"}
+    recent._state["items"] = [item]
+    recent.dismiss(item)
+    assert calls == [("Anime-Sama", "Frieren", "Saison 1", "Episode 9")]

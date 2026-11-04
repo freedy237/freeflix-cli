@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import tempfile
 from datetime import datetime
@@ -116,6 +117,8 @@ class ProgressTracker:
             "logo_url": logo_url,
         }
         self.data["history"][key] = entry
+        self.update_followed_progress(provider, series_title, season_title,
+                                      episode_title)
 
         # Update last global watched for "Quick Resume"
         self.data["last_watched_global"] = entry
@@ -133,6 +136,55 @@ class ProgressTracker:
         if "history" not in self.data:
             return None
         return self.data["history"].get(f"{provider}|{series_title}")
+
+    # ── Followed series (planning "Suivre", no episode required) ─────
+    def get_followed_series(self) -> list[Dict[str, Any]]:
+        data = self.data.get("followed_series") or {}
+        return list(data.values()) if isinstance(data, dict) else []
+
+    def is_following(self, provider: str, series_title: str) -> bool:
+        key = f"{provider}|{series_title}"
+        return key in (self.data.get("followed_series") or {})
+
+    def follow_series(self, provider: str, series_title: str, series_url: str,
+                      season_url: str = "", logo_url: str = "",
+                      last_season: str = "", last_episode_num: int = 0,
+                      last_episode_title: str = ""):
+        key = f"{provider}|{series_title}"
+        followed = self.data.setdefault("followed_series", {})
+        followed[key] = {
+            "provider": provider,
+            "title": series_title,
+            "series_url": series_url,
+            "season_url": season_url,
+            "logo_url": logo_url,
+            "last_season": last_season,
+            "last_episode_num": int(last_episode_num or 0),
+            "last_episode_title": last_episode_title,
+            "added_at": datetime.now().isoformat(),
+        }
+        self._save_data()
+
+    def unfollow_series(self, provider: str, series_title: str):
+        followed = self.data.get("followed_series") or {}
+        if followed.pop(f"{provider}|{series_title}", None) is not None:
+            self._save_data()
+
+    def update_followed_progress(self, provider: str, series_title: str,
+                                 season_title: str, episode_title: str):
+        """Keep the follow baseline in sync when an episode is watched."""
+        followed = self.data.get("followed_series") or {}
+        entry = followed.get(f"{provider}|{series_title}")
+        if not isinstance(entry, dict):
+            return
+        nums = re.findall(r"\d+", str(episode_title or ""))
+        entry["last_season"] = season_title
+        entry["last_episode_title"] = episode_title
+        try:
+            entry["last_episode_num"] = int(nums[-1]) if nums else 0
+        except (TypeError, ValueError):
+            entry["last_episode_num"] = 0
+        self._save_data()
 
     def get_history(self) -> list[Dict[str, Any]]:
         """Get all history entries sorted by last_watched (descending)."""

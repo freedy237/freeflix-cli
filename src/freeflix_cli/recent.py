@@ -63,6 +63,12 @@ def dismiss(item: dict) -> None:
     try:
         from .tracker import tracker
         tracker.mark_release_seen(key)
+        if item.get("provider") and item.get("title"):
+            tracker.update_followed_progress(
+                item["provider"], item["title"],
+                item.get("latest_season", ""),
+                item.get("latest_episode", ""),
+            )
     except Exception:
         pass
     with _lock:
@@ -139,25 +145,50 @@ def _fetch():
         from .scraping import anime_sama
 
         history = tracker.get_history()
-        if history:
+        followed = tracker.get_followed_series()
+        if history or followed:
             anime_sama.get_website_url()
         seen_keys = tracker.get_seen_releases()
         planning = _planning_index()
 
+        # Candidate shows: history first (most recent), then planning follows
+        # that have never been played.
+        candidates = []
         seen_titles = set()
-        checked = 0
         for e in history:
-            if checked >= _MAX_SHOWS:
-                break
             if e.get("provider") != "Anime-Sama":
                 continue
             title = (e.get("series_title") or "").strip()
-            if not title or title in seen_titles:
+            if not title or title.lower() in seen_titles:
                 continue
-            seen_titles.add(title)
-            checked += 1
+            seen_titles.add(title.lower())
+            candidates.append({
+                "title": title,
+                "series_url": _abs_url(e.get("series_url")),
+                "logo": e.get("logo_url") or "",
+                "season": (e.get("season_title") or "").strip(),
+                "ep_num": _ep_num(e.get("episode_title")),
+                "source": "history",
+            })
+        for f in followed:
+            if not isinstance(f, dict) or f.get("provider") != "Anime-Sama":
+                continue
+            title = (f.get("title") or "").strip()
+            if not title or title.lower() in seen_titles:
+                continue
+            seen_titles.add(title.lower())
+            candidates.append({
+                "title": title,
+                "series_url": _abs_url(f.get("series_url")),
+                "logo": f.get("logo_url") or "",
+                "season": (f.get("last_season") or "").strip(),
+                "ep_num": int(f.get("last_episode_num") or 0),
+                "source": "follow",
+            })
 
-            series_url = _abs_url(e.get("series_url"))
+        for cand in candidates[:_MAX_SHOWS]:
+            title = cand["title"]
+            series_url = cand["series_url"]
             if not series_url:
                 continue
             try:
@@ -193,9 +224,8 @@ def _fetch():
                 if latest_num <= 0:
                     continue
 
-            watched_season = (e.get("season_title") or "").strip()
-            watched_episode = (e.get("episode_title") or "").strip()
-            watched_num = _ep_num(watched_episode)
+            watched_season = cand["season"]
+            watched_num = cand["ep_num"]
 
             # New = a whole new season, or a later episode in the same one.
             new_season = latest.title.strip().lower() != watched_season.lower()
@@ -208,9 +238,10 @@ def _fetch():
                 continue
 
             items.append({
+                "provider": "Anime-Sama",
                 "title": title,
                 "url": getattr(series, "url", series_url),
-                "poster": getattr(series, "img", "") or e.get("logo_url") or "",
+                "poster": getattr(series, "img", "") or cand["logo"] or "",
                 "latest_season": latest.title,
                 "season_url": _abs_url(latest.url),
                 "latest_episode": latest_episode,
