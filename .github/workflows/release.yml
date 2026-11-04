@@ -76,14 +76,16 @@ jobs:
       - name: Check the metadata
         run: uvx twine check dist/*
 
-      - name: Write checksums
-        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS
-
       - name: Publish to PyPI (Trusted Publisher OIDC)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           # No `password:` — OIDC handles auth automatically
           packages-dir: dist/
+
+      # AFTER PyPI: the publish action uploads every file in dist/, and a
+      # SHA256SUMS file there is rejected as an unknown distribution format.
+      - name: Write checksums
+        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS
 
       - name: Generate release notes from commits
         id: notes
