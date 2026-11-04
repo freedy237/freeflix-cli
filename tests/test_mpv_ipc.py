@@ -130,8 +130,10 @@ def test_ipc_dir_is_private():
 def test_make_ipc_path_inside_private_dir():
     import os
     p = mpv_ipc.make_ipc_path()
-    assert os.path.dirname(p) == mpv_ipc._ipc_dir()
-    assert os.path.basename(p).startswith("freeflix-mpv-")
+    # Long TMPDIRs (macOS) fall back to /tmp to stay under AF_UNIX's 104-byte
+    # limit; both locations are acceptable.
+    assert os.path.dirname(p) in (mpv_ipc._ipc_dir(), "/tmp")
+    assert os.path.basename(p).startswith("ff-")
 
 
 def test_connect_failure_leaks_no_fd(tmp_path):

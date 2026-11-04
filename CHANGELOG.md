@@ -70,6 +70,8 @@ en bout, sans changement de fonctionnalité visible.
   cache qualité ramené à 5 min pour ne pas servir un lien signé périmé.
 - mpv IPC Windows : lecture du named pipe via thread + file d'attente, donc
   `stop()` et les timeouts ne bloquent plus.
+- macOS : chemins de socket AF_UNIX raccourcis (limite de 104 octets) avec
+  repli sur `/tmp` quand `TMPDIR` est long.
 
 ### Installation / multi-OS
 

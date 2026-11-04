@@ -39,7 +39,7 @@ def _ipc_dir() -> str:
         uid = os.getuid()
     except AttributeError:
         uid = "u"
-    d = os.path.join(tempfile.gettempdir(), f"freeflix-ipc-{uid}")
+    d = os.path.join(tempfile.gettempdir(), f"ff-ipc-{uid}")
     try:
         os.makedirs(d, mode=0o700, exist_ok=True)
     except OSError:
@@ -52,7 +52,7 @@ def _ipc_dir() -> str:
     try:
         now = time.time()
         for name in os.listdir(d):
-            if name.startswith("freeflix-mpv-") and name.endswith(".sock"):
+            if name.startswith(("freeflix-mpv-", "ff-")) and name.endswith(".sock"):
                 p = os.path.join(d, name)
                 try:
                     if now - os.path.getmtime(p) > 24 * 3600:
@@ -64,13 +64,23 @@ def _ipc_dir() -> str:
     return d
 
 
+# macOS caps AF_UNIX paths at 104 bytes, Linux at 108. pytest temp dirs on
+# macOS are already ~60 chars, so keep the basename short and fall back to
+# /tmp if a long TMPDIR still pushes us over the limit.
+_UNIX_PATH_MAX = 100
+
+
 def make_ipc_path() -> str:
     """A fresh, unique IPC endpoint path for one mpv launch."""
-    tag = uuid.uuid4().hex[:12]
+    tag = uuid.uuid4().hex[:8]
     if _IS_WIN:
         return rf"\\.\pipe\freeflix-mpv-{tag}"
-    return os.path.join(_ipc_dir() or tempfile.gettempdir(),
-                        f"freeflix-mpv-{tag}.sock")
+    name = f"ff-{tag}.sock"
+    base = _ipc_dir() or tempfile.gettempdir()
+    path = os.path.join(base, name)
+    if len(path.encode("utf-8")) > _UNIX_PATH_MAX and os.path.isdir("/tmp"):
+        path = os.path.join("/tmp", name)
+    return path
 
 
 def _unlink_ipc_path(path: str) -> None:
@@ -78,7 +88,7 @@ def _unlink_ipc_path(path: str) -> None:
     if _IS_WIN or not path or not path.endswith(".sock"):
         return
     try:
-        if os.path.basename(path).startswith("freeflix-mpv-"):
+        if os.path.basename(path).startswith(("freeflix-mpv-", "ff-")):
             os.unlink(path)
     except OSError:
         pass
