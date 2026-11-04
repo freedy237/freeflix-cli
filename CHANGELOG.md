@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.1
+
+- **Binaire Windows réparé** : `--doctor` (et le reste de l'interface) force
+  UTF-8 sur stdout/stderr quand la console est en cp1252 ; le smoke test du
+  binaire autonome passe à nouveau.
+- 586 tests au vert, ruff OK.
+
 ## 2.1.0 — Fiabilité, sécurité et cohérence
 
 Version de consolidation : l'audit complet de la 2.0.0 a été appliqué de bout
@@ -124,7 +131,7 @@ en bout, sans changement de fonctionnalité visible.
 - Tests dédiés `cli.py`, `doctor.py`, `providers_registry`, `config_loader`,
   `install_health`, thèmes/UI, métadonnées de reprise, noms Windows, garde-fous
   de release et IPC Windows.
-- 585 tests au vert, ruff OK.
+- 586 tests au vert, ruff OK.
 
 ## 2.0.0 — Cinéma Noir
 

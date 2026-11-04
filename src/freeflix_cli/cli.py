@@ -9,6 +9,22 @@ a few tens of milliseconds instead of paying the whole import tax.
 import sys
 
 
+def _utf8_console() -> None:
+    """Force UTF-8 on stdout/stderr when the console defaults to cp1252.
+
+    The Windows standalone binary inherits a cp1252 console; --doctor (box
+    drawing, arrows) then crashed with UnicodeEncodeError before printing
+    anything. TUI output uses the same code path.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            enc = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+            if enc not in ("utf8", "utf8mb4"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _version() -> str:
     try:
         import importlib.metadata as _im
@@ -37,6 +53,7 @@ def print_help():
 
 def main():
     """Entry point: fast flags first, then the real application."""
+    _utf8_console()
     args = set(sys.argv[1:])
     if args & {"--version", "-V"}:
         print(_version())

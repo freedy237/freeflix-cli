@@ -28,6 +28,24 @@ def test_cli_version_prints_a_version(monkeypatch, capsys):
     assert out and out[0].isdigit()
 
 
+def test_utf8_console_reconfigures_cp1252(monkeypatch):
+    class _Fake:
+        encoding = "cp1252"
+
+        def __init__(self):
+            self.kw = None
+
+        def reconfigure(self, **kw):
+            self.kw = kw
+
+    out, err = _Fake(), _Fake()
+    monkeypatch.setattr(cli.sys, "stdout", out)
+    monkeypatch.setattr(cli.sys, "stderr", err)
+    cli._utf8_console()
+    assert out.kw == {"encoding": "utf-8", "errors": "replace"}
+    assert err.kw == {"encoding": "utf-8", "errors": "replace"}
+
+
 def test_cli_help_mentions_doctor(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["freeflix", "--help"])
     assert cli.main() == 0
