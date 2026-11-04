@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.16.11
+
+- **Retour du planning instantané** : après avoir regardé un épisode lancé
+  depuis le planning, l'app ne bloque plus au retour. La vérification des
+  posters modifiés (un HEAD par anime, jusqu'à 4 s chacun) tourne maintenant
+  en **arrière-plan** : le menu se réaffiche immédiatement.
+- **Curseur conservé** : le planning reste positionné sur l'anime que tu
+  viens de regarder (au lieu de revenir tout en haut de la liste), et le jour
+  sélectionné est également conservé.
+- **Tests** : 525 tests au vert, ruff OK, imports Python 3.9 OK.
+
 ## 1.16.10
 
 - **Suivre un anime depuis le planning** : le menu d'un anime du planning

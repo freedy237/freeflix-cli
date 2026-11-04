@@ -22,6 +22,7 @@ from ..icons import icon
 from .playback import play_episode_flow, download_episodes_batch, _pick_player_for_batch
 from ..player_manager import episode_badges
 import re
+import threading
 
 
 def _update_anilist_progress(series, season, selected_episode):
@@ -208,6 +209,7 @@ def handle_anime_sama_planning() -> None:
         except Exception:
             pass
 
+        idx = 0
         while True:  # ── Entry level (poster preview) ──
             previews = [
                 make_preview(
@@ -234,22 +236,19 @@ def handle_anime_sama_planning() -> None:
             ]
             with crumb(f"{icon('anime')} Anime-Sama", day, date_label):
                 idx = select_with_preview(
-                    labels, f"{icon('calendar')} {day} {date_label}", previews
+                    labels, f"{icon('calendar')} {day} {date_label}", previews,
+                    default_index=min(idx, len(items) - 1),
                 )
             if idx >= len(items):
                 break  # → day list
-            # Coming back from an anime: before drawing the LIST again, check
-            # whether the site swapped a poster. The cached file is then
-            # refreshed and the list redrawn once with the new art.
             _planning_entry_actions(items[idx], day, date_label)
-            changed = _changed_covers(items)
-            if changed:
-                try:
-                    from .. import terminal_image as _ti
-                    for img in changed:
-                        _ti.refresh_cover(img)
-                except Exception:
-                    pass
+            # Poster-change checks are pure cosmetics: probe them in the
+            # BACKGROUND. The old synchronous loop did one HEAD per anime
+            # (up to 4 s each) after every playback, so returning from an
+            # episode could stall the planning for 10-30 s.
+            _refresh_changed_covers_bg(items)
+            # Keep the cursor on the anime that was just watched.
+            idx = min(idx, len(items) - 1)
 
 
 def _cover_versions(items) -> tuple:
@@ -279,6 +278,41 @@ def _changed_covers(items) -> list:
         except Exception:
             continue
     return out
+
+
+_cover_check_lock = threading.Lock()
+_cover_check_inflight: set[str] = set()
+
+
+def _refresh_changed_covers_bg(items) -> None:
+    """Refresh posters that changed on the site, WITHOUT blocking the menu."""
+    try:
+        from .. import terminal_image as ti
+        urls = [
+            e.img for e in items
+            if getattr(e, "img", "") and ti.get_download_path(e.img)
+        ]
+    except Exception:
+        return
+    with _cover_check_lock:
+        todo = [u for u in urls if u not in _cover_check_inflight]
+        _cover_check_inflight.update(todo)
+    if not todo:
+        return
+
+    def _work():
+        try:
+            for url in todo:
+                try:
+                    if ti.cover_changed(url):
+                        ti.refresh_cover(url)
+                except Exception:
+                    pass
+        finally:
+            with _cover_check_lock:
+                _cover_check_inflight.difference_update(todo)
+
+    threading.Thread(target=_work, name="freeflix-covers", daemon=True).start()
 
 
 def _planning_entry_actions(entry, day, date_label) -> None:

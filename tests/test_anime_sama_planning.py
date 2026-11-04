@@ -226,7 +226,7 @@ def test_planning_entries_screen_renders_without_error(monkeypatch):
     entries = P.parse_planning(PLANNING_HTML)
     shown = {}
 
-    def fake_swp(labels, prompt, previews):
+    def fake_swp(labels, prompt, previews, **kw):
         shown["labels"] = labels
         return len(labels)  # Back → day list
 
