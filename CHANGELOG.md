@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.16.9
+
+- **Nouveautés respecte le planning** : Anime-Sama pré-crée la page du
+  prochain épisode, donc la liste des épisodes peut déjà contenir un épisode
+  **pas encore sorti**. Nouveautés vérifie maintenant l'état `released` du
+  planning : tant que l'épisode n'est pas sorti, il n'est pas annoncé ; à sa
+  sortie, il apparaît.
+- **Dernier épisode réellement sorti** : si l'épisode de la semaine est
+  encore en attente, l'app revient à l'épisode précédent. Exemple : épisode
+  12 pas encore sorti + tu as vu l'épisode 11 → rien ; épisode 12 sorti →
+  Nouveautés affiche « Épisode 12 ».
+- **Quand tu le vois, ça part** : ouvrir l'élément le marque comme lu et le
+  retire du badge. La clé contient le numéro d'épisode, donc l'épisode de la
+  semaine suivante réapparaît automatiquement.
+- **Vérifié** : avec ton historique actuel, 0 nouveauté (tes épisodes de la
+  semaine sont déjà vus) ; les tests couvrent épisode non sorti, épisode
+  précédent et épisode sorti.
+- **Tests** : 521 tests au vert, ruff OK, imports Python 3.9 OK.
+
 ## 1.16.8
 
 - **Nouveautés = nouveaux épisodes des animes que tu regardes** : le flux ne

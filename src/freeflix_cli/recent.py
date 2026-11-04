@@ -102,6 +102,36 @@ def _latest_episode(season) -> tuple[str, int]:
     return best_title, max(0, best_num)
 
 
+def _norm_url(url: str) -> str:
+    return str(url or "").strip().rstrip("/").lower()
+
+
+def _planning_index() -> dict:
+    """Map catalogue URL → this week's planning entries (with release state).
+
+    Anime-Sama pre-publishes the episode page: the season's LAST episode may
+    not have aired yet. The planning's live ``released`` flag is what tells
+    us whether that episode is really out.
+    """
+    try:
+        from .scraping import anime_sama_planning as planning
+        entries = planning.get_planning()
+    except Exception:
+        return {}
+    index = {}
+    for entry in entries or []:
+        index.setdefault(_norm_url(getattr(entry, "url", "")), []).append(entry)
+    return index
+
+
+def _episode_title_at(season, number: int) -> str:
+    for episodes in (getattr(season, "episodes", {}) or {}).values():
+        for ep in episodes or []:
+            if _ep_num(getattr(ep, "title", "")) == number:
+                return getattr(ep, "title", "")
+    return ""
+
+
 def _fetch():
     items = []
     try:
@@ -112,6 +142,7 @@ def _fetch():
         if history:
             anime_sama.get_website_url()
         seen_keys = tracker.get_seen_releases()
+        planning = _planning_index()
 
         seen_titles = set()
         checked = 0
@@ -148,6 +179,19 @@ def _fetch():
             latest_episode, latest_num = _latest_episode(season)
             if not latest_episode:
                 continue
+
+            # If the current week's planning says the episode is not out yet,
+            # step back to the last really-released episode (the source
+            # pre-creates the upcoming episode page).
+            week = planning.get(_norm_url(series_url), [])
+            if week and not any(getattr(p, "released", False) for p in week):
+                if latest_num > 0:
+                    latest_num -= 1
+                    latest_episode = (
+                        _episode_title_at(season, latest_num) or latest_episode
+                    )
+                if latest_num <= 0:
+                    continue
 
             watched_season = (e.get("season_title") or "").strip()
             watched_episode = (e.get("episode_title") or "").strip()

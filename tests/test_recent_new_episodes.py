@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from freeflix_cli import recent
 from freeflix_cli.scraping import anime_sama
+from freeflix_cli.scraping import anime_sama_planning
 from freeflix_cli.tracker import tracker
 
 
@@ -18,7 +19,7 @@ def _season(title, episodes, url="https://x/saison1"):
 
 def _setup(monkeypatch, watched_episode="Episode 5", watched_season="Saison 1",
            latest_season="Saison 1", latest_eps=None,
-           seen=None):
+           seen=None, planning=None):
     if latest_eps is None:
         latest_eps = range(1, 13)
     hist = [{
@@ -42,6 +43,8 @@ def _setup(monkeypatch, watched_episode="Episode 5", watched_season="Saison 1",
     monkeypatch.setattr(anime_sama, "get_website_url", lambda: None)
     monkeypatch.setattr(anime_sama, "get_series", lambda url: series)
     monkeypatch.setattr(anime_sama, "get_season", lambda url: season)
+    monkeypatch.setattr(anime_sama_planning, "get_planning",
+                        lambda: (planning if planning is not None else []))
     recent._state["items"] = []
     recent._state["ready"] = False
     recent._fetch()
@@ -93,3 +96,38 @@ def test_dismiss_removes_item_and_persists_key(monkeypatch):
 def test_seen_key_is_filtered(monkeypatch):
     key = "Anime-Sama|Frieren|Saison 1|Episode 12"
     assert _setup(monkeypatch, seen={key}) == []
+
+
+def test_unreleased_planning_episode_is_not_announced(monkeypatch):
+    """Anime-Sama pre-creates the upcoming episode page; the planning's
+    released flag must keep it out of Nouveautés until it actually airs."""
+    entry = SimpleNamespace(
+        url="https://anime-sama.to/catalogue/frieren",
+        released=False,
+    )
+    items = _setup(monkeypatch, watched_episode="Episode 11",
+                   latest_eps=range(1, 13), planning=[entry])
+    # Latest listed is 12 but not out → last released is 11, already watched.
+    assert items == []
+
+
+def test_previous_released_episode_is_announced(monkeypatch):
+    entry = SimpleNamespace(
+        url="https://anime-sama.to/catalogue/frieren",
+        released=False,
+    )
+    items = _setup(monkeypatch, watched_episode="Episode 10",
+                   latest_eps=range(1, 13), planning=[entry])
+    assert len(items) == 1
+    assert items[0]["latest_episode"] == "Episode 11"
+
+
+def test_released_planning_episode_is_announced(monkeypatch):
+    entry = SimpleNamespace(
+        url="https://anime-sama.to/catalogue/frieren",
+        released=True,
+    )
+    items = _setup(monkeypatch, watched_episode="Episode 11",
+                   latest_eps=range(1, 13), planning=[entry])
+    assert len(items) == 1
+    assert items[0]["latest_episode"] == "Episode 12"
