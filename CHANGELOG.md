@@ -1,5 +1,129 @@
 # Changelog
 
+## 2.1.0 — Fiabilité, sécurité et cohérence
+
+Version de consolidation : l'audit complet de la 2.0.0 a été appliqué de bout
+en bout, sans changement de fonctionnalité visible.
+
+### Téléchargements
+
+- **Reprise séquentielle réparée** : `_verify_download()` renvoie
+  `(ok, reason)` ; le retry le comparait à `"ok"` et jetait chaque fichier
+  valide. La reprise repart maintenant des fragments déjà téléchargés et
+  conserve le fichier en `.incomplete` après le dernier échec.
+- **Téléchargement atomique** : `_download()` écrit en `.part` puis
+  `os.replace` ; un transfert coupé ne laisse plus un faux fichier complet.
+- **Garde-fou** : plafond de 6 h sur un sous-processus non-TTY figé ;
+  `terminate()` escalade en `kill()` après 5 s ; l'annulation atteint aussi
+  la reprise séquentielle.
+- **Métadonnées de reprise assainies** : `Cookie`, `Authorization`,
+  `Proxy-Authorization`, `X-Api-Key` et `X-Auth-Token` sont retirés du JSON
+  `.freeflix-resume.json`, écrit en `0600`.
+- **Noms de fichiers Windows** : noms réservés (`CON`, `NUL`, `COM1…`),
+  points/espaces finaux et caracteres de contrôle neutralisés.
+- **Sous-titres temporaires** : les `freeflix_sub_*` / `freeflix_os_*` de plus
+  de 24 h sont balayés au démarrage.
+
+### Sécurité
+
+- **En-têtes du proxy opaques** : les cookies de gate (`vz_ok`, `fsv_pe`, …)
+  ne sont plus sérialisés en JSON dans les URLs des manifestes ; un jeton
+  local de 24 caractères les remplace (anciennes URLs toujours acceptées).
+- **TLS DoH vérifié** : le repli DNS ne désactive plus la vérification du
+  certificat (MITM possible auparavant).
+- **Toasts Windows** : le XML passe par un fichier temporaire au lieu d'être
+  interpolé entre quotes simples dans PowerShell (injection via un titre
+  piégé).
+- **PATH Windows** : remplacement de `setx PATH … "%PATH%"` (littéral,
+  tronqué à 1024) par une écriture registre `REG_EXPAND_SZ` préservant les
+  variables.
+- **URLs signées masquées** dans les messages (`?…`), plus de lien CDN
+  complet dans le terminal ou les logs.
+- **Jeton de capacité du proxy** : chaque URL média porte `?k=<jeton>` propre
+  au processus ; un autre programme local ne peut plus utiliser le proxy comme
+  relais SSRF/en-têtes.
+- **Checksums publiées** : `SHA256SUMS` pour le wheel/sdist et un `.sha256`
+  par binaire autonome.
+
+### Stabilité
+
+- `progress.json` : validation de forme au chargement (une clé de type
+  inattendu ne bloque plus le démarrage) + tableau de bord protégé par
+  `try/except`.
+- Sortie propre : `os._exit` remplacé par une restauration explicite du
+  terminal (souris, bracketed paste, curseur, écran alterné) puis
+  `SystemExit`.
+- Souris Windows : activation de `ENABLE_VIRTUAL_TERMINAL_INPUT` sur stdin
+  (sans elle, `?1000h` était envoyé sans qu'aucun rapport n'arrive).
+- Boucle infinie du fil d'Ariane corrigée sur terminal ≤ 8 colonnes ; EOF
+  sur stdin traité comme Esc (plus de boucle à 100 % CPU).
+- `Esc` : les menus « Reprendre / Parcourir » ont maintenant une vraie ligne
+  « ← Retour », donc Esc ne déclenche plus l'action voisine.
+- Registre des sources reconstruit au changement de langue : les noms de
+  sources sont traduits immédiatement, et les doublons de branches
+  HiAnime/GoldenAnime ont disparu.
+- Déduplication des lecteurs : deux pistes de langue distinctes du même hôte
+  (« voe vostfr » / « voe vff ») ne sont plus fusionnées.
+- Reprise de flux : plafond de 5 min sans octet (le buffering infini cachait
+  un CDN mort).
+- Analyse des lecteurs : budget porté à 55 s (60 s pour le menu étendu) et
+  cache qualité ramené à 5 min pour ne pas servir un lien signé périmé.
+- mpv IPC Windows : lecture du named pipe via thread + file d'attente, donc
+  `stop()` et les timeouts ne bloquent plus.
+
+### Installation / multi-OS
+
+- `setup_done` n'est plus posé si les fichiers mpv ou les shaders ont échoué :
+  le wizard réessaie au lancement suivant.
+- `--doctor` : ffmpeg est testé avec `-version` (plus de faux « BROKEN ») et
+  le dossier inspecté est bien `~/.config/freeflix/mpv`.
+- macOS : `install-mac.sh` écrit dans le dossier FreeFlix (et non le mpv
+  global) ; builds mpv **arm64** natifs sur Apple Silicon et Windows ARM.
+- Installeurs : paquets système installés un par un (un paquet optionnel
+  manquant n'annule plus tout), TLS 1.2/1.3 explicite et uv ARM64 sur
+  Windows, shaders S + VL installés comme le charge `mpv.conf`.
+- `selectors.jsonc` embarqué est enfin lu au démarrage (il n'était que
+  téléchargé à distance) ; chemins PyInstaller ajoutés (`--add-data`).
+
+### UI / accessibilité
+
+- `selection_text` retombe sur `black` (et non `white`) pour les thèmes
+  anciens ; le wordmark suit le thème actif au lieu de rester ambre.
+- `skeleton()` respecte `reduce motion` (une seule image statique).
+- Le tableau de bord n'écrit plus `progress.json` à chaque repaint.
+- `--version` / `--help` / `--doctor` ne sont plus implémentés deux fois.
+- `select_with_preview` (787 lignes) est extrait dans `preview_picker.py` :
+  `cli_utils.py` passe de 2 896 à 2 166 lignes, avec un ré-export paresseux
+  pour ne pas casser les imports existants.
+- Le preview utilise désormais **le décodeur clavier partagé** (timeout
+  inclus) : le troisième décodeur, avec sa propre gestion du collage et de
+  l'ESC, a disparu.
+- **Filtre protégé des rapports souris** : un rapport SGR coupé en fin de
+  lecture est conservé puis complété au lieu d'être tapé (`/ 4;10M…`) ; le
+  mode filtre coupe le suivi souris et le champ de recherche utilise un suivi
+  « clic seulement » (pas de flood de mouvement).
+- Le menu **Réglages** (290 lignes) est extrait de `main()` : la boucle
+  d'accueil passe de 660 à 359 lignes.
+
+### CI / release / tests
+
+- La release exige désormais la suite de tests, le lint, et
+  `pyproject.version == tag` ; `twine check` avant publication.
+- Binaires : déclenchement explicite par `workflow_dispatch` depuis la
+  release (l'événement `release: published` créé par `GITHUB_TOKEN` ne
+  démarrait aucun workflow), `--add-data`, smoke test `--doctor`.
+- CI étendue à macOS et Python 3.11/3.13 ; build du wheel et smoke test
+  d'installation.
+- Tests : isolation du dossier de binaires gérés (plus de `rmtree` réel),
+  suite offline (plus de GET GitHub), 16 tests de non-régression pour cet
+  audit.
+- Couverture mesurée ~45 %, plancher CI relevé de 15 à **40 %** ;
+  `pytest-timeout` (120 s) et `ruff==0.17.3` épinglé dans la CI.
+- Tests dédiés `cli.py`, `doctor.py`, `providers_registry`, `config_loader`,
+  `install_health`, thèmes/UI, métadonnées de reprise, noms Windows, garde-fous
+  de release et IPC Windows.
+- 585 tests au vert, ruff OK.
+
 ## 2.0.0 — Cinéma Noir
 
 - **Nouvelle identité visuelle** : **Cinema Noir** devient le thème par

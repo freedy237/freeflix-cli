@@ -9,11 +9,47 @@ on:
 # Required by both Trusted Publisher (OIDC) and the release-creation step.
 permissions:
   id-token: write   # PyPI Trusted Publisher (no token needed)
-  contents: write   # to create the GitHub Release
+  contents: write   # create the GitHub Release
+  actions: write    # dispatch the Binaries workflow
 
 jobs:
+  # Gate: never publish a tag that does not pass the suite or whose version
+  # does not match pyproject.toml (PyPI refuses a duplicate, irreversibly).
+  test:
+    name: Test the tagged commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Ruff
+        run: uvx ruff==0.17.3 check --select E,W,F,B --ignore E501,E402 src/freeflix_cli/
+
+      - name: Version matches the tag
+        run: |
+          python - <<'EOF'
+          import os, tomllib
+          version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if version != tag:
+              raise SystemExit(f"tag {tag!r} != pyproject version {version!r}")
+          print(f"version OK: {version}")
+          EOF
+
+      - name: Pytest
+        run: uv run --with . --with pytest --with pytest-cov --with pytest-timeout -m pytest -q --timeout=120
+
   build-and-publish:
     name: Build, publish to PyPI, create GitHub Release
+    needs: test
     runs-on: ubuntu-latest
     # `environment: pypi` is what the PyPI Trusted Publisher setup looks for.
     environment:
@@ -36,6 +72,12 @@ jobs:
 
       - name: Build sdist + wheel
         run: uv build
+
+      - name: Check the metadata
+        run: uvx twine check dist/*
+
+      - name: Write checksums
+        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS
 
       - name: Publish to PyPI (Trusted Publisher OIDC)
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -77,6 +119,12 @@ jobs:
             echo 'powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"'
             echo '```'
             echo ""
+            echo "## Checksums"
+            echo ""
+            echo "\`\`\`"
+            cat dist/SHA256SUMS 2>/dev/null || true
+            echo "\`\`\`"
+            echo ""
             echo "## Upgrade an existing install"
             echo ""
             echo '```bash'
@@ -101,5 +149,14 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
+            dist/SHA256SUMS
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha → prerelease
+
+      # A `release: published` event created with GITHUB_TOKEN does NOT start
+      # another workflow, so binaries.yml never ran. Dispatch it explicitly:
+      # workflow_dispatch IS allowed with GITHUB_TOKEN (actions: write).
+      - name: Build standalone binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run binaries.yml -f tag="${GITHUB_REF_NAME}"

@@ -11,6 +11,8 @@ import threading
 import socket
 import json
 import time
+import hashlib
+import secrets
 import ipaddress
 import urllib.parse
 import re
@@ -25,7 +27,35 @@ import m3u8
 PROXY_PORT = 0
 PROXY_HOST = "127.0.0.1"
 PROXY_URL = None
+# Random per-process capability token. The proxy is loopback-only, but any
+# local process could otherwise use it as an SSRF/header-injection relay; every
+# URL we hand to mpv/VLC carries ?k=<token>.
+PROXY_TOKEN = secrets.token_urlsafe(18)
 _server_instance = None  # the ThreadingHTTPServer, for shutdown
+
+# Opaque header handles. The manifest embeds ?h=<token> instead of the
+# base64/JSON header blob: cookies (vidzy gate, cf_clearance) then no longer
+# appear in manifest URLs, mpv logs, or `ps` output. Local-only, short TTL.
+_HEADER_TOKENS: dict[str, dict] = {}
+_HEADER_TOKENS_LOCK = threading.Lock()
+_HEADER_TOKENS_MAX = 512
+
+
+def _headers_token(headers: dict) -> str:
+    """Return (and remember) an opaque handle for a header dict."""
+    if not headers:
+        return ""
+    blob = json.dumps(headers, sort_keys=True, ensure_ascii=False)
+    token = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
+    with _HEADER_TOKENS_LOCK:
+        if token not in _HEADER_TOKENS:
+            if len(_HEADER_TOKENS) >= _HEADER_TOKENS_MAX:
+                # Drop the oldest entries: manifests are short-lived.
+                for old in list(_HEADER_TOKENS)[: len(_HEADER_TOKENS) // 4]:
+                    _HEADER_TOKENS.pop(old, None)
+            _HEADER_TOKENS[token] = dict(headers)
+    return token
+
 
 # Web Player State
 player_finished_event = threading.Event()
@@ -801,8 +831,10 @@ def _rewrite_manifest(target_url, headers):
     def make_proxy_url(endpoint, original_uri):
         absolute_url = urllib.parse.urljoin(base_uri, original_uri)
         encoded_url = urllib.parse.quote(absolute_url)
-        encoded_headers = urllib.parse.quote(json.dumps(headers))
-        return f"http://{PROXY_HOST}:{PROXY_PORT}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
+        token = _headers_token(headers)
+        handle = f"&h={token}" if token else ""
+        return (f"http://{PROXY_HOST}:{PROXY_PORT}/{endpoint}"
+                f"?url={encoded_url}{handle}&k={PROXY_TOKEN}")
 
     if m3u8_obj.playlists:
         for p in m3u8_obj.playlists:
@@ -879,7 +911,7 @@ _PLAYER_HTML = """<!DOCTYPE html>
             if (subPath) {
                 const track = document.createElement('track');
                 track.kind = 'captions'; track.label = 'Subtitles';
-                track.src = '/player/subtitle?path=' + encodeURIComponent(subPath);
+                track.src = '/player/subtitle?path=' + encodeURIComponent(subPath) + '&k=__PROXY_TOKEN__';
                 track.default = true; video.appendChild(track);
             }
             const defaultOptions = {
@@ -940,6 +972,7 @@ _PLAYER_HTML = """<!DOCTYPE html>
 
 # ── The stdlib request handler ────────────────────────────────────────
 _FETCH_PATHS = {"/stream", "/ts", "/video"}
+_PROTECTED_PATHS = _FETCH_PATHS | {"/player/subtitle"}
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):
@@ -1052,6 +1085,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         global player_heartbeat_time
         path, args = self._args()
 
+        # Local capability check: a loopback port is still reachable by every
+        # process of the user, and /stream can fetch arbitrary public URLs with
+        # arbitrary headers. Only URLs we generated carry the token.
+        if path in _PROTECTED_PATHS and args.get("k") != PROXY_TOKEN:
+            self._send_bytes(403, "Forbidden")
+            return
+
         # SSRF guard for the endpoints that fetch an external URL.
         if path in _FETCH_PATHS:
             target = args.get("url")
@@ -1067,7 +1107,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             elif path == "/video":
                 self._h_video(args)
             elif path == "/player":
-                self._send_bytes(200, _PLAYER_HTML, "text/html; charset=utf-8")
+                html = _PLAYER_HTML.replace("__PROXY_TOKEN__", PROXY_TOKEN)
+                self._send_bytes(200, html, "text/html; charset=utf-8")
             elif path == "/player/subtitle":
                 self._h_subtitle(args)
             elif path == "/player/heartbeat":
@@ -1090,6 +1131,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     # ── handlers ──
     def _parse_headers_arg(self, args):
+        # 2.0+ manifests use an opaque ?h=<token>; legacy URLs with a JSON
+        # `headers` blob are still accepted (old manifests, tests, bookmarks).
+        token = args.get("h")
+        if token:
+            with _HEADER_TOKENS_LOCK:
+                found = _HEADER_TOKENS.get(token)
+            if found is not None:
+                return dict(found)
+            return {}
         try:
             return json.loads(args.get("headers", "{}"))
         except Exception:
@@ -1173,7 +1223,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             status, out_headers,
             resilient_body(target_url, headers, start_offset=start_offset,
                            first_resp=resp, first_total=total,
-                           no_progress_budget=None,
+                           # Cap a totally silent upstream at 5 min:
+                           # infinite buffering hid dead CDNs forever.
+                           no_progress_budget=300.0,
                            client_gone=self._client_gone),
             total=total,
         )
@@ -1234,7 +1286,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             status, out_headers,
             resilient_body(target_url, headers, start_offset=start_offset,
                            first_resp=resp, first_total=total,
-                           no_progress_budget=None,
+                           # Cap a totally silent upstream at 5 min:
+                           # infinite buffering hid dead CDNs forever.
+                           no_progress_budget=300.0,
                            client_gone=self._client_gone),
             total=total,
         )

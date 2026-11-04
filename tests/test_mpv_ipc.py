@@ -154,3 +154,32 @@ def test_close_unlinks_socket_file():
         f.write("stale")
     mpv_ipc.MpvIPC(p).close()
     assert not os.path.exists(p)
+
+
+def test_windows_pipe_reader_honours_timeout(monkeypatch):
+    """The Windows pipe read() blocks: a reader thread must feed a queue so
+    _read_some() returns on time instead of hanging stop()."""
+    import threading
+    import time
+
+    monkeypatch.setattr(mpv_ipc, "_IS_WIN", True)
+
+    class _Pipe:
+        def __init__(self):
+            self.chunks = [b'{"event":"x"}\n', b""]
+
+        def read(self, n):
+            return self.chunks.pop(0) if self.chunks else b""
+
+        def close(self):
+            pass
+
+    client = mpv_ipc.MpvIPC("dummy")
+    client._conn = _Pipe()
+    client._reader_thread = threading.Thread(
+        target=client._reader_loop, daemon=True)
+    client._reader_thread.start()
+    assert client._read_some() == b'{"event":"x"}\n'
+    started = time.time()
+    assert client._read_some() == b""
+    assert time.time() - started < 1.0

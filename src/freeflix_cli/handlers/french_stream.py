@@ -177,6 +177,7 @@ def handle_french_stream():
                     [
                         f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
                         t("Browse Episodes"),
+                        t("← Back"),
                     ],
                     f"{t('Found saved progress for')} {content.title} :",
                     clear_on_back=False, inline=True,
@@ -184,6 +185,8 @@ def handle_french_stream():
                 if choice == 0:
                     resume_french_stream(saved_progress)
                     continue  # → results
+                if choice == 2:
+                    continue  # ← Back / Esc → results
 
             langs = list(content.episodes.keys())
             if not langs:

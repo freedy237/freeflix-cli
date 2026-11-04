@@ -1,7 +1,7 @@
 name: CI
 
-# Lint + tests on every push and PR, on Linux AND Windows, so regressions
-# (e.g. the Windows arrow-key breakage) are caught before release.
+# Lint + tests on every push and PR, on Linux, Windows AND macOS, so
+# regressions (e.g. the Windows arrow-key breakage) are caught before release.
 on:
   push:
     branches: [main]
@@ -16,6 +16,7 @@ jobs:
   test:
     name: Lint + tests (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -24,6 +25,13 @@ jobs:
         # Python so the compatibility job stays meaningful.
         os: [ubuntu-22.04, windows-latest]
         python-version: ['3.9', '3.12']
+        include:
+          - os: macos-latest
+            python-version: '3.12'
+          - os: ubuntu-22.04
+            python-version: '3.11'
+          - os: ubuntu-22.04
+            python-version: '3.13'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +45,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Ruff (real-bug checks)
-        run: uvx ruff check --select E,W,F,B --ignore E501,E402 src/freeflix_cli/
+        run: uvx ruff==0.17.3 check --select E,W,F,B --ignore E501,E402 src/freeflix_cli/
 
       - name: Import every module
         run: >
@@ -46,11 +54,33 @@ jobs:
           pkgutil.walk_packages(freeflix_cli.__path__,'freeflix_cli.')];
           print('all modules import OK')"
 
+      - name: Shell syntax (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: bash -n scripts/install.sh scripts/install-mac.sh scripts/build-binary.sh
+
+      - name: PowerShell syntax (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $null = [scriptblock]::Create((Get-Content -Raw scripts/install.ps1))
+          Write-Host "install.ps1 parses"
+
       - name: Pytest (+ coverage ratchet)
         # Coverage is a REGRESSION ratchet, not a quality gate: the floor is set
         # near today's level so a PR that drops coverage fails, while the (large,
         # hard-to-test TUI/scraper) untested surface doesn't block the build.
-        # Raise --cov-fail-under over time as more tests land.
+        # The floor is now 40 (measured ~45); raise it again after adding tests.
         run: >
-          uv run --with . --with pytest --with pytest-cov -m pytest -q
-          --cov=freeflix_cli --cov-report=term-missing --cov-fail-under=15
+          uv run --with . --with pytest --with pytest-cov --with pytest-timeout
+          -m pytest -q --timeout=120
+          --cov=freeflix_cli --cov-report=term-missing --cov-fail-under=40
+
+      - name: Build the wheel and smoke-test it
+        # Packaging is a real product surface: the JSONC data files live in
+        # share/freeflix-cli and a broken wheel only shows up after install.
+        if: matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12'
+        run: |
+          uv build
+          python -m venv /tmp/freeflix-wheel
+          /tmp/freeflix-wheel/bin/pip install --quiet dist/*.whl
+          /tmp/freeflix-wheel/bin/freeflix --version

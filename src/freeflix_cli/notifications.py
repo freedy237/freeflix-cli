@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Dict
 
@@ -101,26 +102,40 @@ def _xml_escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _notify_windows_toast(title: str, body: str) -> bool:
-    """Toast natif Windows 10+ via WinRT (aucune dépendance). Best-effort."""
-    if os.name != "nt" or not shutil.which("powershell"):
-        return False
-    xml = (
+def _toast_xml(title: str, body: str) -> str:
+    return (
         "<toast><visual><binding template=\"ToastGeneric\">"
         f"<text>{_xml_escape(title)}</text>"
         f"<text>{_xml_escape(body)}</text>"
         "</binding></visual></toast>"
     )
-    ps = (
-        "[Windows.UI.Notifications.ToastNotificationManager, "
-        "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; "
-        "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; "
-        f"$doc.LoadXml('{xml}'); "
-        "[Windows.UI.Notifications.ToastNotificationManager]"
-        "::CreateToastNotifier('FreeFlix').Show("
-        "[Windows.UI.Notifications.ToastNotification]::new($doc))"
-    )
+
+
+def _notify_windows_toast(title: str, body: str) -> bool:
+    """Toast natif Windows 10+ via WinRT (aucune dépendance). Best-effort.
+
+    The XML is written to a temp file and loaded by path: interpolating it
+    into a single-quoted PowerShell string let an apostrophe in a scraped
+    title break out of the string (command injection).
+    """
+    if os.name != "nt" or not shutil.which("powershell"):
+        return False
+    xml = _toast_xml(title, body)
+    xml_path = None
     try:
+        fd, xml_path = tempfile.mkstemp(prefix="freeflix-toast-", suffix=".xml")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(xml)
+        safe_path = xml_path.replace("'", "''")
+        ps = (
+            "[Windows.UI.Notifications.ToastNotificationManager, "
+            "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; "
+            "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; "
+            f"$doc.Load('{safe_path}'); "
+            "[Windows.UI.Notifications.ToastNotificationManager]"
+            "::CreateToastNotifier('FreeFlix').Show("
+            "[Windows.UI.Notifications.ToastNotification]::new($doc))"
+        )
         subprocess.run(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
              "-Command", ps],
@@ -129,6 +144,12 @@ def _notify_windows_toast(title: str, body: str) -> bool:
         return True
     except Exception:
         return False
+    finally:
+        if xml_path:
+            try:
+                os.unlink(xml_path)
+            except OSError:
+                pass
 
 
 def _notify(title: str, body: str):

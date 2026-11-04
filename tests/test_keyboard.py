@@ -298,3 +298,33 @@ def test_split_paste_unterminated_or_plain():
     assert _split_paste(b"\x1b[A") == (None, b"\x1b[A")
 
 
+def test_mouse_chunk_tail_is_preserved_not_typed():
+    """A chunk ending mid-report must return the next report, never text.
+
+    Regression: the tail ("4;10M…") was decoded as printable characters and
+    appended to the search/filter query.
+    """
+    event, tail = cu._parse_mouse_chunk(b"\x1b[<0;4;10M\x1b[<35;")
+    assert event is not None and (event.x, event.y) == (4, 10)
+    assert tail == b"\x1b[<35;"
+
+    event2, tail2 = cu._parse_mouse_chunk(tail + b"12;5M")
+    assert event2 is not None and (event2.x, event2.y) == (12, 5)
+    assert tail2 == b""
+
+    assert cu._parse_mouse_chunk(b"plain text") == (None, b"")
+
+
+def test_mouse_filter_toggle_is_idempotent(monkeypatch):
+    writes = []
+    monkeypatch.setattr(cu, "_mouse_available", lambda: True)
+    monkeypatch.setattr(cu, "_mouse_write", writes.append)
+    monkeypatch.setattr(cu, "_mouse_active", False)
+    cu._mouse_set(False)  # already off → no write
+    assert writes == []
+    cu._mouse_set(True)
+    assert writes and cu._mouse_active is True
+    cu._mouse_set(True)  # idempotent
+    assert len(writes) == 1
+    cu._mouse_set(False)
+    assert cu._mouse_active is False and len(writes) == 2

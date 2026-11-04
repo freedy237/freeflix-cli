@@ -553,6 +553,7 @@ def _search_flow():
                     [
                         f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
                         t("Browse Seasons"),
+                        t("← Back"),
                     ],
                     f"{t('Found saved progress for')} {series.title} :",
                     clear_on_back=False, inline=True,
@@ -560,6 +561,8 @@ def _search_flow():
                 if choice == 0:
                     resume_anime_sama(saved_progress)
                     continue  # back to the same results list
+                if choice == 2:
+                    continue  # ← Back / Esc → results list
 
             _anime_sama_series_flow(series)
             continue  # Back at seasons (or finished) → results again

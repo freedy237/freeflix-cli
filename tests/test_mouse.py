@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import readchar
 
 import freeflix_cli.cli_utils as cu
+import freeflix_cli.preview_picker as pp
 
 
 class _DummyLive:
@@ -55,15 +56,27 @@ class _FakeConsole:
         pass
 
 
+
+
+def _set(monkeypatch, name, value):
+    """Patch both cli_utils and the extracted preview widget.
+
+    select_with_preview now lives in preview_picker.py and holds its own
+    references to console/Live/_read_menu_key; patching only cli_utils would
+    leave the real key loop running (and the test would hang).
+    """
+    monkeypatch.setattr(cu, name, value)
+    monkeypatch.setattr(pp, name, value, raising=False)
+
 def _patch_ui(monkeypatch):
-    monkeypatch.setattr(cu, "_crumbs", [])
-    monkeypatch.setattr(cu, "Live", _DummyLive)
-    monkeypatch.setattr(cu, "flush_input_settled", lambda: None)
-    monkeypatch.setattr(cu, "clear_screen", lambda: None)
-    monkeypatch.setattr(cu, "_mouse_available", lambda: True)
-    monkeypatch.setattr(cu, "mouse_tracking", lambda: contextlib.nullcontext(True))
+    _set(monkeypatch, "_crumbs", [])
+    _set(monkeypatch, "Live", _DummyLive)
+    _set(monkeypatch, "flush_input_settled", lambda: None)
+    _set(monkeypatch, "clear_screen", lambda: None)
+    _set(monkeypatch, "_mouse_available", lambda: True)
+    _set(monkeypatch, "mouse_tracking", lambda *a, **k: contextlib.nullcontext(True))
     # Simple one-row renderables keep the expected hit rows obvious.
-    monkeypatch.setattr(cu, "_renderable_height", lambda *a, **k: 1)
+    _set(monkeypatch, "_renderable_height", lambda *a, **k: 1)
 
 
 def _mouse(x=1, y=1, button=0, pressed=True):
@@ -111,7 +124,7 @@ def test_windows_reader_returns_mouse_not_ignored(monkeypatch):
     fake.kbhit = lambda: state["i"] < len(chars)
     monkeypatch.setitem(sys.modules, "msvcrt", fake)
     monkeypatch.setattr(cu.os, "name", "nt")
-    monkeypatch.setattr(cu, "_esc_carry", False)
+    _set(monkeypatch, "_esc_carry", False)
     ev = cu._read_menu_key()
     assert isinstance(ev, cu.MouseEvent)
     assert (ev.x, ev.y, ev.button, ev.pressed) == (12, 5, 0, True)
@@ -121,9 +134,9 @@ def test_windows_reader_returns_mouse_not_ignored(monkeypatch):
 
 def test_mouse_tracking_enables_and_restores(monkeypatch):
     writes = []
-    monkeypatch.setattr(cu, "_mouse_available", lambda: True)
-    monkeypatch.setattr(cu, "_mouse_write", writes.append)
-    monkeypatch.setattr(cu, "_mouse_active", False)
+    _set(monkeypatch, "_mouse_available", lambda: True)
+    _set(monkeypatch, "_mouse_write", writes.append)
+    _set(monkeypatch, "_mouse_active", False)
 
     with cu.mouse_tracking() as active:
         assert active is True
@@ -132,10 +145,21 @@ def test_mouse_tracking_enables_and_restores(monkeypatch):
     assert cu._mouse_active is False
 
 
+def test_mouse_tracking_click_only_sends_no_motion(monkeypatch):
+    """Text fields use click-only tracking: no ?1003h motion flood."""
+    writes = []
+    _set(monkeypatch, "_mouse_available", lambda: True)
+    _set(monkeypatch, "_mouse_write", writes.append)
+    _set(monkeypatch, "_mouse_active", False)
+    with cu.mouse_tracking(all_motion=False):
+        assert writes == [cu._MOUSE_CLICK_ON]
+    assert writes[-1] == cu._MOUSE_OFF
+
+
 def test_mouse_tracking_noop_without_tty(monkeypatch):
     writes = []
-    monkeypatch.setattr(cu, "_mouse_available", lambda: False)
-    monkeypatch.setattr(cu, "_mouse_write", writes.append)
+    _set(monkeypatch, "_mouse_available", lambda: False)
+    _set(monkeypatch, "_mouse_write", writes.append)
     with cu.mouse_tracking() as active:
         assert active is False
     assert writes == []
@@ -145,7 +169,7 @@ def test_mouse_tracking_noop_without_tty(monkeypatch):
 
 def test_select_from_list_clicks_a_row(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=2))
+    _set(monkeypatch, "_read_menu_key", lambda: _mouse(y=2))
     assert cu.select_from_list(["First", "Second", "← Back"],
                                "Choose") == 0
 
@@ -153,7 +177,7 @@ def test_select_from_list_clicks_a_row(monkeypatch):
 def test_select_from_list_wheel_then_enter(monkeypatch):
     _patch_ui(monkeypatch)
     keys = [_mouse(y=1, button=65), readchar.key.ENTER]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_from_list(["First", "Second", "Third"],
                                "Choose") == 1
@@ -161,7 +185,7 @@ def test_select_from_list_wheel_then_enter(monkeypatch):
 
 def test_select_from_list_right_click_goes_back(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: _mouse(y=1, button=2))
     assert cu.select_from_list(["First", "Second", "← Back"],
                                "Choose") == 2
@@ -169,13 +193,13 @@ def test_select_from_list_right_click_goes_back(monkeypatch):
 
 def test_select_from_list_status_click_opens_help(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "_kbd", lambda label: label)
+    _set(monkeypatch, "_kbd", lambda label: label)
     from freeflix_cli.i18n import t
     plain = cu._status_bar(False).plain
     x = plain.find(t("?: help")) + 1
     # With one-row renderables: prompt, item0, item1, blank, status = row 5.
     keys = [_mouse(x=x, y=5), readchar.key.ENTER, readchar.key.ENTER]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     # Help opens then closes (Enter twice) without leaving the menu.
     assert cu.select_from_list(["First", "Second", "← Back"],
@@ -185,21 +209,21 @@ def test_select_from_list_status_click_opens_help(monkeypatch):
 def test_select_multiple_click_toggles_row(monkeypatch):
     _patch_ui(monkeypatch)
     keys = [_mouse(y=3), readchar.key.ENTER]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_multiple(["Ep1", "Ep2"], "Pick", preselected=[]) == [0]
 
 
 def test_select_multiple_confirm_button(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "_kbd", lambda label: label)
+    _set(monkeypatch, "_kbd", lambda label: label)
     from freeflix_cli.i18n import t
     # Rows: prompt, blank, item0, item1, blank, count, hint/buttons.
     hint = ("  ↑/↓ · " + t("Space: select") + " · " + t("a: all")
             + " · " + t("Enter: confirm") + " · " + t("Esc: back"))
     x = hint.find(t("Enter: confirm")) + 1
     keys = [_mouse(y=7, x=x)]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_multiple(["Ep1", "Ep2"], "Pick", preselected=[1]) == [1]
 
@@ -209,8 +233,8 @@ def test_select_multiple_confirm_button(monkeypatch):
 def test_preview_click_selects_an_item(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=4))
+    _set(monkeypatch, "console", fake)
+    _set(monkeypatch, "_read_menu_key", lambda: _mouse(y=4))
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
         {"cover": "", "title": "B", "lines": [], "panel_title": ""},
@@ -221,8 +245,8 @@ def test_preview_click_selects_an_item(monkeypatch):
 def test_preview_right_click_goes_back(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=1, button=2))
+    _set(monkeypatch, "console", fake)
+    _set(monkeypatch, "_read_menu_key", lambda: _mouse(y=1, button=2))
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
         {"cover": "", "title": "B", "lines": [], "panel_title": ""},
@@ -235,7 +259,7 @@ def test_preview_right_click_goes_back(monkeypatch):
 def test_input_click_ok_submits(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
+    _set(monkeypatch, "console", fake)
 
     class FakeStdin:
         def isatty(self):
@@ -243,7 +267,7 @@ def test_input_click_ok_submits(monkeypatch):
 
     monkeypatch.setattr(sys, "stdin", FakeStdin())
     keys = ["a", "b", "c", _mouse(x=3, y=5)]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu._input_fullscreen("Q:", None, "Header") == "abc"
 
@@ -251,7 +275,7 @@ def test_input_click_ok_submits(monkeypatch):
 def test_input_click_cancel(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
+    _set(monkeypatch, "console", fake)
 
     class FakeStdin:
         def isatty(self):
@@ -260,7 +284,7 @@ def test_input_click_cancel(monkeypatch):
     monkeypatch.setattr(sys, "stdin", FakeStdin())
     # Rows: header, prompt, text, default hint, blank, buttons.
     keys = [_mouse(x=13, y=6)]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu._input_fullscreen("Q:", "dflt", "Header") == ""
 
@@ -294,8 +318,8 @@ def test_download_cancel_accepts_double_click(monkeypatch):
 def test_ask_yes_no_click_yes_and_no(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
-    monkeypatch.setattr(cu, "_kbd", lambda label: label)
+    _set(monkeypatch, "console", fake)
+    _set(monkeypatch, "_kbd", lambda label: label)
 
     class FakeStdin:
         def isatty(self):
@@ -307,10 +331,10 @@ def test_ask_yes_no_click_yes_and_no(monkeypatch):
     x_yes = line.find(t("Yes")) + 1
     x_no = line.find(t("No")) + 1
 
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: _mouse(x=x_yes, y=1))
     assert cu.ask_yes_no("Update?") is True
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: _mouse(x=x_no, y=1))
     assert cu.ask_yes_no("Update?") is False
 
@@ -318,11 +342,11 @@ def test_ask_yes_no_click_yes_and_no(monkeypatch):
 def test_preview_hint_click_goes_back(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
+    _set(monkeypatch, "console", fake)
     from freeflix_cli.i18n import t
     hint = t("↑/↓ navigate · type to filter · Enter · Esc")
     x = hint.find(t("Esc")) + 1
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(x=x, y=21))
+    _set(monkeypatch, "_read_menu_key", lambda: _mouse(x=x, y=21))
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
         {"cover": "", "title": "B", "lines": [], "panel_title": ""},
@@ -333,7 +357,7 @@ def test_preview_hint_click_goes_back(monkeypatch):
 def test_select_from_list_hover_moves_cursor(monkeypatch):
     _patch_ui(monkeypatch)
     keys = [_mouse(y=3, button=35), readchar.key.ENTER]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_from_list(["First", "Second", "← Back"],
                                "Choose") == 1
@@ -343,16 +367,16 @@ def test_select_multiple_hover_then_space(monkeypatch):
     _patch_ui(monkeypatch)
     # Items are rows 3 and 4 with one-row renderables.
     keys = [_mouse(y=4, button=35), " ", readchar.key.ENTER]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_multiple(["Ep1", "Ep2"], "Pick", preselected=[]) == [1]
 
 
 def test_preview_hover_moves_cursor(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "console", _FakeConsole())
+    _set(monkeypatch, "console", _FakeConsole())
     keys = [_mouse(y=5, button=35), "ENTER"]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else "ESC")
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
@@ -364,8 +388,8 @@ def test_preview_hover_moves_cursor(monkeypatch):
 def test_preview_click_on_poster_opens_selected(monkeypatch):
     _patch_ui(monkeypatch)
     fake = _FakeConsole()
-    monkeypatch.setattr(cu, "console", fake)
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(x=60, y=1))
+    _set(monkeypatch, "console", fake)
+    _set(monkeypatch, "_read_menu_key", lambda: _mouse(x=60, y=1))
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
         {"cover": "", "title": "B", "lines": [], "panel_title": ""},
@@ -375,15 +399,15 @@ def test_preview_click_on_poster_opens_selected(monkeypatch):
 
 def test_breadcrumb_click_goes_back(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "_crumbs", ["Home"])
-    monkeypatch.setattr(cu, "_read_menu_key", lambda: _mouse(y=1))
+    _set(monkeypatch, "_crumbs", ["Home"])
+    _set(monkeypatch, "_read_menu_key", lambda: _mouse(y=1))
     assert cu.select_from_list(["First", "Second", "← Back"],
                                "Choose") == 2
 
 
 def test_preview_scrollbar_click_jumps(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "console", _FakeConsole())
+    _set(monkeypatch, "console", _FakeConsole())
     labels = [f"Show {i}" for i in range(20)]
     previews = [
         {"cover": "", "title": label, "lines": [], "panel_title": ""}
@@ -393,7 +417,7 @@ def test_preview_scrollbar_click_jumps(monkeypatch):
     counter = "  [1/20] \u25b0\u25b1\u25b1\u25b1\u25b1"
     x = counter.find("\u25b0") + 5
     keys = [_mouse(x=x, y=3), "ENTER"]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else "ESC")
     assert cu.select_with_preview(labels, "Pick", previews) == 19
 
@@ -425,10 +449,10 @@ def test_escape_incomplete_detects_split_mouse_report():
 
 def test_preview_hover_reaches_back_and_enter(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "console", _FakeConsole())
+    _set(monkeypatch, "console", _FakeConsole())
     # Rows: head(2), counter, item0, item1, Back.
     keys = [_mouse(y=6, button=35), "ENTER"]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else "ESC")
     previews = [
         {"cover": "", "title": "A", "lines": [], "panel_title": ""},
@@ -439,9 +463,9 @@ def test_preview_hover_reaches_back_and_enter(monkeypatch):
 
 def test_inline_menu_click_uses_cursor_anchor(monkeypatch):
     _patch_ui(monkeypatch)
-    monkeypatch.setattr(cu, "_cursor_row", lambda: 10)
+    _set(monkeypatch, "_cursor_row", lambda: 10)
     keys = [_mouse(y=11), readchar.key.ENTER]
-    monkeypatch.setattr(cu, "_read_menu_key",
+    _set(monkeypatch, "_read_menu_key",
                         lambda: keys.pop(0) if keys else readchar.key.ENTER)
     assert cu.select_from_list(["First", "Second", "← Back"],
                                "Choose", inline=True) == 0
@@ -472,7 +496,7 @@ def test_mouse_reader_windows_split_report_is_reassembled(monkeypatch):
     fake.kbhit = lambda: state["i"] < len(chars)
     monkeypatch.setitem(sys.modules, "msvcrt", fake)
     monkeypatch.setattr(cu.os, "name", "nt")
-    monkeypatch.setattr(cu, "_esc_carry", False)
+    _set(monkeypatch, "_esc_carry", False)
     ev = cu._read_menu_key()
     assert isinstance(ev, cu.MouseEvent)
     assert ev.motion and (ev.x, ev.y) == (12, 9)
@@ -480,9 +504,9 @@ def test_mouse_reader_windows_split_report_is_reassembled(monkeypatch):
 
 def test_mouse_tracking_never_needs_termios_on_windows(monkeypatch):
     writes = []
-    monkeypatch.setattr(cu, "_mouse_available", lambda: True)
-    monkeypatch.setattr(cu, "_mouse_write", writes.append)
-    monkeypatch.setattr(cu, "_mouse_active", False)
+    _set(monkeypatch, "_mouse_available", lambda: True)
+    _set(monkeypatch, "_mouse_write", writes.append)
+    _set(monkeypatch, "_mouse_active", False)
     monkeypatch.setattr(cu.os, "name", "nt")
     with cu.mouse_tracking() as active:
         assert active is True
@@ -498,9 +522,9 @@ def test_escape_incomplete_survives_unknown_terminals():
 
 def test_windows_legacy_console_disables_mouse(monkeypatch):
     """No VT support → keyboard-only, never literal escape garbage."""
-    monkeypatch.setattr(cu, "_VT_READY", None)
+    _set(monkeypatch, "_VT_READY", None)
     monkeypatch.setattr(cu.os, "name", "nt")
-    monkeypatch.setattr(cu, "_enable_windows_vt", lambda: False)
+    _set(monkeypatch, "_enable_windows_vt", lambda: False)
 
     class FakeStdin:
         def isatty(self):
@@ -515,7 +539,7 @@ def test_windows_legacy_console_disables_mouse(monkeypatch):
 
 def test_windows_vt_console_enables_mouse(monkeypatch):
     monkeypatch.setattr(cu.os, "name", "nt")
-    monkeypatch.setattr(cu, "_enable_windows_vt", lambda: True)
+    _set(monkeypatch, "_enable_windows_vt", lambda: True)
 
     class FakeStdin:
         def isatty(self):
@@ -529,7 +553,7 @@ def test_windows_vt_console_enables_mouse(monkeypatch):
 
 
 def test_vt_enable_is_cached_and_noop_on_posix(monkeypatch):
-    monkeypatch.setattr(cu, "_VT_READY", None)
+    _set(monkeypatch, "_VT_READY", None)
     monkeypatch.setattr(cu.os, "name", "posix")
     assert cu._enable_windows_vt() is False
     assert cu._VT_READY is False

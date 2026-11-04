@@ -42,13 +42,17 @@ class TestBinDir:
     def test_ensure_bin_dir_creates(self):
         d = _ensure_bin_dir()
         assert d.is_dir()
-        # Clean up
-        shutil.rmtree(d, ignore_errors=True)
+        # No rmtree here: conftest isolates _bin_dir to a per-test tmp dir,
+        # so cleanup is automatic and the user's real binaries are safe.
 
     def test_managed_bin_resolves(self):
+        from freeflix_cli import setup_assistant
+
         p = _managed_bin("ffmpeg")
         assert p.name == "ffmpeg"
-        assert p.parent == _bin_dir()
+        # Call the module attribute (patched by conftest), not the imported
+        # function object, so this test follows the isolated bin dir.
+        assert p.parent == setup_assistant._bin_dir()
 
 
 class TestHaveManaged:

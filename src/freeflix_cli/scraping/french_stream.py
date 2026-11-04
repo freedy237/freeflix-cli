@@ -30,8 +30,6 @@ def _doh_session():
             impersonate="chrome",
             curl_options={
                 CurlOpt.DOH_URL: "https://1.1.1.1/dns-query",
-                CurlOpt.DOH_SSL_VERIFYPEER: 0,
-                CurlOpt.DOH_SSL_VERIFYHOST: 0,
                 CurlOpt.CONNECTTIMEOUT: 15,
             },
         )

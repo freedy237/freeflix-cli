@@ -22,7 +22,7 @@ from ..languages import get_language_label
 from ..scraping import player as player_scraper
 from ..icons import icon
 from ..i18n import t
-from ..scraping.utils import clean_text
+from ..scraping.utils import clean_text, mask_url
 import re
 
 
@@ -424,7 +424,7 @@ def _flow_goldenms_stream(
                 )
                 if sub_choice < len(subs):
                     subtitle_url = subs[sub_choice]["url"]
-                    print_info(f"{t('Selected subtitle:')} {subtitle_url}")
+                    print_info(f"{t('Selected subtitle:')} {mask_url(subtitle_url)}")
             else:
                 print_warning(f"{t('No')} {lang_name} {t('subtitles found.')}")
                 pause()
@@ -443,12 +443,12 @@ def _flow_goldenms_stream(
 
     # Player Support
     if player_scraper.is_supported(final_url) and not is_direct:
-        print_info(f"{t('Resolving player link:')} [cyan]{final_url}[/cyan]")
+        print_info(f"{t('Resolving player link:')} [cyan]{mask_url(final_url)}[/cyan]")
         try:
             resolved_url = player_scraper.get_hls_link(final_url)
             if resolved_url:
                 final_url = resolved_url
-                print_info(f"{t('Resolved to:')} [cyan]{final_url}[/cyan]")
+                print_info(f"{t('Resolved to:')} [cyan]{mask_url(final_url)}[/cyan]")
             else:
                 print_warning(t("Failed to extract raw stream from player."))
                 if select_from_list(

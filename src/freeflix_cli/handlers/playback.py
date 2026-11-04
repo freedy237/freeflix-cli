@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import time
 
 from ..cli_utils import (
@@ -111,7 +110,7 @@ def quality_suffix(label: str, info: dict = None) -> str:
     return f"  —  {label}"
 
 
-def analyze_stream_choices(streams, budget: int = 40, timeout: int = 25) -> dict:
+def analyze_stream_choices(streams, budget: int = 55, timeout: int = 30) -> dict:
     """Probe every stream dict's URL in parallel and return ``{url: label}``.
 
     Used by the providers that build their own stream menu (HiAnime, GoldenMS)
@@ -235,12 +234,12 @@ def play_episode_flow(
         # generous enough for throttled MP4s (15-20 s to read the moov atom);
         # cached analyses still return instantly. Stragglers after the budget
         # keep the static quality badge, and we DON'T wait for them on exit.
-        ANALYSIS_BUDGET = 40
+        ANALYSIS_BUDGET = 55
         ex = ThreadPoolExecutor(
             max_workers=min(16, max(1, len(supported_players)))
         )
         futs = {
-            ex.submit(analyze_stream_quality, p.url, headers, 25): p
+            ex.submit(analyze_stream_quality, p.url, headers, 30): p
             for p in supported_players
         }
         with spinner(t("Analyzing players (resolutions, bitrate)…")):
@@ -376,21 +375,18 @@ def play_episode_flow(
             # Loop continues to select list
 
 
-_LANG_SUFFIXES = re.compile(r"\s+(default|vostfr|vff|vfq|vf|vo)$", re.I)
-
-
 def _dedup_players(players_list):
     """Drop duplicate players. Order preserved.
 
     Two flavours, both common in the wild:
       * exact same URL (Anime-Sama lists ansembed as Lecteur 1 AND 2);
-      * same HOST+embed listed under different language tags (French-Stream
-        shows "voe default / voe vostfr / voe vff" for the same file).
-    Different embeds of the same host (voe vostfr vs voe vff) are kept.
-    """
-    def _base_name(name):
-        return _LANG_SUFFIXES.sub("", (name or "").strip().lower())
+      * same HOST and same full label listed twice with different URLs
+        (a mirror pair pointing at the same embed).
 
+    The label is compared WITHOUT stripping the language suffix: "voe vostfr"
+    and "voe vff" are different tracks and must both stay selectable, even
+    when they share a host.
+    """
     seen_urls = set()
     seen_hosts = set()
     out = []
@@ -399,7 +395,7 @@ def _dedup_players(players_list):
         if url in seen_urls:
             continue
         seen_urls.add(url)
-        host_key = (_base_name(getattr(p, "name", "")), _url_host(url))
+        host_key = ((getattr(p, "name", "") or "").strip().lower(), _url_host(url))
         if host_key[1] and host_key in seen_hosts:
             continue
         seen_hosts.add(host_key)
@@ -611,7 +607,10 @@ def _download_one_episode(
                     pass
 
         for key in keys:
-            if _retry_hls_sequential(key, progress_cb=_cb):
+            if _retry_hls_sequential(
+                key, progress_cb=_cb,
+                cancel_check=batch_view.is_cancelled if batch_view else None,
+            ):
                 tracker.save_progress(
                     provider=provider_name,
                     series_title=series_title,
@@ -732,8 +731,9 @@ def download_episodes_batch(
 
     tick = 0
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = []
+    executor = ThreadPoolExecutor(max_workers=workers)
+    futures = []
+    try:
         for n, (i, episode) in enumerate(sel):
             label = labels[n]
             fut = executor.submit(
@@ -771,11 +771,19 @@ def download_episodes_batch(
         # Compté par LABEL unique ("[n/N] titre"), pas par titre : deux
         # épisodes homonymes n'écrasent plus leurs résultats mutuellement.
         ok_by_label: dict = {}
+        cancelled = batch.is_cancelled()
         for n, (fut, _episode) in enumerate(futures):
             try:
-                ok_by_label[labels[n]] = bool(fut.result())
+                # After a cancel the subprocesses get SIGTERM (then SIGKILL);
+                # never block the UI forever on a worker that ignores it.
+                ok_by_label[labels[n]] = bool(fut.result(timeout=5 if cancelled else None))
             except Exception:
                 ok_by_label[labels[n]] = False
+    finally:
+        # On cancel, do not wait for stragglers: their subprocess is already
+        # being terminated by cancel_check, and the menu must come back now.
+        cancelled = batch.is_cancelled()
+        executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
 
     succeeded = sum(1 for v in ok_by_label.values() if v)
     for n, (_i, ep) in enumerate(sel):

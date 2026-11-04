@@ -1,11 +1,19 @@
 name: Binaries
 
 # Build a standalone executable (no Python needed) for Linux / Windows / macOS
-# and attach it to the GitHub Release. Runs after a release is published.
+# and attach it to the matching GitHub Release.
+#
+# Triggered explicitly by release.yml (`gh workflow run binaries.yml -f tag=…`)
+# because a `release: published` event created with GITHUB_TOKEN does not start
+# another workflow. The `release` trigger is kept for manual/PAT releases.
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v2.1.0)"
+        required: true
   release:
     types: [published]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,18 +28,27 @@ jobs:
         include:
           - os: ubuntu-latest
             name: linux-x86_64
+            sep: ":"
           - os: windows-latest
             name: windows-x86_64
+            sep: ";"
           - os: macos-latest
             name: macos-arm64
+            sep: ":"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
       - uses: astral-sh/setup-uv@v3
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Build with PyInstaller
+        shell: bash
+        env:
+          # PyInstaller's --add-data separator is ";" on Windows, ":" elsewhere.
+          PYI_SEP: ${{ matrix.sep }}
         run: >
           uv run --with . --with pyinstaller --with lxml
           pyinstaller --onefile --name freeflix
@@ -41,6 +58,8 @@ jobs:
           --copy-metadata readchar
           --copy-metadata freeflix-cli
           --copy-metadata curl_cffi
+          --add-data "data/source_portal.jsonc${PYI_SEP}data"
+          --add-data "data/selectors.jsonc${PYI_SEP}data"
           src/freeflix_cli/__main__.py
 
       - name: Smoke-test the binary
@@ -48,6 +67,10 @@ jobs:
         run: |
           if [ -f dist/freeflix.exe ]; then BIN=dist/freeflix.exe; else BIN=dist/freeflix; fi
           "$BIN" --version
+          # --version short-circuits before importing rich/curl_cffi: also run
+          # --doctor so a bundle missing a real dependency fails here, not at
+          # the user's first launch.
+          "$BIN" --doctor > /dev/null
 
       - name: Name the artifact
         shell: bash
@@ -59,7 +82,19 @@ jobs:
             mv freeflix "freeflix-${{ matrix.name }}"
           fi
 
+      - name: Checksum the executable
+        shell: bash
+        run: |
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum freeflix-${{ matrix.name }}* > freeflix-${{ matrix.name }}.sha256
+          else
+            # macOS has shasum, not sha256sum
+            shasum -a 256 freeflix-${{ matrix.name }}* > freeflix-${{ matrix.name }}.sha256
+          fi
+
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.event.release.tag_name }}
           files: dist/freeflix-${{ matrix.name }}*

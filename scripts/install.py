@@ -98,22 +98,36 @@ def _ensure_permanent_path():
     bin_dir = _local_bin()
     os_name = _os_name()
 
-    # ── Windows : user-level PATH via setx ──────────────────────────
+    # ── Windows : user-level PATH via the registry ──────────────────
     if os_name == "windows":
         cur = os.environ.get("PATH", "")
         if str(bin_dir).lower() in cur.lower():
             _ok(f"{bin_dir} is already in PATH")
             return
         try:
-            subprocess.run(
-                ["setx", "PATH", f"{bin_dir};%PATH%"],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            import winreg
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Environment", 0,
+                winreg.KEY_READ | winreg.KEY_SET_VALUE,
             )
+            try:
+                user_path, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                user_path, kind = "", winreg.REG_EXPAND_SZ
+            parts = [p for p in str(user_path).split(";") if p]
+            if not any(str(bin_dir).lower() == p.lower() for p in parts):
+                parts.insert(0, str(bin_dir))
+                # REG_EXPAND_SZ keeps %USERPROFILE%-style entries working;
+                # setx would truncate at 1024 and write a literal "%PATH%".
+                winreg.SetValueEx(
+                    key, "Path", 0, winreg.REG_EXPAND_SZ, ";".join(parts)
+                )
+            winreg.CloseKey(key)
             _ok(f"Added {bin_dir} to user PATH (new terminal needed)")
         except Exception as exc:
             _fail(f"Could not update PATH: {exc}")
+            _say(f'Add "{bin_dir}" to PATH manually.')
         return
 
     # ── Linux / macOS : write shell rc file ─────────────────────────
@@ -234,6 +248,9 @@ def _install_tool(name: str) -> bool:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
         )
         out = (result.stdout or "") + (result.stderr or "")
         if "is already installed" in out:

@@ -20,6 +20,8 @@ a background thread (like portals), so importing this module never blocks.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 
 # Baked-in defaults = exactly today's working selectors. Each value is a LIST of
@@ -130,5 +132,52 @@ def _refresh_remote() -> None:
         pass
 
 
+def _local_selector_files() -> list:
+    """Where the shipped / user selectors.jsonc may live (wheel, PyInstaller,
+    editable checkout, user override)."""
+    here = os.path.dirname(__file__)
+    cands = [
+        os.path.normpath(os.path.join(here, "..", "..", "..", "data", "selectors.jsonc")),
+        os.path.expanduser("~/.config/freeflix/selectors.jsonc"),
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cands.append(os.path.join(meipass, "data", "selectors.jsonc"))
+    try:
+        import sysconfig
+        base = sysconfig.get_path("data")
+        if base:
+            cands.append(os.path.join(
+                base, "share", "freeflix-cli", "data", "selectors.jsonc"))
+    except Exception:
+        pass
+    return cands
+
+
+def _load_local() -> None:
+    """Apply the bundled selectors.jsonc before any remote patch.
+
+    The file was shipped in the wheel but never read: only the remote copy
+    was fetched, so a local fix (or an offline repair) did nothing.
+    """
+    try:
+        from ..config_loader import load_local_jsonc
+    except Exception:
+        return
+    for path in _local_selector_files():
+        try:
+            if os.path.exists(path):
+                data = load_local_jsonc(path, {})
+                if data:
+                    _merge(data)
+                    return
+        except Exception:
+            continue
+
+
 def start_background_refresh() -> None:
     threading.Thread(target=_refresh_remote, daemon=True).start()
+
+
+# Bundled/user selectors are available immediately (remote refresh stays async).
+_load_local()

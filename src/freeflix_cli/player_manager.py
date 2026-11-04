@@ -22,6 +22,7 @@ from .cli_utils import (
     _suppress_print,
 )
 from .scraping import player
+from .scraping.utils import mask_url
 from .net_config import shared_session
 from typing import Dict
 from .tracker import tracker
@@ -600,7 +601,8 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
         )
     hdr = "".join(f"{k}: {v}\r\n" for k, v in supplied.items())
     cmd = [ff, "-v", "quiet", "-print_format", "json",
-           "-show_entries", "stream=width,height,bit_rate:format=bit_rate"]
+           "-show_entries",
+           "stream=width,height,bit_rate:format=bit_rate,duration"]
     if hdr:
         cmd += ["-headers", hdr]
     cmd.append(url)
@@ -623,8 +625,19 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
             bitrate = int((data.get("format") or {}).get("bit_rate") or 0)
         except (TypeError, ValueError):
             bitrate = 0
+    duration = 0.0
+    try:
+        duration = float((data.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
     if height:
-        return {"height": height, "mbps": round(bitrate / 1_000_000, 1) if bitrate else 0}
+        out = {"height": height,
+               "mbps": round(bitrate / 1_000_000, 1) if bitrate else 0}
+        if duration > 0:
+            # Lets is_likely_ad_placeholder reject a 15-30 s MP4 ad served
+            # instead of the episode (previously only HLS was duration-checked).
+            out["duration"] = round(duration, 1)
+        return out
     return None
 
 
@@ -746,6 +759,8 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
                 q = _ffprobe_quality(stream_url, probe_headers, timeout=timeout)
                 if q:
                     out["qualities"] = [q]
+                    if q.get("duration"):
+                        out["duration"] = q["duration"]
         # Keep what's needed to estimate episode duration later (one media
         # playlist holds the same EXTINF total for every variant), so the
         # batch-download menu can show an approximate size per episode without
@@ -782,7 +797,7 @@ def _analyze_stream_quality_uncached(url: str, headers: dict = None, timeout: in
 # failures are retried sooner so a recovered host comes back.
 _quality_cache: Dict[tuple, tuple] = {}
 _quality_lock = _threading.Lock()
-_QUALITY_TTL_OK = 600.0
+_QUALITY_TTL_OK = 300.0
 _QUALITY_TTL_FAIL = 120.0
 
 
@@ -1087,11 +1102,32 @@ def _stable_temp_dir(safe_title: str, subfolder: str = None) -> str:
 _RESUME_META = ".freeflix-resume.json"
 
 
+_SENSITIVE_HEADERS = {"cookie", "authorization", "proxy-authorization",
+                      "x-api-key", "x-auth-token"}
+
+
+def _redact_headers(headers: dict) -> dict:
+    """Drop credentials before a header set is written to disk."""
+    if not isinstance(headers, dict):
+        return {}
+    return {k: v for k, v in headers.items()
+            if str(k).lower() not in _SENSITIVE_HEADERS}
+
+
 def _write_resume_meta(frag_tmp: str, **fields) -> None:
     """Persist what's needed to resume this download later (kept in .temp/,
-    deleted with the dir on success)."""
+    deleted with the dir on success).
+
+    Signed cookies / Authorization headers are stripped: the metadata is a
+    plain JSON file under ~/Downloads and must never contain live credentials.
+    The file is written 0600.
+    """
+    if "headers" in fields:
+        fields["headers"] = _redact_headers(fields.get("headers") or {})
+    path = os.path.join(frag_tmp, _RESUME_META)
     try:
-        with open(os.path.join(frag_tmp, _RESUME_META), "w", encoding="utf-8") as f:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(fields, f)
     except Exception:
         pass
@@ -1202,6 +1238,23 @@ def cleanup_temp(orphan_age_h: float = 24.0, stale_age_days: float = 14.0) -> in
                     removed += 1
         except OSError:
             continue
+    # Temporary subtitle files (freeflix_sub_*) live in the SYSTEM temp dir,
+    # not in .temp/: sweep the stale ones so streaming sessions don't leak
+    # files forever. Old enough that a still-running player can't need them.
+    try:
+        sys_tmp = tempfile.gettempdir()
+        for name in os.listdir(sys_tmp):
+            if not name.startswith(("freeflix_sub_", "freeflix_os_")):
+                continue
+            p = os.path.join(sys_tmp, name)
+            try:
+                if os.path.isfile(p) and now - os.path.getmtime(p) > orphan_age_h * 3600:
+                    os.unlink(p)
+                    removed += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
     return removed
 
 
@@ -1243,14 +1296,26 @@ def _dedupe_title_segments(title: str) -> str:
     return " - ".join(out)
 
 
+_WINDOWS_RESERVED = re.compile(
+    r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$", re.I)
+
+
 def _sanitize_filename(name: str, max_len: int = 200) -> str:
-    """Make a string safe to use as a filename across filesystems."""
+    """Make a string safe to use as a filename across filesystems.
+
+    Also covers the Windows-only traps: reserved device names (CON, NUL,
+    COM1…), trailing dots/spaces, and control characters. A 200-char cap keeps
+    the full path under the legacy MAX_PATH limit for the usual
+    ``Downloads/FreeFlix/<season>/`` depth.
+    """
     name = _dedupe_title_segments(name)
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    if _WINDOWS_RESERVED.match(cleaned):
+        cleaned = "_" + cleaned
     if not cleaned:
         cleaned = "video"
-    return cleaned[:max_len]
+    return cleaned[:max_len].rstrip(" .")
 
 
 def clean_season_title(series_title: str, season_title: str) -> str:
@@ -1934,7 +1999,7 @@ _ytdlp_meta: dict = {}
 
 
 def _retry_hls_sequential(stream_url: str, attempts: int = 3,
-                          progress_cb=None) -> bool:
+                          progress_cb=None, cancel_check=None) -> bool:
     """Re-run a failed HLS download ONE fragment at a time.
 
     Parallel fragments (8) are fast, but uqload/fsvid CDNs sometimes reset
@@ -1964,8 +2029,11 @@ def _retry_hls_sequential(stream_url: str, attempts: int = 3,
         try:
             from . import progress as _pg
             code = _pg.run_download_with_bar(
-                cmd, f"{title} — {t('sequential retry')}"
+                cmd, f"{title} — {t('sequential retry')}",
+                cancel_check=cancel_check,
             )
+        except KeyboardInterrupt:
+            return False  # user cancelled: stop the retry loop immediately
         except Exception:
             code = subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL).returncode
@@ -1977,9 +2045,12 @@ def _retry_hls_sequential(stream_url: str, attempts: int = 3,
         expected, shortest = _expected_hls_info(meta["url"], dl_headers)
         tol = (max(0.25, min(1.0, shortest * 0.5))
                if expected and shortest else None)
-        code = _verify_download(staged, expected, None, tol)
-        if code != "ok":
-            _purge_download_temp(staged)
+        ok, _reason = _verify_download(staged, expected, None, tol)
+        if not ok:
+            # Rename the rejected mux so yt-dlp does not treat it as a
+            # finished download on the next attempt, but keep the fragment
+            # files: resume reuses every completed segment.
+            _keep_incomplete(staged)
             continue
         try:
             dst_dir = meta.get("out_dir") or DOWNLOAD_DIR
@@ -1994,6 +2065,11 @@ def _retry_hls_sequential(stream_url: str, attempts: int = 3,
             return True
         except Exception:
             continue
+    # Every attempt failed: keep whatever was produced as `.incomplete` so a
+    # later "resume download" can pick it up instead of losing the progress.
+    last = _find_staged_output(frag_tmp, title)
+    if last:
+        _keep_incomplete(last)
     return False
 
 
@@ -2558,7 +2634,7 @@ def play_video(
 
     headers = headers or {}
     if not output_suppressed:
-        print_info(f"{t('Resolving stream for:')} [cyan]{url}[/cyan]")
+        print_info(f"{t('Resolving stream for:')} [cyan]{mask_url(url)}[/cyan]")
 
     # Determine player configuration
     player_config = {}
@@ -2619,7 +2695,7 @@ def play_video(
             pass
 
     if not output_suppressed:
-        print_success(f"{t('Stream URL:')} [cyan]{stream_url}[/cyan]")
+        print_success(f"{t('Stream URL:')} [cyan]{mask_url(stream_url)}[/cyan]")
 
     local_subtitle_path = subtitle_url
     if subtitle_url and subtitle_url.startswith("http"):
@@ -2926,7 +3002,8 @@ def play_video(
                 return False
 
             endpoint = _proxy_endpoint(stream_url, player_config, is_mp4)
-            local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
+            local_stream_url = (f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}"
+                               f"&headers={encoded_headers}&k={proxy.PROXY_TOKEN}")
 
             if not platform_android.available():
                 print_error(t("No Android player found — install mpv-android (F-Droid)."))
@@ -2987,7 +3064,8 @@ def play_video(
 
             endpoint = _proxy_endpoint(stream_url, player_config, is_mp4)
 
-            local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
+            local_stream_url = (f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}"
+                               f"&headers={encoded_headers}&k={proxy.PROXY_TOKEN}")
 
             encoded_local_stream_url = urllib.parse.quote(local_stream_url)
             browser_player_url = (
@@ -3075,7 +3153,8 @@ def play_video(
 
             endpoint = _proxy_endpoint(stream_url, player_config, is_mp4)
 
-            local_stream_url = f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}&headers={encoded_headers}"
+            local_stream_url = (f"{proxy.PROXY_URL}/{endpoint}?url={encoded_url}"
+                               f"&headers={encoded_headers}&k={proxy.PROXY_TOKEN}")
 
             try:
                 cmd = [player_executable, local_stream_url]

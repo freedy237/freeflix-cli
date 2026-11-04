@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List
 import re
+import urllib.parse
 from .objects import Player, Episode
 
 
@@ -172,3 +173,22 @@ def clear_origin_cache():
         _origin_cache_file().unlink()
     except OSError:
         pass
+
+
+def mask_url(url: str, max_len: int = 120) -> str:
+    """Return a log/UI-safe URL: query and fragment removed, length capped.
+
+    Signed CDN links (CloudFront, Vidzy, uqload) carry short-lived credentials
+    in the query string; printing them leaked working links into the terminal,
+    scrollback and the log file. The host and path are enough to diagnose.
+    """
+    if not url:
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(str(url))
+        safe = f"{parts.scheme}://{parts.netloc}{parts.path}"
+        if parts.query:
+            safe += "?…"
+        return safe[:max_len]
+    except Exception:
+        return str(url)[:max_len]

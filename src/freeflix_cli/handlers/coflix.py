@@ -142,6 +142,7 @@ def handle_coflix():
                         [
                             f"{t('Resume')} {saved_progress['season_title']} - {saved_progress['episode_title']}",
                             t("Browse Seasons"),
+                            t("← Back"),
                         ],
                         f"{t('Found saved progress for')} {content.title} :",
                         clear_on_back=False, inline=True,
@@ -149,6 +150,8 @@ def handle_coflix():
                     if choice == 0:
                         resume_coflix(saved_progress)
                         continue
+                    if choice == 2:
+                        continue  # ← Back / Esc → search results
 
                 while True:  # ── Season ──
                     with crumb(content.title):

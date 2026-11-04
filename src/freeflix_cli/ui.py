@@ -24,17 +24,22 @@ _NOIR_AMBER = "#E6B45E"
 def _on_black_theme() -> bool:
     """True for the Cinema Noir signature palette (and any near-black one).
 
-    The wordmark keeps the Cinema Noir colours only when the active theme is
-    genuinely dark; on another dark palette it follows that palette instead.
+    The wordmark keeps the Cinema Noir colours only when the active theme
+    actually declares a near-black ``surface``; legacy palettes have no
+    ``surface`` at all and must follow their own accent/text colours instead
+    of being mistaken for Cinema Noir.
     """
-    surface = color("surface")
+    from .themes import active_theme
+
+    surface = active_theme().get("surface")
+    if not surface:
+        return False
     try:
         from rich.color import Color
         rgb = Color.parse(surface).get_truecolor()
         return (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000 < 40
     except Exception:
-        # "default" / named colours → assume the terminal is dark.
-        return surface in ("default", "black") or surface.startswith("#0")
+        return surface in ("default", "black") or str(surface).startswith("#0")
 
 
 def wordmark() -> Text:

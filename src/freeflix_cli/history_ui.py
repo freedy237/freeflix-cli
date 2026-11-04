@@ -54,6 +54,11 @@ def handle_resume(data, show_poster=True):
         hianime.resume_hianime(data)
     elif provider == "GoldenMS":
         goldenms.resume_goldenms(data)
+    else:
+        # A removed/renamed provider used to fail silently: the Resume menu
+        # closed and nothing happened. Tell the user instead.
+        print_warning(t("This entry cannot be resumed automatically."))
+        pause()
 
 
 

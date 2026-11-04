@@ -43,13 +43,23 @@ def _fmt_size(path: Path) -> str:
         return "?"
 
 
+# Most tools print their version with `--version`; ffmpeg only accepts
+# `-version` (it exits 8 on the double-dash form, which used to be reported
+# as BROKEN even on a perfectly healthy install).
+_VERSION_FLAGS = {
+    "ffmpeg": "-version",
+    "ffprobe": "-version",
+}
+
+
 def _check_binary(label: str, *names: str) -> tuple[str, str, str]:
     for n in names:
         path = shutil.which(n)
         if path:
             try:
+                flag = _VERSION_FLAGS.get(Path(n).name.lower(), "--version")
                 out = subprocess.run(
-                    [n, "--version"], capture_output=True, text=True, timeout=10
+                    [n, flag], capture_output=True, text=True, timeout=10
                 )
                 ver = (out.stdout or out.stderr or "").splitlines()[0].strip()
                 # An existing shim can still be broken (stale uv/pip env).
@@ -83,12 +93,12 @@ def _check_mpv_config() -> list[dict]:
             cfg_dir / "shaders" / "Anime4K_Clamp_Highlights.glsl",
         ),
         (
-            "Anime4K_Restore_CNN_VL.glsl",
-            cfg_dir / "shaders" / "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Restore_CNN_S.glsl",
+            cfg_dir / "shaders" / "Anime4K_Restore_CNN_S.glsl",
         ),
         (
-            "Anime4K_Upscale_CNN_x2_VL.glsl",
-            cfg_dir / "shaders" / "Anime4K_Upscale_CNN_x2_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_S.glsl",
+            cfg_dir / "shaders" / "Anime4K_Upscale_CNN_x2_S.glsl",
         ),
     ]
     for name, path in expected:
@@ -101,9 +111,19 @@ def _check_mpv_config() -> list[dict]:
 
 
 def _mpv_config_dir() -> Path:
-    if _os() == "windows":
-        return Path(os.environ.get("APPDATA", "")) / "mpv"
-    return Path.home() / ".config" / "mpv"
+    """FreeFlix's dedicated mpv config dir (what the player actually reads).
+
+    Imported lazily: setup_assistant is heavy and doctor must stay fast, but
+    duplicating the path here is how the report ended up inspecting the
+    user's *global* ~/.config/mpv and calling it MISSING/OK by mistake.
+    """
+    try:
+        from .setup_assistant import get_mpv_config_dir
+        return Path(get_mpv_config_dir())
+    except Exception:
+        if _os() == "windows":
+            return Path(os.environ.get("APPDATA", "")) / "freeflix" / "mpv"
+        return Path.home() / ".config" / "freeflix" / "mpv"
 
 
 def _check_connectivity(host: str, port: int = 443, timeout: int = 5) -> str:

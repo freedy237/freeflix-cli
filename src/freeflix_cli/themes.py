@@ -185,8 +185,13 @@ _ROLE_FALLBACK = {
     "surface": None,       # leave the terminal background
     "surface_alt": None,
     "selection": "accent",
-    "selection_text": "black",
+    "selection_text": None,  # literal colour, handled by _LITERAL_FALLBACK
     "accent_soft": "accent",
+}
+
+# Roles whose fallback is a literal Rich colour, not another role key.
+_LITERAL_FALLBACK = {
+    "selection_text": "black",
 }
 
 
@@ -200,6 +205,8 @@ def color(role: str) -> str:
     theme = active_theme()
     if role in theme and theme[role] is not None:
         return theme[role]
+    if role in _LITERAL_FALLBACK:
+        return _LITERAL_FALLBACK[role]
     fallback = _ROLE_FALLBACK.get(role)
     if fallback is None:
         return "default"  # terminal background / default foreground

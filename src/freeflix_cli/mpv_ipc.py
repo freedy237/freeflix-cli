@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import socket
 import sys
 import tempfile
@@ -91,6 +92,10 @@ class MpvIPC:
         self._conn = None          # socket (unix) or file object (win pipe)
         self._buf = b""
         self._req = 0
+        # Windows named-pipe reads BLOCK with no timeout: a reader thread and
+        # a queue let _next_line honour its deadline and stop() return.
+        self._q: "queue.Queue[bytes]" = queue.Queue()
+        self._reader_thread = None
 
     # ── connection ────────────────────────────────────────────────
     def connect(self, timeout: float = 15.0) -> bool:
@@ -101,6 +106,9 @@ class MpvIPC:
                 if _IS_WIN:
                     # mpv exposes the pipe as a file we can open r+b.
                     self._conn = open(self.path, "r+b", buffering=0)
+                    self._reader_thread = threading.Thread(
+                        target=self._reader_loop, daemon=True)
+                    self._reader_thread.start()
                 else:
                     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     try:
@@ -126,9 +134,25 @@ class MpvIPC:
         else:
             self._conn.sendall(data)
 
+    def _reader_loop(self) -> None:
+        """Windows only: pump the blocking pipe into a queue."""
+        try:
+            while True:
+                chunk = self._conn.read(4096)
+                if not chunk:
+                    break
+                self._q.put(chunk)
+        except Exception:
+            pass
+        finally:
+            self._q.put(b"")
+
     def _read_some(self) -> bytes:
         if _IS_WIN:
-            return self._conn.read(4096) or b""
+            try:
+                return self._q.get(timeout=0.2)
+            except queue.Empty:
+                return b""
         return self._conn.recv(4096)
 
     def _next_line(self, timeout: float = 1.0):
@@ -168,6 +192,10 @@ class MpvIPC:
         return rid
 
     def close(self) -> None:
+        try:
+            self._q.put(b"")  # unblock a pending _next_line
+        except Exception:
+            pass
         try:
             if self._conn is not None:
                 self._conn.close()

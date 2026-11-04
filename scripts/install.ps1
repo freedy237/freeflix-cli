@@ -15,6 +15,20 @@ function Err($m)  { Write-Host "[X]  $m" -ForegroundColor Red }
 
 try { chcp 65001 > $null } catch {}
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+# Windows PowerShell 5.1 may still default to TLS 1.0/1.1; GitHub rejects it.
+try {
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+}
+
+# Native arm64 asset when running Windows-on-ARM (x64 would run under emulation).
+$uvArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+    "aarch64-pc-windows-msvc"
+} else {
+    "x86_64-pc-windows-msvc"
+}
 
 Write-Host ""
 Log "FreeFlix CLI - Windows Bootstrap"
@@ -37,7 +51,7 @@ if (Get-Command "uv" -ErrorAction SilentlyContinue) {
         $zip = "$tmp\uv.zip"
         Write-Host "       (~10 MiB - please wait)"
         [Net.WebClient]::new().DownloadFile(
-            "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip",
+            "https://github.com/astral-sh/uv/releases/latest/download/uv-$uvArch.zip",
             $zip
         )
         Expand-Archive -Path $zip -DestinationPath $tmp -Force

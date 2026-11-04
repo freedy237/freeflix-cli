@@ -146,7 +146,16 @@ def _fetch():
 
         history = tracker.get_history()
         followed = tracker.get_followed_series()
-        if history or followed:
+        # Resolve the Anime-Sama mirror only when there is actually an
+        # Anime-Sama show to follow: a Coflix-only history used to trigger a
+        # network request (and a ~3 s stall) for nothing.
+        has_anime = any(
+            (e.get("provider") == "Anime-Sama") for e in history
+        ) or any(
+            isinstance(f, dict) and f.get("provider") == "Anime-Sama"
+            for f in followed
+        )
+        if has_anime:
             anime_sama.get_website_url()
         seen_keys = tracker.get_seen_releases()
         planning = _planning_index()

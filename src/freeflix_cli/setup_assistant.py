@@ -413,14 +413,29 @@ _FFMPEG_ARM64_URL = {
     "windows": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-winarm64-gpl.zip",  # noqa: E501
 }
 
+# Native arm64 mpv builds (v0.41.0 publishes them). Using the Intel/x64 zip on
+# an Apple Silicon / Windows-on-ARM machine forced Rosetta or emulation.
+_MPV_ARM64 = {
+    "macos": {
+        "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-macos-15-arm.zip",
+        "sha256": "489cf6a54f57c54f86ad8d7cedaf5bb26848770d58dc059021214e2f689ee799",
+        "min_bytes": 40_000_000,
+    },
+    "windows": {
+        "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-aarch64-pc-windows-msvc.zip",
+        "sha256": "a822abeffd0ac88951f4084f3425f949842aa17d616f880637ebe9041e482e97",
+        "min_bytes": 60_000_000,
+    },
+}
+
 
 def _binary_sources_for(os_name: str) -> dict:
     """Managed-binary sources for *os_name*, adjusted for the CPU arch.
 
-    On arm64 we swap in the aarch64 ffmpeg build. mpv/aria2 have no official
-    arm64 archive : on Linux they come from the package manager (arch-agnostic),
-    and on Windows-on-ARM the x64 builds run under the OS's built-in emulation,
-    so the x86_64 entries are kept as-is.
+    On arm64 we swap in the aarch64 ffmpeg build and the native arm64 mpv
+    archive (both exist upstream). aria2 has no official arm64 macOS build:
+    on Linux it comes from the package manager, on Windows-on-ARM the x64
+    build runs under the OS's built-in emulation.
     """
     import copy
     sources = copy.deepcopy(_BINARY_SOURCES.get(os_name, {}))
@@ -428,6 +443,10 @@ def _binary_sources_for(os_name: str) -> dict:
         arm_ffmpeg = _FFMPEG_ARM64_URL.get(os_name)
         if arm_ffmpeg and "ffmpeg" in sources:
             sources["ffmpeg"]["url"] = arm_ffmpeg
+            sources["ffmpeg"].pop("sha256", None)  # `latest` build: size floor
+        arm_mpv = _MPV_ARM64.get(os_name)
+        if arm_mpv and "mpv" in sources:
+            sources["mpv"].update(arm_mpv)
     return sources
 
 
@@ -505,7 +524,7 @@ def _android_install_pkgs(pkgs: list) -> bool:
         return False
     try:
         print_info(f"  {t('Installing:')} {', '.join(pkgs)} …")
-        subprocess.run(cmd, check=False)
+        subprocess.run(cmd, check=False, timeout=1800)
         return True
     except Exception:
         return False
@@ -558,7 +577,7 @@ def _winget_install(pkg_id: str) -> None:
             ["winget", "install", "--silent",
              "--accept-source-agreements", "--accept-package-agreements",
              "--id", pkg_id],
-            check=False, capture_output=True, text=True,
+            check=False, capture_output=True, text=True, timeout=900,
         )
     except Exception:
         pass
@@ -667,13 +686,24 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
 
 # ─── Downloads ────────────────────────────────────────────────────────
 def _download(url: str, dest: Path) -> bool:
-    """Download `url` into `dest`. Returns True on success."""
+    """Download `url` into `dest` atomically. Returns True on success.
+
+    A failed/truncated transfer used to leave `dest` half-written; callers then
+    saw a file and skipped the retry. Write to `.part` and only publish on a
+    complete download.
+    """
+    part = dest.with_name(dest.name + ".part")
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=30) as r, open(dest, "wb") as f:
+        with urllib.request.urlopen(url, timeout=30) as r, open(part, "wb") as f:
             shutil.copyfileobj(r, f)
+        os.replace(part, dest)
         return True
     except Exception as e:
+        try:
+            part.unlink()
+        except OSError:
+            pass
         print_warning(f"{t('Could not download')} {url} ({type(e).__name__}: {e})")
         return False
 
@@ -869,7 +899,7 @@ def _linux_install_missing(missing_ess: list) -> bool:
 
     print_info(f"{t('Installing')} {', '.join(pkgs)} ({t('sudo may ask your password')})…")
     try:
-        return subprocess.run(chosen[1]).returncode == 0
+        return subprocess.run(chosen[1], timeout=30).returncode == 0
     except Exception as e:
         print_warning(f"{t('Auto-install failed:')} {e}")
         return False
@@ -949,7 +979,7 @@ def install_media_player(name: str) -> bool:
 
     print_info(f"{t('Installing')} {name}…")
     try:
-        subprocess.run(cmd, check=False)
+        subprocess.run(cmd, check=False, timeout=1800)
     except Exception as e:
         print_warning(f"{name} {t('install failed')} ({type(e).__name__}: {e})")
         return False
@@ -1007,7 +1037,7 @@ def install_chafa() -> bool:
         return False
 
     try:
-        subprocess.run(cmd, check=False)
+        subprocess.run(cmd, check=False, timeout=1800)
     except Exception as e:
         print_warning(f"chafa {t('install failed')} ({type(e).__name__}: {e})")
         return False
@@ -1201,6 +1231,10 @@ def install_nerd_font() -> bool:
         except Exception as e:
             print_warning(f"{t('Nerd Font install failed:')} {e}")
             shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
             return False
 
     elif os_name == "macos":
@@ -1247,6 +1281,11 @@ def install_nerd_font() -> bool:
             os.unlink(zip_path)
         except Exception as e:
             print_warning(f"{t('Nerd Font install failed:')} {e}")
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
             return False
 
     else:
@@ -1414,7 +1453,7 @@ def install_flaresolverr() -> bool:
                         f"{t('Install Podman now?')} ({' '.join(cmd)})",
                         default=True,
                     ):
-                        subprocess.run(cmd, check=False)
+                        subprocess.run(cmd, check=False, timeout=1800)
                         runtime = _container_runtime()
                 except (EOFError, KeyboardInterrupt):
                     return False
@@ -1672,9 +1711,9 @@ def run_setup(force: bool = False) -> bool:
         return False
 
     print_info(f"\n• {t('Installing mpv configuration…')}")
-    install_config_files()
+    cfg_ok = install_config_files()
     print_info(f"\n• {t('Downloading Anime4K shaders…')}")
-    install_anime4k_shaders()
+    shaders_ok = install_anime4k_shaders()
     print_info(f"\n• {t('Anime posters (chafa)…')}")
     install_chafa()
     # Nerd Font is a required dependency for crisp icons — install it on every
@@ -1694,12 +1733,23 @@ def run_setup(force: bool = False) -> bool:
     elif os_name == "macos":
         print_platform_guidance_macos(gpus)
 
-    tracker.data["setup_done"] = True
+    # Only mark the setup complete when the mpv files are actually in place:
+    # a failed download used to be recorded as success, so the wizard never
+    # retried and the user silently lost Anime4K.
+    if cfg_ok and shaders_ok:
+        tracker.data["setup_done"] = True
+        tracker.data.pop("setup_declined", None)
+        tracker._save_data()
+        print_success(f"\n✓ {t('Setup complete. Launching FreeFlix…')}\n")
+        return True
+    tracker.data["setup_done"] = False
     tracker.data.pop("setup_declined", None)
     tracker._save_data()
-
-    print_success(f"\n✓ {t('Setup complete. Launching FreeFlix…')}\n")
-    return True
+    print_warning(t(
+        "Some mpv files could not be downloaded. Setup will retry on the "
+        "next launch (network or GitHub may be blocked right now)."
+    ))
+    return False
 
 
 # ─── Post-upgrade migrations ──────────────────────────────────────────

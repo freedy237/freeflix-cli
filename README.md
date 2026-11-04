@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/freeflix-cli/"><img src="https://img.shields.io/pypi/v/freeflix-cli.svg?color=blue" alt="PyPI version"></a>
+  <a href="https://github.com/freedy237/freeflix-cli/actions/workflows/ci.yml"><img src="https://github.com/freedy237/freeflix-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/freeflix-cli/"><img src="https://img.shields.io/pypi/pyversions/freeflix-cli.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
 </p>
@@ -29,8 +30,11 @@
 
 - **One command, everything works** — installs its own mpv/ffmpeg/yt-dlp and a
   Nerd Font; no browser, no ads, no accounts required.
-- **Everything, always up to date** — movies & series (TMDB-based) and anime
-  (Anime-Sama), in **French (VF/VOSTFR)** or **VO**.
+- **Everything, always up to date** — anime (Anime-Sama, HiAnime,
+  GoldenAnime), films & series (GoldenMS, Coflix, French-Stream, YTS/EZTV),
+  in **French (VF/VOSTFR)** or **VO**.
+- **Live planning & Nouveautés** — the Anime-Sama weekly schedule, and a feed
+  of new episodes for the shows you follow.
 - **Actually nice to use** — poster previews in the terminal (chafa), breadcrumb
   navigation, `/` to filter, `Esc` to go back anywhere, `?` for help.
 - **Download & keep** — pick a quality, batch a whole season into its own folder,
@@ -51,7 +55,7 @@
 - **Daily new-episode notifications** via systemd timer + libnotify ;
 - A **Nyaa torrent provider** (downloads via aria2 BitTorrent) ;
 - A **Local Downloads browser** in the home menu ;
-- **Anime4K Mode A_VL** shaders pre-bundled (toggle CTRL+1 / CTRL+0) ;
+- **Anime4K** shaders pre-bundled (S by default, VL with CTRL+1, off with CTRL+0) ;
 - **French localisation** of the whole UI (auto-switched based on language pref) ;
 - Multi-mirror portal fallback + `website_origin` caching (24 h TTL) ;
 - Multiple **bug fixes** : 403 on `/catalogue/?search=` (animes-sama.fr refactor), double-slash legacy URLs in history, settings-menu exit loop, ffmpeg infinite-reconnect at byte 1506, Videasy/Vidlink Referer not propagated, history resume silent-failure, and more.
@@ -72,12 +76,17 @@
 | ⚡ | **Parallel downloads** (up to 4 concurrent episodes) |
 | 🔔 | **Daily notifications** when new episodes drop |
 | 🌊 | **Nyaa.si torrents** (high-quality anime releases) |
-| 🌐 | **6 streaming sources** : Anime-Sama, GoldenAnime, French-Manga, GoldenMS, French-Stream, Nyaa |
+| 🌐 | **10 streaming sources** : Anime-Sama, French-Anime, HiAnime, GoldenAnime, GoldenMS, Papystreaming, French-Stream, Coflix, YTS/EZTV, Nyaa |
+| 🗓 | **Anime-Sama planning** live (7 days, posters, follow a show without watching it) |
+| 🆕 | **Nouveautés** : new episodes of the shows you follow, cleared once watched |
+| 🖱 | **Full mouse control** : hover, click, wheel, right-click back, clickable pagination |
+| 🎨 | **Cinema Noir** (2.0) design system, 12 themes, reduced-motion support |
 | 🎮 | **4 player backends** : mpv, VLC, browser, download-only |
 | 🇫🇷 | **French UI** : the whole CLI is in French when language is set to FR |
 | 🛡 | **Anti-crash mpv config** : ytdl-hook off, gpu renderer, no infinite reconnect |
 | 🎨 | **Anime4K** pre-bundled with runtime toggle CTRL+1 / CTRL+0 |
 | 🩺 | **`freeflix --doctor`** system diagnostic (check deps, config, network) |
+| 🔄 | **Startup updater** : asks yes/no, upgrades with the same installer (uv/pipx/pip), reloads |
 
 ---
 
@@ -146,8 +155,22 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```bash
 git clone https://github.com/freedy237/freeflix-cli.git
 cd freeflix-cli
-uv pip install -e .
+uv sync                       # dev environment (Python 3.12 recommended)
+uv run freeflix               # launch from the checkout
 ```
+
+Run the suite and the same lint as CI before touching a scraper:
+
+```bash
+uv run --with pytest --with pytest-cov --with pytest-timeout -m pytest -q --timeout=120
+uvx ruff check --select E,W,F,B --ignore E501,E402 src/freeflix_cli/
+freeflix --doctor --sources   # live audit of every source (needs network)
+```
+
+The architecture, usage, troubleshooting and release process are documented
+in [`docs/`](docs/README.md). Tests are offline by design; the only network
+checks live in `tools/audit_providers.py` and `--doctor --sources`.
+Security model and reporting: [`SECURITY.md`](SECURITY.md).
 
 ### Upgrading on Windows (read this first)
 

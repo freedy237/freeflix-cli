@@ -23,14 +23,11 @@ class TestDetectNerdFont:
         except Exception as e:
             pytest.fail(f"detect_nerd_font raised {type(e).__name__}: {e}")
 
-    def test_url_reachable(self):
-        import urllib.request
-        try:
-            resp = urllib.request.urlopen(NERD_FONT_URL, timeout=15)
-            assert resp.status == 302 or resp.status == 200
-            resp.close()
-        except Exception as e:
-            pytest.fail(f"Nerd Font URL not reachable: {e}")
+    def test_url_is_https_zip(self):
+        # Offline check: the live URL is exercised by the installer, not by
+        # unit tests (CI must stay deterministic without network access).
+        assert NERD_FONT_URL.startswith("https://")
+        assert NERD_FONT_URL.endswith(".zip")
 
     def test_font_name_non_empty(self):
         assert NERD_FONT_NAME and len(NERD_FONT_NAME) > 5

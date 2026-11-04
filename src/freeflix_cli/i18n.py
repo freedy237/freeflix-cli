@@ -743,6 +743,10 @@ _FR = {
     'Set your terminal font to': 'Règle la police de ton terminal sur',
     'Settings → System → Display → Graphics': 'Paramètres → Système → Affichage → Graphiques',
     'Setup complete. Launching FreeFlix…': 'Installation terminée. Lancement de FreeFlix…',
+    'This entry cannot be resumed automatically.':
+        'Cette entrée ne peut pas être reprise automatiquement.',
+    'Some mpv files could not be downloaded. Setup will retry on the next launch (network or GitHub may be blocked right now).':
+        "Certains fichiers mpv n'ont pas pu être téléchargés. L'installation réessaiera au prochain lancement (réseau ou GitHub bloqué pour le moment).",
     'Skipped': 'Ignoré(s)',
     'Starting download (sequential pieces for early playback)...': 'Démarrage du téléchargement (morceaux séquentiels pour lecture anticipée)…',
     'Starting playback:': 'Démarrage de la lecture :',

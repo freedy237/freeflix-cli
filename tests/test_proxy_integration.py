@@ -94,7 +94,7 @@ def _get(url):
 def test_hls_manifest_rewrite_and_segment(upstream, running_proxy):
     import urllib.parse as up
     master = f"{upstream}/master.m3u8"
-    murl = f"{running_proxy}/stream?url={up.quote(master)}&headers=%7B%7D"
+    murl = f"{running_proxy}/stream?url={up.quote(master)}&headers=%7B%7D&k={proxy.PROXY_TOKEN}"
     status, body = _get(murl)
     text = body.decode()
     assert status == 200
@@ -108,7 +108,7 @@ def test_hls_manifest_rewrite_and_segment(upstream, running_proxy):
 
 def test_mp4_range(upstream, running_proxy):
     import urllib.parse as up
-    vurl = f"{running_proxy}/video?url={up.quote(upstream + '/movie.mp4')}&headers=%7B%7D"
+    vurl = f"{running_proxy}/video?url={up.quote(upstream + '/movie.mp4')}&headers=%7B%7D&k={proxy.PROXY_TOKEN}"
     req = urllib.request.Request(vurl, headers={"Range": "bytes=1000-"})
     with urllib.request.urlopen(req, timeout=10) as r:
         data = r.read()
@@ -118,7 +118,7 @@ def test_mp4_range(upstream, running_proxy):
 def test_stream_direct_mp4_falls_back_to_video(upstream, running_proxy):
     """A .mp4 opened through /stream must be served raw, not as a playlist."""
     import urllib.parse as up
-    url = f"{running_proxy}/stream?url={up.quote(upstream + '/movie.mp4')}&headers=%7B%7D"
+    url = f"{running_proxy}/stream?url={up.quote(upstream + '/movie.mp4')}&headers=%7B%7D&k={proxy.PROXY_TOKEN}"
     st, body = _get(url)
     assert st == 200
     assert body == MP4
@@ -127,7 +127,7 @@ def test_stream_direct_mp4_falls_back_to_video(upstream, running_proxy):
 def test_stream_extensionless_direct_media_falls_back(upstream, running_proxy):
     """Content sniffing protects mislabelled/extensionless direct media too."""
     import urllib.parse as up
-    url = f"{running_proxy}/stream?url={up.quote(upstream + '/movie.bin')}&headers=%7B%7D"
+    url = f"{running_proxy}/stream?url={up.quote(upstream + '/movie.bin')}&headers=%7B%7D&k={proxy.PROXY_TOKEN}"
     st, body = _get(url)
     assert st == 200
     assert body == MP4
@@ -198,7 +198,7 @@ def test_video_stream_resumes_after_midstream_drop(running_proxy):
         import urllib.parse as up
         url = (f"{running_proxy}/video?url="
                f"{up.quote(f'http://127.0.0.1:{srv.server_address[1]}/movie.mp4')}"
-               f"&headers=%7B%7D")
+               f"&headers=%7B%7D&k={proxy.PROXY_TOKEN}")
         with urllib.request.urlopen(url, timeout=15) as r:
             got = r.read()
     finally:
@@ -241,7 +241,7 @@ def test_truncated_segment_is_not_served_as_complete(running_proxy):
         import urllib.parse as up
         url = (f"{running_proxy}/ts?url="
                f"{up.quote(f'http://127.0.0.1:{srv.server_address[1]}/seg.ts')}"
-               f"&headers=%7B%7D")
+               f"&headers=%7B%7D&k={proxy.PROXY_TOKEN}")
         with pytest.raises((http.client.IncompleteRead, ConnectionError,
                             urllib.error.URLError)):
             with urllib.request.urlopen(url, timeout=15) as r:
@@ -249,3 +249,11 @@ def test_truncated_segment_is_not_served_as_complete(running_proxy):
     finally:
         srv.shutdown()
     assert _AlwaysTruncated.calls >= 2  # tried to resume from the offset
+
+
+def test_proxy_rejects_missing_capability_token(running_proxy, upstream):
+    """A local process without the token must not use the proxy as a relay."""
+    url = f"{running_proxy}/video?url={upstream}/movie.mp4&headers=%7B%7D"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(url, timeout=5)
+    assert exc.value.code == 403

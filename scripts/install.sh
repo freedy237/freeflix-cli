@@ -35,35 +35,40 @@ SYSTEM_PKGS_OPENSUSE="mpv vlc yt-dlp ffmpeg aria2 libnotify-tools chafa python3 
 SYSTEM_PKGS_ALPINE="mpv vlc yt-dlp ffmpeg aria2 libnotify chafa python3 py3-pip curl"
 
 install_system_pkgs() {
+    local pkgs=()
     case "$DISTRO" in
-        fedora|rhel|centos|rocky|alma)
-            log "Installing via dnf (sudo password may be required)…"
-            sudo dnf install -y $SYSTEM_PKGS_FEDORA
-            ;;
-        debian|ubuntu|linuxmint|pop)
-            log "Installing via apt (sudo password may be required)…"
-            sudo apt-get update
-            sudo apt-get install -y $SYSTEM_PKGS_DEBIAN
-            ;;
-        arch|manjaro|endeavouros)
-            log "Installing via pacman (sudo password may be required)…"
-            sudo pacman -S --needed --noconfirm $SYSTEM_PKGS_ARCH
-            ;;
-        opensuse*|suse|sles)
-            log "Installing via zypper (sudo password may be required)…"
-            sudo zypper install -y $SYSTEM_PKGS_OPENSUSE
-            ;;
-        alpine)
-            log "Installing via apk (sudo password may be required)…"
-            sudo apk add $SYSTEM_PKGS_ALPINE
-            ;;
+        fedora|rhel|centos|rocky|alma) pkgs=($SYSTEM_PKGS_FEDORA) ;;
+        debian|ubuntu|linuxmint|pop)   pkgs=($SYSTEM_PKGS_DEBIAN) ;;
+        arch|manjaro|endeavouros)      pkgs=($SYSTEM_PKGS_ARCH) ;;
+        opensuse*|suse|sles)           pkgs=($SYSTEM_PKGS_OPENSUSE) ;;
+        alpine)                        pkgs=($SYSTEM_PKGS_ALPINE) ;;
         *)
             err "Unsupported distro : ${DISTRO}"
             err "Install these packages manually : mpv yt-dlp ffmpeg aria2 libnotify python3 pip"
-            exit 1
+            return 1
             ;;
     esac
-    ok "System packages installed"
+
+    # One package at a time: vlc (or any optional package) being unavailable
+    # in the enabled repos must not abort the whole install (Fedora without
+    # RPM Fusion, Alpine has no vlc, …).
+    local failed=()
+    for p in "${pkgs[@]}"; do
+        log "Installing ${p} …"
+        case "$DISTRO" in
+            fedora|rhel|centos|rocky|alma) sudo dnf install -y "$p" || failed+=("$p") ;;
+            debian|ubuntu|linuxmint|pop)   sudo apt-get install -y "$p" || failed+=("$p") ;;
+            arch|manjaro|endeavouros)      sudo pacman -S --needed --noconfirm "$p" || failed+=("$p") ;;
+            opensuse*|suse|sles)           sudo zypper install -y "$p" || failed+=("$p") ;;
+            alpine)                        sudo apk add "$p" || failed+=("$p") ;;
+        esac
+    done
+    if ((${#failed[@]})); then
+        warn "Optional packages not installed: ${failed[*]}"
+        warn "FreeFlix can still run; install them later if a feature needs them."
+    else
+        ok "System packages installed"
+    fi
 }
 
 # ─── 3. Install freeflix-cli ─────────────────────────────────────────
@@ -126,6 +131,9 @@ install_mpv_config() {
     log "Downloading Anime4K shaders…"
     BASE="https://raw.githubusercontent.com/bloc97/Anime4K/master/glsl"
     curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Clamp_Highlights.glsl"  "$BASE/Restore/Anime4K_Clamp_Highlights.glsl"
+    # mpv.conf loads the S variant by default; CTRL+1 switches to VL.
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Restore_CNN_S.glsl"     "$BASE/Restore/Anime4K_Restore_CNN_S.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Upscale_CNN_x2_S.glsl"  "$BASE/Upscale/Anime4K_Upscale_CNN_x2_S.glsl"
     curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Restore_CNN_VL.glsl"    "$BASE/Restore/Anime4K_Restore_CNN_VL.glsl"
     curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Upscale_CNN_x2_VL.glsl" "$BASE/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl"
 

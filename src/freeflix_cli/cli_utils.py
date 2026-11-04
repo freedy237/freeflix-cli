@@ -9,7 +9,6 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.live import Live
 from rich.cells import cell_len
-from rich.table import Table
 from .themes import color
 from .icons import iconify, icon
 
@@ -202,7 +201,9 @@ def _input_fullscreen(prompt: str, default: str, header: str,
             add(buttons, ("buttons", buttons.plain))
         return Group(*body)
 
-    with mouse_tracking():
+    # Click-only: a text field needs the OK/Cancel buttons, not a motion
+    # flood that can split SGR reports into the typed text.
+    with mouse_tracking(all_motion=False):
         with Live(render(), console=console, refresh_per_second=20,
                   screen=True) as live:
             while result["val"] is None:
@@ -474,6 +475,8 @@ def flush_input_settled(settle: float = 0.03):
 _MOUSE_RE_S = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _MOUSE_RE_B = re.compile(rb"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 _MOUSE_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h"
+# Click-only tracking: no motion flood while a text field is focused.
+_MOUSE_CLICK_ON = "\x1b[?1000h\x1b[?1006h"
 _MOUSE_OFF = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
 _mouse_active = False
 _raw_mode_active = False
@@ -540,6 +543,20 @@ def _mouse_from_match(m) -> MouseEvent:
     return MouseEvent(int(x), int(y), int(raw), final == "M")
 
 
+def _parse_mouse_chunk(seq: bytes):
+    """Return (event, leftover) for the newest complete SGR report in *seq*.
+
+    ``leftover`` is the start of the NEXT report when the read chunk ended in
+    the middle of it; the caller stashes it instead of letting its tail be
+    typed as filter text.
+    """
+    hits = list(_MOUSE_RE_B.finditer(seq))
+    if not hits:
+        return None, b""
+    last = hits[-1]
+    return _mouse_from_match(last), seq[last.end():]
+
+
 def _mouse_available() -> bool:
     """True when this process can both send mouse modes and read reports."""
     import sys
@@ -583,7 +600,9 @@ def _enable_windows_vt() -> bool:
 
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         STD_OUTPUT_HANDLE = -11
+        STD_INPUT_HANDLE = -10
         ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
 
         h = k32.GetStdHandle(STD_OUTPUT_HANDLE)
         if not h or h == wintypes.HANDLE(-1).value:
@@ -596,6 +615,22 @@ def _enable_windows_vt() -> bool:
                 h, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
             ):
                 return _VT_READY
+
+        # Windows also needs VT *input* on stdin, otherwise the SGR mouse
+        # reports we request (?1000h) never reach msvcrt.getwch(): no hover,
+        # no click, and the native text selection is lost for nothing.
+        hi = k32.GetStdHandle(STD_INPUT_HANDLE)
+        if not hi or hi == wintypes.HANDLE(-1).value:
+            return _VT_READY
+        imode = wintypes.DWORD()
+        if not k32.GetConsoleMode(hi, ctypes.byref(imode)):
+            return _VT_READY
+        if not (imode.value & ENABLE_VIRTUAL_TERMINAL_INPUT):
+            if not k32.SetConsoleMode(
+                hi, imode.value | ENABLE_VIRTUAL_TERMINAL_INPUT
+            ):
+                return _VT_READY
+
         _VT_READY = True
     except Exception:
         _VT_READY = False
@@ -619,8 +654,24 @@ def _mouse_off() -> None:
     _mouse_write(_MOUSE_OFF)
 
 
+def _mouse_set(enabled: bool) -> None:
+    """Toggle mouse reporting inside an active mouse_tracking() screen.
+
+    Used by the type-to-filter mode: while a query is being typed, motion
+    reports are pure noise (a split report used to end up in the filter).
+    Filtering is keyboard-only; clicks/scroll come back on exit.
+    """
+    global _mouse_active
+    if enabled:
+        if not _mouse_active and _mouse_available():
+            _mouse_write(_MOUSE_ON)
+            _mouse_active = True
+    else:
+        _mouse_off()
+
+
 @contextmanager
-def mouse_tracking():
+def mouse_tracking(all_motion: bool = True):
     """Enable SGR mouse reporting for the duration of an interactive screen.
 
     The terminal is also put in cbreak/no-echo mode for the WHOLE screen.
@@ -653,7 +704,7 @@ def mouse_tracking():
             fd = None
             old_term = None
             _raw_mode_active = False
-        _mouse_write(_MOUSE_ON)
+        _mouse_write(_MOUSE_ON if all_motion else _MOUSE_CLICK_ON)
         _mouse_active = True
         active = True
     try:
@@ -876,12 +927,18 @@ def _crumb_line(max_w: int) -> Text:
     levels stay visible. The chevrons are drawn in the accent colour and the
     last segment is bold-accent, so "where you are" pops out of the trail."""
     txt = crumbs_text()
-    if cell_len(txt) > max_w - 4:
-        while _crumbs and cell_len("… › " + txt) > max_w - 4:
-            txt = txt.split(" › ", 1)[-1] if " › " in txt else txt[-(max_w - 8):]
-            if " › " not in txt and cell_len("… › " + txt) <= max_w - 4:
-                break
-        txt = "… › " + txt
+    budget = max(1, max_w - 4)
+    if cell_len(txt) > budget:
+        # Drop leading levels one at a time; hard-stop on a single label so a
+        # tiny terminal (max_w <= 8) cannot loop forever (the old fallback
+        # `txt[-(max_w-8):]` became `txt[2:]` and never shrank).
+        while " › " in txt and cell_len("… › " + txt) > budget:
+            txt = txt.split(" › ", 1)[-1]
+        prefix = "… › "
+        room = max(1, budget - cell_len(prefix))
+        if cell_len(txt) > room:
+            txt = txt[-room:] if len(txt) > room else txt
+        txt = prefix + txt
     parts = txt.split(" › ")
     out = Text("  ")
     for i, part in enumerate(parts):
@@ -1016,11 +1073,30 @@ def toast(message: str, kind: str = "success", seconds: float = 1.1):
 # stash the second press here so the next _read_menu_key() call replays it
 # instead of swallowing the pair.
 _esc_carry = False
+_raw_carry = b""
 
 
 def _stash_esc_carry() -> None:
     global _esc_carry
     _esc_carry = True
+
+
+def _stash_raw_carry(data: bytes) -> None:
+    """Keep bytes that belong to the NEXT input event.
+
+    A read chunk can end in the middle of an SGR mouse report. Returning the
+    last complete event used to DROP the partial prefix, and its tail
+    ("4;10M"…) was then typed into the filter as text.
+    """
+    global _raw_carry
+    if data:
+        _raw_carry = (_raw_carry + data)[-8192:]
+
+
+def _take_raw_carry() -> bytes:
+    global _raw_carry
+    data, _raw_carry = _raw_carry, b""
+    return data
 
 
 def _take_esc_carry() -> bool:
@@ -1031,7 +1107,7 @@ def _take_esc_carry() -> bool:
     return False
 
 
-def _read_menu_key_raw():
+def _read_menu_key_raw(timeout: float = None):
     """
     Read one keypress for the arrow menus, returning readchar key constants.
 
@@ -1167,7 +1243,48 @@ def _read_menu_key_raw():
         if not outer_raw:
             old = termios.tcgetattr(fd)
             tty.setcbreak(fd)
-        ch = os.read(fd, 1)
+        pending = _take_raw_carry()
+        prefetched = b""
+        if pending:
+            if pending.startswith(b"\x1b[<"):
+                seq = pending
+                # A split report can be delayed when the UI is busy (chafa
+                # render, network); wait long enough to finish it instead of
+                # dropping the prefix and typing its tail.
+                end = time.monotonic() + 0.6
+                while _MOUSE_RE_B.search(seq) is None and time.monotonic() < end:
+                    r, _, _ = _sel.select([fd], [], [], 0.02)
+                    if r:
+                        chunk = os.read(fd, 64)
+                        if not chunk:
+                            break
+                        seq += chunk
+                event, tail = _parse_mouse_chunk(seq)
+                if event is not None:
+                    if tail:
+                        _stash_raw_carry(tail)
+                    return event
+                # Still incomplete after 600 ms: drop it rather than typing
+                # the fragment into a text field.
+            else:
+                # Typed text that followed a mouse report in the same read.
+                prefetched = pending
+        if prefetched:
+            ch = prefetched[:1]
+            rest = prefetched[1:]
+            if rest:
+                _stash_raw_carry(rest)
+        else:
+            if timeout is not None:
+                ready, _, _ = _sel.select([fd], [], [], max(0.0, timeout))
+                if not ready:
+                    return None
+            ch = os.read(fd, 1)
+        if not ch:
+            # stdin closed (terminal gone, piped input exhausted): behave like
+            # Esc so each menu unwinds instead of spinning at 100 % CPU on
+            # an empty read that no branch handles.
+            return readchar.key.ESC
         if ch == b"\x1b":
             # Drain the WHOLE escape sequence (arrows, but also focus events
             # \x1b[I / \x1b[O and mouse reports) before deciding. Only a truly
@@ -1186,7 +1303,10 @@ def _read_menu_key_raw():
                 r, _, _ = _sel.select([fd], [], [], 0.008)
                 if r:
                     idle = 0
-                    seq += os.read(fd, 64)
+                    chunk = os.read(fd, 64)
+                    if not chunk:
+                        return readchar.key.ESC  # EOF while draining
+                    seq += chunk
                     if seq.startswith(_PASTE_START):
                         _text, _rest = _split_paste(seq)
                         if _text is not None:
@@ -1207,12 +1327,17 @@ def _read_menu_key_raw():
                         else:
                             continue  # partial reply — keep waiting
                     if seq.startswith(b"\x1b[<"):
-                        hits = list(_MOUSE_RE_B.finditer(seq))
-                        if hits:
+                        event, tail = _parse_mouse_chunk(seq)
+                        if event is not None:
                             # Use the newest report in the read chunk: the
                             # cursor follows the physical pointer immediately
                             # instead of replaying a queue of stale motion.
-                            return _mouse_from_match(hits[-1])
+                            if tail:
+                                # The chunk may end mid-report: keep the bytes
+                                # of the next event instead of leaking them as
+                                # printable filter text.
+                                _stash_raw_carry(tail)
+                            return event
                         if len(seq) > 64:
                             return ""
                         continue  # partial SGR mouse report
@@ -1263,11 +1388,17 @@ def _read_menu_key_raw():
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def _read_menu_key():
-    """Single entry point for menu key reads (carry replay + raw decode)."""
+def _read_menu_key(timeout: float = None):
+    """Single entry point for menu key reads (carry replay + raw decode).
+
+    ``timeout`` lets non-blocking widgets (the preview picker) poll for a key
+    and still use the ONE shared decoder: paste blobs, OSC replies, focus
+    events and split mouse reports are handled identically everywhere.
+    Returns None when the timeout expires.
+    """
     if _take_esc_carry():
         return readchar.key.ESC
-    return _read_menu_key_raw()
+    return _read_menu_key_raw(timeout=timeout)
 
 
 # Language / quality badges + status glyphs get their own colours in every
@@ -1642,6 +1773,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 # Mouse: hover moves the cursor, wheel scrolls, right-click
                 # goes back, left-click activates the row under the pointer.
                 if isinstance(key, MouseEvent):
+                    if flt["on"]:
+                        continue  # filtering is keyboard-only (see _mouse_set)
                     if key.motion:
                         rel = key.y - mouse_top[0]
                         tag = (mouse_rows[rel]
@@ -1658,6 +1791,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                             flt["on"] = False
                             flt["q"] = ""
                             selected_index = 0
+                            _mouse_set(True)
                         elif esc_selects_last:
                             result = len(options) - 1
                     elif key.is_left:
@@ -1687,10 +1821,13 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                                 flt["on"] = True
                                 flt["q"] = ""
                                 selected_index = 0
+                                _mouse_set(False)
+                                flush_input_settled(0.02)
                             elif act == "clear":
                                 flt["on"] = False
                                 flt["q"] = ""
                                 selected_index = 0
+                                _mouse_set(True)
                             elif act == "select":
                                 if view:
                                     result = view[selected_index]
@@ -1706,6 +1843,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                         flt["on"] = False
                         flt["q"] = ""
                         selected_index = 0
+                        _mouse_set(True)
                     elif key == readchar.key.ENTER:
                         if view:
                             result = view[selected_index]
@@ -1731,6 +1869,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                     flt["on"] = True
                     flt["q"] = ""
                     selected_index = 0
+                    _mouse_set(False)
+                    flush_input_settled(0.02)
                 elif key == readchar.key.UP:
                     selected_index = (selected_index - 1) % n
                 elif key == readchar.key.DOWN:
@@ -1945,794 +2085,18 @@ def make_preview(cover="", title="", lines=None, panel_title=""):
     }
 
 
-def select_with_preview(labels, prompt, previews, default_index=0):
+def __getattr__(name):
+    """Lazy re-export of the preview widget (moved to preview_picker.py).
+
+    Keeps ``cli_utils.select_with_preview`` and every existing
+    ``from .cli_utils import select_with_preview`` working without importing
+    the 800-line widget (and its render pool) at startup.
     """
-    Interactive list with a LIVE preview pane on the right (poster + info).
-    Pure rich + chafa, 100% terminal. Optimised for fluidity :
-      * posters render in BACKGROUND threads (cached) — navigation never
-        blocks ; a ⏳ placeholder shows until a poster is ready ;
-      * a non-blocking refresh loop (Unix raw mode) keeps it real-time :
-        terminal resize reflows instantly and posters appear as they finish.
-    Keys : ↑/↓ navigate · type to filter · Backspace · Enter select · Esc back.
-    Returns the selected index into `labels`, or len(labels) for Back.
-    """
-    from . import terminal_image
-    from .i18n import t as _t
-    from concurrent.futures import ThreadPoolExecutor
-    from rich.align import Align
-    from rich.spinner import Spinner
-    import time as _time
+    if name == "select_with_preview":
+        from .preview_picker import select_with_preview
 
-    n = len(labels)
-    if n == 0:
-        return 0
-    # Full-screen preview needs a real terminal. Otherwise fall back to the
-    # plain list — guarantees no ghost boxes / artifacts on dumb terminals.
-    if not console.is_terminal:
-        return select_from_list(labels, prompt)
-
-    selected = max(0, min(default_index, n - 1))
-    start = 0
-    query = ""
-    visible = list(range(n))
-    back_sel = [False]   # keyboard/mouse cursor on the clickable Back row
-    mouse_rows = []      # left-column row tags, refreshed by render()
-    mouse_grid = {"left_w": 0, "grid_h": 0}
-
-    # TWO pools, because the work has opposite needs :
-    #  * downloads are I/O-bound and release the GIL → high concurrency is a
-    #    free win (covers land on disk fast) ;
-    #  * chafa + Text.from_ansi is CPU-bound and HOLDS the GIL → too many at
-    #    once starve the UI thread and make navigation feel frozen.
-    # So we download wide (6) and render narrow (2). Downloads are deduped per
-    # URL ; renders per (url, cols, rows).
-    # chafa runs as a SEPARATE process (subprocess releases the GIL while it
-    # works), so more render workers just means posters appear sooner — the old
-    # 2-worker cap was over-cautious. Downloads stay wide-open.
-    dl_pool = ThreadPoolExecutor(max_workers=6)
-    # 2 render workers : 4 concurrent max-quality chafa processes thrashed
-    # the CPU during big searches and starved the input loop (arrow keys felt
-    # stuck). Previews are small — 2 workers keep up without jank.
-    rndr_pool = ThreadPoolExecutor(max_workers=2)
-    # key -> last submit time. Time-based (not a plain set) so a render/download
-    # that FAILED (transient host throttle) is retried after a short cooldown
-    # instead of being blocked forever ("sometimes the poster never shows").
-    submitted = {}
-    dl_submitted = {}
-    _RETRY_AFTER = 6.0
-
-    def _submit(cover, cols, rows):
-        import time as _time
-        now = _time.time()
-        key = (cover, cols, rows)
-        if not cover:
-            return
-        # Already rendered successfully? never re-submit.
-        if terminal_image.get_cached_text(cover, cols, rows) is not None:
-            return
-        if now - submitted.get(key, 0) < _RETRY_AFTER:
-            return
-        submitted[key] = now
-        # Warm the download cache wide-open so the render workers almost always
-        # find the image already on disk (render then skips the slow download).
-        if now - dl_submitted.get(cover, 0) >= _RETRY_AFTER:
-            dl_submitted[cover] = now
-            dl_pool.submit(terminal_image.prefetch, cover)
-        rndr_pool.submit(terminal_image.render_to_text, cover, cols, rows)
-
-    def _prefetch_cover(cover):
-        """Download `cover` in the background so the SHARP sixel overlay can be
-        painted straight to the terminal once the image is on disk (the paint
-        itself runs chafa positioned — no capture — for native resolution)."""
-        import time as _time
-        now = _time.time()
-        if not cover or terminal_image.get_download_path(cover) is not None:
-            return
-        if now - dl_submitted.get(cover, 0) < _RETRY_AFTER:
-            return
-        dl_submitted[cover] = now
-        dl_pool.submit(terminal_image.prefetch, cover)
-
-    def _poster_text(cover, cols, rows):
-        """Cached poster Text if ready, else None (queueing a render). Never
-        blocks — the actual chafa work happens in the background pool."""
-        if not cover or not terminal_image.chafa_available():
-            return None
-        cached = terminal_image.get_cached_text(cover, cols, rows)
-        if cached is not None:
-            return cached
-        _submit(cover, cols, rows)
-        return None
-
-    def _poster_block(cover, p_cols, p_rows):
-        """Preview poster, horizontally centered. Shows the rendered cover once
-        ready, an animated spinner while it loads, or a placeholder glyph if no
-        cover exists. The panel has a FIXED height + vertical centering, so the
-        box never jumps whatever the poster's real height turns out to be."""
-        txt = _poster_text(cover, p_cols, p_rows)
-        if txt is not None:
-            txt.no_wrap = True       # crop, never wrap → can't spill the frame
-            txt.overflow = "crop"
-            return Align.center(txt)
-        if cover and terminal_image.chafa_available():
-            return Align.center(Spinner("dots", style=color("accent")))
-        return Align.center(Text(icon("poster"), style=color("dim")))
-
-    def _dims():
-        """Layout dimensions that ALWAYS fit the current terminal.
-
-        The two columns (list + preview) are derived from the available width
-        so their sum + padding never exceeds the screen. Hard minimums used to
-        sum wider than narrow terminals, which pushed the preview panel off
-        screen and made the poster overflow its frame mid-resize."""
-        w = console.size.width
-        h = max(8, console.size.height - 1)
-        pad = 3  # grid inter-column padding + a small safety margin
-        avail = max(12, w - pad)
-        left_w = max(12, min(46, int(avail * 0.45)))
-        right_w = max(8, avail - left_w)
-        p_cols = max(6, right_w - 2)   # inside the panel borders
-        p_rows = max(6, h - 8)
-        return h, left_w, right_w, p_cols, p_rows
-
-    # Remember the poster size we last warmed ALL covers at, so a terminal
-    # resize re-renders every result's poster in the background (not just the
-    # one currently on screen) — navigating after a resize hits the cache.
-    warmed_size = [None]
-    # Debounce that full re-warm during a resize DRAG : the visible poster keeps
-    # tracking the new size every frame, but we only re-render ALL covers once
-    # the size has settled (~180 ms), so a fast drag doesn't queue hundreds of
-    # immediately-stale renders and choke the pool.
-    pending_size = [None]
-    pending_at = [0.0]
-
-    def _prewarm(p_cols=None, p_rows=None):
-        """Warm the posters around the cursor, not the whole result list.
-
-        Rendering 50+ covers through chafa in the background (even with only
-        2 workers) competed with the input loop and made the first seconds of
-        a long list sluggish. We now DOWNLOAD every cover (cheap, I/O-bound)
-        but RENDER only the selected one ±7; a distant row is rendered on
-        demand when the cursor reaches it.
-        """
-        if not terminal_image.chafa_available():
-            return
-        if p_cols is None or p_rows is None:
-            _, _, _, p_cols, p_rows = _dims()
-        warmed_size[0] = (p_cols, p_rows)
-        # Prioritise what the user is actually looking at: render the visible
-        # poster and its closest neighbours first; only download the rest.
-        cur = visible[selected] if visible else 0
-        order = sorted(range(len(previews)), key=lambda i: abs(i - cur))
-        for rank, i in enumerate(order):
-            cover = previews[i].get("cover", "")
-            if rank < 8:
-                _submit(cover, p_cols, p_rows)
-            else:
-                _prefetch_cover(cover)
-
-    def _apply_filter():
-        nonlocal visible, selected, start
-        q = query.lower()
-        visible = [i for i in range(n) if q in labels[i].lower()] if q else list(range(n))
-        selected = 0
-        start = 0
-
-    def _list_lines(vis, sel, s, end, lw, on_back=False):
-        """Build the left column and its mouse row map (top row = 1)."""
-        head = f"/{query}" if query else iconify(prompt)
-        # Counter + viewport bar so long lists show where you are.
-        counter = Text.assemble(
-            Text(f"  [{sel + 1}/{len(vis)}] " if vis else "", style=color("dim")),
-            _scrollbar(sel, len(vis)) if vis else Text(""),
-        )
-        lines = []
-        tags = []
-
-        def add(line, tag=None, height=1):
-            lines.append(line)
-            tags.extend([tag] + [None] * (height - 1))
-
-        # The head Text starts with a newline → exactly two rows. Every item
-        # is pre-fitted to the column width by _fit_w, so one row each. This
-        # avoids calling Rich's renderer for every hover repaint (the old
-        # per-line measurement was the main source of mouse lag).
-        add(Text(f"\n  {head}", style=f"bold {color('text')}"), height=2)
-        add(counter, ("scroll", counter.plain))
-        if s > 0:
-            add(Text("  ↑ …", style=color("dim")), ("page", "up"))
-        for pos in range(s, end):
-            i = vis[pos]
-            lab = _fit_w(iconify(labels[i]), lw - 5)
-            if pos == sel:
-                srow = Text("  ▌ ", style=f"bold {color('accent')}")
-                srow.append_text(_styled_option(lab, base=f"bold {color('text')}"))
-                add(srow, ("item", pos))
-            else:
-                urow = Text("    ")
-                urow.append_text(_styled_option(lab, base=color("text")))
-                add(urow, ("item", pos))
-        if end < len(vis):
-            add(Text("  ↓ …", style=color("dim")), ("page", "down"))
-        if not vis:
-            add(Text(f"    ({_t('no match')})", style=color("dim")))
-        # Always-visible mouse target: clicking it is exactly Esc/Back.
-        back = Text("  ")
-        if on_back:
-            back.append("▌ ", style=f"bold {color('accent')}")
-            back.append(f"{icon('back')} {_t('Back')}",
-                        style=f"bold {color('text')}")
-        else:
-            back.append(icon("back"), style=color("muted"))
-            back.append(f" {_t('Back')}", style=color("muted"))
-        add(back, ("back",))
-        return lines, tags
-
-    # ── Live SIXEL overlay (photo-sharp preview) ─────────────────────────
-    # When the terminal has sixel actually ON, the right-column poster is drawn
-    # as REAL PIXELS painted over a reserved blank region after each Live frame
-    # (see _paint_sixel), instead of Unicode blocks. Offsets are tunable so the
-    # image can be nudged into the panel precisely (calibration).
-    # Calibratable at runtime (no rebuild): nudge the poster into the panel with
-    #   FREEFLIX_SIXEL_ROW=<n>  FREEFLIX_SIXEL_COL_PAD=<n>
-    def _envint(name, default):
-        try:
-            return int(os.environ.get(name, default))
-        except (TypeError, ValueError):
-            return default
-    _OV_ROW = _envint("FREEFLIX_SIXEL_ROW", 2)       # 1-based row of poster top
-    _OV_COL_PAD = _envint("FREEFLIX_SIXEL_COL_PAD", 3)  # cols after the list → left edge
-    overlay = [False]
-    ov_region = {}
-    painted = [None]   # last (cover, cols, rows) actually painted as sixel
-
-    def render():
-        nonlocal start
-        h, left_w, right_w, p_cols, p_rows = _dims()
-        # Reserve the last visible row for the clickable Back target.
-        win = max(3, h - 5)
-        vis = visible
-        sel = selected if vis else -1
-        s = start
-        if sel < s:
-            s = sel
-        elif sel >= s + win:
-            s = sel - win + 1
-        s = max(0, min(s, max(0, len(vis) - win)))
-        start = s
-        end = min(len(vis), s + win)
-
-        # Too narrow for a side-by-side preview → gracefully collapse to a
-        # full-width list (no panel) instead of cramming/overflowing.
-        show_preview = console.size.width >= 34 and right_w >= 14
-        lw = left_w if show_preview else max(10, console.size.width - 2)
-        left_lines, left_tags = _list_lines(vis, sel, s, end, lw,
-                                             on_back=back_sel[0])
-        left = Group(*left_lines)
-
-        hint = Text(_t("↑/↓ navigate · type to filter · Enter · Esc"),
-                    style=color("dim"), justify="center")
-        # The hint itself is clickable (Enter = open, Esc = back).
-        grid_h = max(len(left_tags), (win + 2) if show_preview else 0)
-        mouse_rows[:] = left_tags + [None] * (grid_h - len(left_tags))
-        mouse_rows.append(("hint", hint.plain))
-        mouse_grid.update(left_w=left_w, grid_h=grid_h)
-
-        if not show_preview:
-            return Group(left, hint)
-
-        # Resize handling : the visible poster tracks the new size immediately
-        # (via _poster_block below), while the full background re-warm of every
-        # cover is debounced until the size settles.
-        if warmed_size[0] != (p_cols, p_rows):
-            now = _time.monotonic()
-            if pending_size[0] != (p_cols, p_rows):
-                pending_size[0] = (p_cols, p_rows)
-                pending_at[0] = now
-            elif now - pending_at[0] >= 0.18:
-                _prewarm(p_cols, p_rows)
-
-        pv = previews[vis[sel]] if vis else {}
-        cover = pv.get("cover", "")
-
-        if overlay[0]:
-            # Reserve a blank block the poster's height; the sixel is painted
-            # OVER it after the frame. Record where to paint (top-left cell).
-            _prefetch_cover(cover)
-            ov_region.clear()
-            ov_region.update({
-                "cover": cover, "cols": p_cols, "rows": p_rows,
-                "row": _OV_ROW, "col": left_w + _OV_COL_PAD,
-            })
-            ready = terminal_image.get_download_path(cover) is not None
-            if cover and not ready:
-                poster_widget = Align.center(Spinner("dots", style=color("accent")))
-                # pad below the spinner so the title sits where the poster ends
-                body = [poster_widget, Text("\n" * max(0, p_rows - 1))]
-            else:
-                body = [Text("\n" * max(0, p_rows - 1))]  # blank canvas for pixels
-        else:
-            body = [_poster_block(cover, p_cols, p_rows)]
-
-        if pv.get("title"):
-            body.append(Text(f"\n{pv['title']}", style=f"bold {color('text')}",
-                             justify="center"))
-        for ln in pv.get("lines", []):
-            if ln:
-                body.append(Text(ln, style=color("muted"), justify="center"))
-
-        # Overlay keeps the poster at the TOP (deterministic row) ; blocks stay
-        # vertically centered as before.
-        right = Panel(
-            Align.center(Group(*body), vertical="top" if overlay[0] else "middle"),
-            border_style=color("border"),
-            title=pv.get("panel_title", ""),
-            height=win + 2,
-            padding=(0, 1),
-            expand=True,
-        )
-
-        grid = Table.grid(padding=(0, 1), expand=True)
-        grid.add_column(width=left_w)
-        grid.add_column(ratio=1)
-        grid.add_row(left, right)
-        return Group(grid, hint)
-
-    def _scroll_jump(x, plain):
-        """Click/drag the ▰▱ track: jump to that position in the list."""
-        i = plain.find("▰")
-        if i < 0:
-            i = plain.find("▱")
-        if i < 0:
-            return None
-        bar = plain[i:i + 5]
-        if not (i <= (x - 1) < i + len(bar)):
-            return None
-        if not visible:
-            return None
-        frac = (x - 1 - i) / max(1, len(bar) - 1)
-        return min(len(visible) - 1, max(0, round(frac * (len(visible) - 1))))
-
-    def _hint_action(x, plain):
-        for token, action in ((_t("Enter"), "select"), (_t("Esc"), "back")):
-            i = plain.find(token)
-            if i >= 0 and i - 2 <= (x - 1) < i + len(token):
-                return action
-        return None
-
-    def _handle(key):
-        nonlocal selected, query
-        if isinstance(key, MouseEvent):
-            if key.motion:
-                rel = key.y - 1
-                tag = (mouse_rows[rel]
-                       if 0 <= rel < len(mouse_rows) else None)
-                if tag and tag[0] == "scroll" and key.button == 0:
-                    pos = _scroll_jump(key.x, tag[1])
-                    if pos is not None and pos != selected:
-                        selected = pos
-                        back_sel[0] = False
-                        return ("hover", None)
-                if tag and tag[0] == "item" and visible:
-                    if tag[1] != selected or back_sel[0]:
-                        selected = tag[1]
-                        back_sel[0] = False
-                        return ("hover", None)
-                    return None
-                if tag and tag[0] == "back":
-                    if not back_sel[0]:
-                        back_sel[0] = True
-                        return ("hover", None)
-                    return None
-                return None
-            if key.wheel and visible:
-                step = -1 if key.wheel == "up" else 1
-                selected = (selected + step) % len(visible)
-            elif key.is_right:
-                return ("back", None)
-            elif key.is_left:
-                rel = key.y - 1
-                tag = (mouse_rows[rel]
-                       if 0 <= rel < len(mouse_rows) else None)
-                if tag and tag[0] == "item" and visible:
-                    return ("select", visible[tag[1]])
-                if tag and tag[0] == "back":
-                    return ("back", None)
-                if tag and tag[0] == "scroll":
-                    pos = _scroll_jump(key.x, tag[1])
-                    if pos is not None and visible:
-                        selected = pos
-                        return ("hover", None)
-                if tag and tag[0] == "page" and visible:
-                    step = max(1, console.size.height - 8)
-                    if tag[1] == "up":
-                        selected = max(0, selected - step)
-                    else:
-                        selected = min(len(visible) - 1, selected + step)
-                    back_sel[0] = False
-                    return ("hover", None)
-                if tag and tag[0] == "hint":
-                    act = _hint_action(key.x, tag[1])
-                    if act == "select" and visible:
-                        return ("select", visible[selected])
-                    if act == "back":
-                        return ("back", None)
-                # Clicking the poster/info pane opens the selected title too.
-                if (not tag and visible and key.x > mouse_grid["left_w"]
-                        and 1 <= key.y <= mouse_grid["grid_h"]):
-                    return ("select", visible[selected])
-            return None
-        if key == "UP" and visible:
-            if back_sel[0]:
-                back_sel[0] = False
-                selected = len(visible) - 1
-            else:
-                selected = (selected - 1) % len(visible)
-        elif key == "DOWN" and visible:
-            if not back_sel[0] and selected >= len(visible) - 1:
-                back_sel[0] = True
-            elif not back_sel[0]:
-                selected += 1
-        elif key == "ENTER":
-            if back_sel[0]:
-                return ("back", None)
-            if visible:
-                return ("select", visible[selected])
-        elif key == "ESC":
-            return ("back", None)
-        elif key == "BACKSPACE":
-            query = query[:-1]
-            _apply_filter()
-        elif key and len(key) == 1 and key.isprintable():
-            query += key
-            _apply_filter()
-        return None
-
-    def _finish(idx):
-        console.print(
-            f"\n[bold {color('accent')}] {iconify(prompt)}[/] "
-            f"[{color('success')}]{iconify(labels[idx])}[/]"
-        )
-        return idx
-
-    def _decode_key(data):
-        nonlocal carry
-        if not data:
-            return None
-        if data.startswith(b"\x1b[<"):
-            hits = list(_MOUSE_RE_B.finditer(data))
-            if not hits:
-                return "IGN"       # incomplete mouse report
-            ev = _mouse_from_match(hits[-1])
-            carry = data[hits[-1].end():]
-            return ev
-        if data[:1] == b"\x1b":
-            if len(data) == 1:
-                return "ESC"  # a true, standalone Escape press
-            if data[:2] == b"\x1b\x1b":
-                # Fast double-Esc in one read : replay the second press.
-                _stash_esc_carry()
-                carry = data[2:]
-                return "ESC"
-            if data[1:2] in (b"[", b"O"):
-                if len(data) < 3:
-                    return "IGN"
-                key = {b"A": "UP", b"B": "DOWN", b"C": "RIGHT",
-                       b"D": "LEFT"}.get(data[2:3], "IGN")
-                carry = data[3:]
-                return key
-            return "IGN"  # unknown escape sequence (focus event...) - ignore
-        b0 = data[:1]
-        if b0 in (b"\r", b"\n"):
-            carry = data[1:]
-            return "ENTER"
-        if b0 in (b"\x7f", b"\x08"):
-            carry = data[1:]
-            return "BACKSPACE"
-        if b0 == b"\x03":
-            carry = data[1:]
-            return "CTRLC"
-        try:
-            ch = data.decode("utf-8", "ignore")
-            if not ch:
-                return None
-            # Keep the rest of a fast multi-key read for the next iteration.
-            carry = data[len(ch[0].encode("utf-8")):]
-            return ch[0]
-        except Exception:
-            return None
-
-    def _is_loading():
-        """True while periodic repaints are still needed : a resize re-warm is
-        pending, or the poster currently on screen hasn't finished rendering
-        (its spinner must keep ticking / be swapped for the image). When this is
-        False the loop goes idle — navigation stays instant, CPU drops to ~0."""
-        if not terminal_image.chafa_available():
-            return False
-        _, _, _, pc, pr = _dims()
-        if warmed_size[0] != (pc, pr):
-            return True
-        if not visible:
-            return False
-        cover = previews[visible[selected]].get("cover", "")
-        if not cover:
-            return False
-        if overlay[0]:
-            return terminal_image.get_download_path(cover) is None
-        return terminal_image.get_cached_text(cover, pc, pr) is None
-
-    def _paint_sixel():
-        """Paint the selected cover as SHARP sixel over the reserved region
-        (called right after each Live frame). chafa writes straight to the
-        terminal at the region's cell so it renders at native resolution; cursor
-        is saved/restored. No-op until the image is downloaded. Best-effort."""
-        if not overlay[0] or not ov_region:
-            return False
-        cover = ov_region.get("cover")
-        if not cover:
-            return False
-        return terminal_image.render_sixel_positioned(
-            cover, ov_region["cols"], ov_region["rows"],
-            ov_region["row"], ov_region["col"], sys.stdout.fileno())
-
-    _prewarm()  # start downloading/rendering every poster in the background
-
-    import sys
-    import os as _os
-
-    use_raw = False
-    try:
-        import termios  # noqa: F401
-        import tty  # noqa: F401
-        import select as _sel  # noqa: F401
-        use_raw = sys.stdin.isatty()
-    except Exception:
-        use_raw = False
-
-    # Enable the photo-sharp SIXEL overlay when: we drive the raw POSIX loop
-    # (so we control exactly when frames repaint), chafa is present, posters
-    # aren't forced to blocks/off, and the terminal actually has sixel ON
-    # (confirmed via DA1 — never paints garbage on a sixel-off terminal). This
-    # is the DEFAULT for everyone (poster mode defaults to "auto"), including
-    # existing users after an update — no setting to flip.
-    try:
-        from .tracker import tracker as _tracker
-        _pmode = (_tracker.get_poster_mode() or "auto").lower()
-        overlay[0] = (
-            use_raw
-            and terminal_image.chafa_available()
-            and _pmode in ("auto", "sixel")
-            and terminal_image.detect_image_protocol() == "sixel"
-        )
-    except Exception:
-        overlay[0] = False
-
-    chosen = {"idx": None}
-
-    # Same purge as the other menus: background poster work runs while this
-    # screen opens, so any key typed during the search must not leak in.
-    flush_input_settled()
-
-    mouse_gate = mouse_tracking()
-    mouse_gate.__enter__()
-
-    try:
-        if use_raw:
-            import termios
-            import tty
-            import select as _sel
-            fd = sys.stdin.fileno()
-            old = termios.tcgetattr(fd)
-            try:
-                tty.setcbreak(fd)
-                last_size = (console.size.width, console.size.height)
-                # auto_refresh OFF : rich would otherwise re-tokenize the poster
-                # ~20x/s forever (~30% CPU) and fight the UI thread. Instead we
-                # repaint ONLY on a key, a resize, or while something is loading.
-                with Live(render(), console=console, screen=True,
-                          auto_refresh=False) as live:
-                    live.refresh()
-                    _paint_sixel()   # first paint (once the sixel is ready)
-                    import time as _ltime
-                    last_anim_tick = [0.0]
-                    carry = b""
-                    while chosen["idx"] is None:
-                        anim = _is_loading()
-                        if carry:
-                            data, carry = carry, b""
-                            r = True
-                        else:
-                            r, _, _ = _sel.select([fd], [], [], 0.06 if anim else 0.25)
-                            data = b""
-                        dirty = False
-                        if r:
-                            if not data:
-                                data = _os.read(fd, 16)
-                            # A split escape/mouse report must be completed
-                            # before decoding. Otherwise its tail becomes
-                            # printable text in the search filter.
-                            if _escape_incomplete(data):
-                                deadline = _ltime.monotonic() + 0.20
-                                while _escape_incomplete(data):
-                                    left = deadline - _ltime.monotonic()
-                                    if left <= 0:
-                                        break
-                                    r2, _, _ = _sel.select([fd], [], [], left)
-                                    if not r2:
-                                        break
-                                    data += _os.read(fd, 64)
-                                if _escape_incomplete(data) and data != b"\x1b":
-                                    data = b""
-                            pasted = False
-                            if data.startswith(_PASTE_START):
-                                # Bracketed paste (middle-click of terminal
-                                # output) : swallow the whole blob and type
-                                # its text into the filter instead of leaking
-                                # bare \x1b bytes that each look like Esc.
-                                _buf = data
-                                while True:
-                                    _tx, _ = _split_paste(_buf)
-                                    if _tx is not None:
-                                        break
-                                    if len(_buf) >= _PASTE_MAX:
-                                        _buf = b""
-                                        break
-                                    _r2, _, _ = _sel.select([fd], [], [], 0.20)
-                                    if not _r2:
-                                        break
-                                    _buf += _os.read(fd, 64)
-                                _tx, _ = _split_paste(_buf)
-                                if _tx is not None:
-                                    for _c in _tx.decode("utf-8", "ignore"):
-                                        if _c.isprintable():
-                                            query += _c
-                                    _apply_filter()
-                                    pasted = True
-                                dirty = True
-                            elif data.startswith(b"\x1b]"):
-                                # Terminal reply (OSC color query, title…) :
-                                # swallow to its terminator so fragments never
-                                # read as Esc. Rest (often empty) decoded below.
-                                _buf = data
-                                while True:
-                                    _done, _rest = _split_reply(_buf)
-                                    if _done:
-                                        _buf = _rest
-                                        break
-                                    if len(_buf) >= _PASTE_MAX:
-                                        _buf = b""
-                                        break
-                                    _r2, _, _ = _sel.select([fd], [], [], 0.20)
-                                    if not _r2:
-                                        _buf = b""
-                                        break
-                                    _buf += _os.read(fd, 64)
-                                data = _buf
-                                dirty = True
-                            if not pasted:
-                                key = _decode_key(data) if data else None
-                                if key == "CTRLC":
-                                    raise KeyboardInterrupt("cancelled")
-                                res = _handle(key) if key else None
-                                if res:
-                                    act, idx = res
-                                    if act == "hover":
-                                        dirty = True
-                                    else:
-                                        chosen["idx"] = n if act == "back" else idx
-                                        dirty = True
-                                else:
-                                    # Pure hover over a non-selectable area must
-                                    # not force a full frame repaint.
-                                    dirty = not (isinstance(key, MouseEvent)
-                                                 and key.motion)
-                        cur = (console.size.width, console.size.height)
-                        if cur != last_size:
-                            last_size = cur
-                            dirty = True
-                        # Repaint policy (input stays snappy while loading) :
-                        # a key/resize repaints IMMEDIATELY ; background
-                        # loading only ticks the spinner at 4 fps. Repainting
-                        # the full frame + a synchronous chafa sixel on every
-                        # 60 ms iteration starved the input loop (arrows felt
-                        # stuck, users over-pressed and jumped rows).
-                        if dirty or anim:
-                            now = _ltime.monotonic()
-                            tick_due = (
-                                anim and not dirty
-                                and now - last_anim_tick[0] >= 0.25
-                            )
-                            if dirty or tick_due:
-                                if tick_due:
-                                    last_anim_tick[0] = now
-                                live.update(render(), refresh=True)
-                                # Rich just repainted the (blank) region → paint
-                                # the real pixels back over it, but ONLY when
-                                # the target changed (same cover/size/position
-                                # needs no new chafa process). Only mark it
-                                # painted when a real image was written (else
-                                # the ready-transition below still fires once
-                                # the sixel finishes).
-                                if overlay[0] and ov_region:
-                                    skey = (
-                                        ov_region.get("cover"),
-                                        ov_region.get("cols"),
-                                        ov_region.get("rows"),
-                                        ov_region.get("row"),
-                                        ov_region.get("col"),
-                                    )
-                                    if painted[0] != skey and _paint_sixel():
-                                        painted[0] = skey
-                                else:
-                                    # Block preview: note whether the image was
-                                    # actually in THIS frame. If chafa is still
-                                    # running, `painted` stays stale so the
-                                    # ready-transition below repaints it without
-                                    # waiting for a keypress.
-                                    _, _, _, pc, pr = _dims()
-                                    cc = (previews[visible[selected]].get("cover", "")
-                                          if visible else "")
-                                    if (cc and terminal_image.get_cached_text(
-                                            cc, pc, pr) is not None):
-                                        painted[0] = (cc, pc, pr)
-                        elif visible:
-                            # No key/resize/loading tick, but the selected
-                            # poster may have JUST finished rendering (chafa is
-                            # slow): swap spinner → image / paint the sixel
-                            # immediately instead of waiting for a keypress.
-                            cc = previews[visible[selected]].get("cover", "")
-                            _, _, _, pc, pr = _dims()
-                            if overlay[0] and ov_region:
-                                k = (cc, pc, pr, ov_region.get("row"),
-                                     ov_region.get("col"))
-                                if (cc and painted[0] != k
-                                        and terminal_image.get_download_path(cc) is not None):
-                                    live.update(render(), refresh=True)
-                                    _paint_sixel()
-                                    painted[0] = k
-                            elif cc:
-                                k = (cc, pc, pr)
-                                if (painted[0] != k
-                                        and terminal_image.get_cached_text(cc, pc, pr)
-                                        is not None):
-                                    live.update(render(), refresh=True)
-                                    painted[0] = k
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        else:
-            mp = {readchar.key.UP: "UP", readchar.key.DOWN: "DOWN",
-                  readchar.key.ENTER: "ENTER", readchar.key.ESC: "ESC",
-                  readchar.key.BACKSPACE: "BACKSPACE"}
-            # get_renderable=render so the background chafa render swaps the
-            # spinner for the image on its own (same fix as the POSIX loop):
-            # previously the frozen frame meant Windows users also had to press
-            # a key to see a slow poster.
-            with Live(console=console, refresh_per_second=4, screen=True,
-                      get_renderable=render) as live:
-                while chosen["idx"] is None:
-                    raw = _read_menu_key()   # robust on Windows (drains focus events)
-                    if raw == readchar.key.CTRL_C:
-                        raise KeyboardInterrupt("cancelled")
-                    if raw == "":
-                        continue             # ignored focus/mouse event
-                    res = _handle(mp.get(raw, raw))
-                    if res:
-                        act, idx = res
-                        if act != "hover":
-                            chosen["idx"] = n if act == "back" else idx
-                    if not (isinstance(raw, MouseEvent) and raw.motion and not res):
-                        live.update(render())
-    finally:
-        mouse_gate.__exit__(None, None, None)
-        dl_pool.shutdown(wait=False)
-        rndr_pool.shutdown(wait=False)
-
-    idx = chosen["idx"]
-    if idx is None or idx == n:
-        clear_screen()  # leaving this level → previous level starts clean
-        return n
-    return _finish(idx)
-
+        return select_with_preview
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def spinner(message: str):
@@ -2773,34 +2137,49 @@ def skeleton(label: str, lines: int = 4):
             live = None
     stop = threading.Event()
     state = {"tick": 0}
+    try:
+        from .motion import reduced as _reduced
+        still = _reduced()
+    except Exception:
+        still = False
+
+    def _body(tick: int) -> Text:
+        widths = [0.92, 0.78, 0.85, 0.64, 0.71][:max(1, min(5, lines))]
+        bw = max(24, min(56, console.size.width - 24))
+        body = Text(iconify(label), style=color("dim"))
+        for r, f in enumerate(widths):
+            n = max(8, int(bw * f))
+            pos = (tick * 3 + r * 7) % (n + 14) - 7
+            row = Text("\n  ")
+            for i in range(n):
+                d = abs(i - pos)
+                row.append(
+                    "━",
+                    style="bold bright_white" if (not still and d <= 3)
+                    else "white" if (not still and d <= 6) else color("dim"))
+            body.append_text(row)
+        return body
 
     def _loop():
-        widths = [0.92, 0.78, 0.85, 0.64, 0.71][:max(1, min(5, lines))]
         while not stop.is_set():
             state["tick"] += 1
             try:
-                bw = max(24, min(56, console.size.width - 24))
-                body = Text(iconify(label), style=color("dim"))
-                for r, f in enumerate(widths):
-                    n = max(8, int(bw * f))
-                    pos = (state["tick"] * 3 + r * 7) % (n + 14) - 7
-                    row = Text("\n  ")
-                    for i in range(n):
-                        d = abs(i - pos)
-                        row.append(
-                            "━",
-                            style="bold bright_white" if d <= 3
-                            else "white" if d <= 6 else color("dim"))
-                    body.append_text(row)
-                live.update(body)
+                live.update(_body(state["tick"]))
             except Exception:
                 pass
             time.sleep(0.08)
 
     thread = None
     if live is not None:
-        thread = threading.Thread(target=_loop, daemon=True)
-        thread.start()
+        if still:
+            # Accessibility: reduced motion → one static placeholder frame.
+            try:
+                live.update(_body(0))
+            except Exception:
+                pass
+        else:
+            thread = threading.Thread(target=_loop, daemon=True)
+            thread.start()
     try:
         yield
     finally:

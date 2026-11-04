@@ -195,8 +195,6 @@ def cf_get(session, url, **kw):
                     impersonate="chrome",
                     curl_options={
                         _CurlOpt.DOH_URL: "https://1.1.1.1/dns-query",
-                        _CurlOpt.DOH_SSL_VERIFYPEER: 0,
-                        _CurlOpt.DOH_SSL_VERIFYHOST: 0,
                     },
                 )
                 h = _headers()

@@ -176,7 +176,12 @@ class LoadingScreen:
                     # Don't leave the alternate screen here: the very next
                     # menu repaints ON it. Exiting would reveal the terminal
                     # for a frame (the flash users saw before the home menu).
-                    self._live._alt_screen = False
+                    # Rich has no public switch for this; pin it in pyproject
+                    # (rich>=14.2,<15) and stay defensive if it ever moves.
+                    try:
+                        self._live._alt_screen = False  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
                     self._live.transient = False
                 self._live.stop()
             except Exception:
@@ -675,6 +680,24 @@ class BatchView:
         )
 
 
+
+def _terminate(proc, grace: float = 5.0):
+    """Terminate a child process, escalating to SIGKILL after *grace* seconds."""
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=grace)
+        return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
 def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
                           batch_callback=None, cancel_check=None) -> int:
     """
@@ -695,7 +718,12 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
         env.update(extra_env)
 
     if not console.is_terminal:
-        return subprocess.run(cmd, env=env).returncode
+        # Hard ceiling: a frozen child (dead CDN, stuck DNS) must not hang the
+        # whole batch forever. 6 h is far above any legitimate episode.
+        try:
+            return subprocess.run(cmd, env=env, timeout=6 * 3600).returncode
+        except subprocess.TimeoutExpired:
+            return 1
 
     state = {"line": "", "done": False}
 
@@ -757,10 +785,7 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
     if batch_callback is not None:
         while not state["done"] or proc.poll() is None:
             if cancel_check is not None and cancel_check():
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                _terminate(proc)
                 break
             tick += 1
             line = state["line"]
@@ -847,10 +872,7 @@ def run_download_with_bar(cmd: list, title: str, extra_env: dict = None,
                 last["speed"] = last.get("speed") or t("done")
             live.update(_frame(last, tick))
         except KeyboardInterrupt:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            _terminate(proc)
             raise
         except Exception:
             pass

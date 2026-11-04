@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freeflix-cli"
-version = "2.0.0"
+version = "2.1.0"
 description = "Watch movies, series, and anime from your terminal — multi-language, multi-source, no browser required. A maintained fork of autoflix-cli."
 readme = "README.md"
 requires-python = ">=3.9.2"
@@ -32,7 +32,7 @@ dependencies = [
     "platformdirs>=4.0.0",
     "pycryptodome>=3.23.0",
     "readchar>=4.2.1",
-    "rich>=14.2.0",
+    "rich>=14.2.0,<15",
 ]
 
 # `speed` is kept as an empty alias so `pip install freeflix-cli[speed]`
@@ -55,3 +55,7 @@ packages = ["src/freeflix_cli"]
 [tool.hatch.build.targets.wheel.shared-data]
 "data/source_portal.jsonc" = "share/freeflix-cli/data/source_portal.jsonc"
 "data/selectors.jsonc" = "share/freeflix-cli/data/selectors.jsonc"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100

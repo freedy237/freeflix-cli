@@ -32,3 +32,6 @@ Thumbs.db
 # Runtime data that shouldn't be committed
 *.log
 *.bak
+.ruff_cache/
+.freebuff/
+.mypy_cache/

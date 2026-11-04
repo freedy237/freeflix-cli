@@ -142,7 +142,7 @@ def _download(monkeypatch, tmp_path, proxy_url, upstream_port):
     target = f"http://127.0.0.1:{upstream_port}/media.m3u8"
     stream_url = (
         f"{proxy_url}/stream?url={urllib.parse.quote(target)}"
-        f"&headers=%7B%7D"
+        f"&headers=%7B%7D&k={proxy.PROXY_TOKEN}"
     )
 
     def fake_bar(cmd, title, batch_callback=None, cancel_check=None):

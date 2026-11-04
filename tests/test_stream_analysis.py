@@ -149,8 +149,9 @@ def test_dedup_players_ignores_language_suffix_duplicates():
         P("vidzy default", "https://vidzy.cc/embed-a.html"),
         P("vidzy vostfr", "https://vidzy.cc/embed-a.html"),
     ])
-    # Same host+name collapsed (voe vff == voe default), different embeds kept.
-    assert [p.name for p in out] == ["voe default", "vidzy default"]
+    # Exact duplicate URLs are dropped; distinct language tracks are kept
+    # (voe vostfr may be a different file from voe default).
+    assert [p.name for p in out] == ["voe default", "voe vostfr", "vidzy default"]
 
 
 def test_french_stream_dedups_same_embed_across_languages(monkeypatch):

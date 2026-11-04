@@ -45,6 +45,34 @@ def _stop_proxy_if_running():
             pass
 
 
+def _clean_exit(code: int = 0):
+    """Leave the terminal exactly as we found it, then exit.
+
+    ``os._exit`` skips atexit, so the mouse tracking and bracketed-paste
+    modes enabled at startup were never disabled: the shell inherited them
+    after a crash or a Ctrl-C. Restore everything explicitly, then raise
+    SystemExit so normal cleanup (proxy, logs) still runs.
+    """
+    try:
+        from .cli_utils import _mouse_off
+        _mouse_off()
+    except Exception:
+        pass
+    try:
+        console.show_cursor(True)
+        console.set_alt_screen(False)
+    except Exception:
+        pass
+    try:
+        sys.stdout.write("\x1b[?2004l\x1b[?1000l\x1b[?1006l")
+        sys.stdout.flush()
+    except Exception:
+        pass
+    _stop_proxy_if_running()
+    raise SystemExit(code)
+
+
+
 def _source_error_panel(source_name: str, exc: Exception) -> None:
     """Show a clean, friendly panel when a source handler fails (unreachable
     host, TLS/DNS reset, timeout…) instead of dumping a traceback and crashing.
@@ -428,11 +456,14 @@ def _home_dashboard():
     except Exception:
         _last = 0
     streak_pop = stats["streak"] > _last
-    try:
-        tracker.data["ui_last_streak"] = stats["streak"]
-        tracker._save_data()
-    except Exception:
-        pass
+    if stats["streak"] != _last:
+        # Persist only on change: the dashboard is rebuilt on every menu loop,
+        # and a full fsync write per repaint is pointless disk I/O.
+        try:
+            tracker.data["ui_last_streak"] = stats["streak"]
+            tracker._save_data()
+        except Exception:
+            pass
 
     topline = _LiveStatsLine(stats, in_progress, len(_new), streak_pop)
     parts = [topline]
@@ -923,20 +954,6 @@ def _register_providers():
         supported_languages=["fr"],
         category="anime",
     )
-    if not _en:
-        registry.register(
-            f"{icon('sparkle')} GoldenAnime ({t('VO and Subtitles')})",
-            goldenanime.handle_goldenanime,
-            supported_languages=["en"],
-            category="anime",
-        )
-    if not _en:
-        registry.register(
-            f"{icon('sparkle')} HiAnime ({t('EN sub + dub')})",
-            hianime.handle_hianime,
-            supported_languages=["en"],
-            category="anime",
-        )
     registry.register(
         f"{icon('wave')} Nyaa ({t('Torrents — high-quality anime releases')})",
         nyaa_handler.handle_nyaa,
@@ -980,6 +997,298 @@ def _register_providers():
     )
 
 
+def _settings_menu(version: str):
+    """The Settings screen (AniList, language, player, downloads, themes…).
+
+    Extracted from main() so the home loop stays readable; every sub-picker
+    appends an explicit Back row, so Esc always means "one level up".
+    """
+    while True:
+        crumb_reset(f"{icon('home')} {t('Home')}", t("Settings"))
+        clear_screen()
+        print_header(f"{icon('settings')} {t('Settings')}")
+        token = tracker.get_anilist_token()
+        lang = tracker.get_language()
+        player = tracker.get_player()
+
+
+        lang_display = get_language_display(lang)
+        from .player_manager import get_player_display
+        player_display = t(get_player_display(player))
+        anime_lang = tracker.get_anime_language()
+        anime_lang_display = get_language_display(anime_lang)
+
+        quality = tracker.get_download_quality()
+        os_key = tracker.get_opensubtitles_key()
+        par_n = tracker.get_parallel_downloads()
+        nv_mode = tracker.get_nvidia_offload()
+        from . import notifications as notif_mod
+        from . import themes as themes_mod
+        theme_label = themes_mod.active_theme().get("label", "?")
+        notif_on = notif_mod.is_daily_notify_installed()
+        # Sub-menu picker that always has a Back row, so Esc (which
+        # select_from_list maps to the last option) reliably goes back
+        # instead of silently picking the last item.
+        def _pick(items, prompt):
+            i = select_from_list(list(items) + [t("← Back")], prompt)
+            return None if i >= len(items) else i
+
+        # ── Actions (each setting's handler) ──
+        def _a_token():
+            # When a token is already set, let the user CHANGE it or
+            # REMOVE it (removing also hides the AniList resume on the
+            # home screen, which is gated on the token being present).
+            if tracker.get_anilist_token():
+                i = _pick([t("Change token"), t("Remove AniList")],
+                          t("AniList account:"))
+                if i is None:
+                    return
+                if i == 1:
+                    tracker.set_anilist_token("")
+                    toast(t("AniList removed."))
+                    return
+            nt = get_user_input(
+                t("Enter new AniList Token"),
+            )
+            if nt:
+                nt = nt.strip()
+                if nt.lower().startswith("bearer "):
+                    nt = nt[7:].strip()
+                # Guard against pasting the OAuth CLIENT SECRET from
+                # anilist.co/apps/developer (a 40-char hex string):
+                # it is not a user token, so AniList answers 400
+                # "Invalid token" and every AniList screen fails.
+                import re as _re
+                if (32 <= len(nt) <= 64
+                        and _re.fullmatch(r"[A-Za-z0-9]+", nt)
+                        and "." not in nt):
+                    print_warning(t(
+                        "This looks like the API Client SECRET, not a user "
+                        "token. Open the AniList authorize page and copy "
+                        "the token from the URL."
+                    ))
+                    print_info(t(
+                        "AniList → Settings → Developer → Create client "
+                        "(use the authorize link)."
+                    ))
+                else:
+                    tracker.set_anilist_token(nt)
+                    toast(t("Token saved."))
+
+        def _a_lang():
+            ls = get_all_languages()
+            c = _pick([x[1] for x in ls], t("Select Language:"))
+            if c is not None:
+                tracker.set_language(ls[c][0])
+                # Rebuild the registry so source names are translated
+                # immediately instead of keeping the old language until
+                # the next launch (labels are built with t() once).
+                registry.clear()
+                _register_providers()
+                toast(f"{t('Language updated to:')} {ls[c][1]}")
+
+        def _a_anime_lang():
+            ls = get_all_languages()
+            c = _pick([x[1] for x in ls], t("Anime language:"))
+            if c is not None:
+                tracker.set_anime_language(ls[c][0])
+                # The source list is filtered by the *content* language:
+                # rebuild it so EN/FR sources switch without a restart.
+                registry.clear()
+                _register_providers()
+                toast(f"{t('Anime language updated to:')} {ls[c][1]}")
+
+        def _a_theme():
+            _theme_settings()
+
+        def _a_player():
+            from .player_manager import get_all_players
+            ps = get_all_players()
+            c = _pick([t(p[1]) for p in ps], t("Select default player:"))
+            if c is not None:
+                tracker.set_player(ps[c][0])
+                toast(f"{t('Player updated to:')} {t(ps[c][1])}")
+
+        def _a_quality():
+            q_opts = [t("auto (best available)"), t("1080p max"), t("720p max"), t("480p max")]
+            q_vals = ["auto", "1080", "720", "480"]
+            c = _pick(q_opts, t("Select download quality:"))
+            if c is not None:
+                tracker.set_download_quality(q_vals[c])
+                toast(f"{t('Download quality set to:')} {q_opts[c]}")
+
+        def _a_ossub():
+            print_info(t("Register at https://www.opensubtitles.com/en/consumers"))
+            print_info(t("to get a free API key, then paste it here."))
+            nk = get_user_input(t("Enter OpenSubtitles API key"))
+            if nk:
+                tracker.set_opensubtitles_key(nk.strip())
+                toast(t("OpenSubtitles key saved."))
+
+        def _a_parallel():
+            n_opts = [t("1 (sequential)"), "2", "3", "4"]
+            c = _pick(n_opts, t("Max parallel downloads:"))
+            if c is not None:
+                tracker.set_parallel_downloads(c + 1)
+                toast(f"{t('Parallel downloads set to')} {c + 1}")
+
+        def _a_notif(notif_on=notif_on):
+            if notif_on:
+                if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
+                    ok = notif_mod.uninstall_daily_notify()
+                    toast(t("Notifications disabled.") if ok else t("Failed to disable notifications."),
+                          "success" if ok else "error")
+            else:
+                if os.name == "nt":
+                    print_info(t("This installs a daily scheduled task (09:00)"))
+                    print_info(t("and shows a Windows notification about new episodes."))
+                else:
+                    print_info(t("This installs a systemd --user timer that runs once a day"))
+                    print_info(t("and uses notify-send to alert you about new episodes."))
+                if select_from_list([t("Yes"), t("No")], t("Enable daily notifications?")) == 0:
+                    if notif_mod.install_daily_notify():
+                        toast(t("Notifications enabled (runs daily)."))
+                    else:
+                        if os.name == "nt":
+                            print_error(t("Failed to enable. Make sure Task Scheduler is available."))
+                        else:
+                            print_error(t("Failed to enable. Make sure systemd --user works "
+                                          "and 'libnotify' is installed (sudo dnf install libnotify)."))
+                        pause()
+
+        def _a_nvidia():
+            print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
+            print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
+            nv_opts = [t("auto (detect nvidia-smi)"), t("on (force Nvidia)"), t("off (always iGPU)")]
+            nv_vals = ["auto", "on", "off"]
+            c = _pick(nv_opts, t("Nvidia GPU offload:"))
+            if c is not None:
+                tracker.set_nvidia_offload(nv_vals[c])
+                toast(f"{t('Nvidia offload:')} {nv_vals[c]}")
+
+        def _a_posters():
+            from . import terminal_image
+            p_opts = [t("auto (best pixel protocol, else blocks)"),
+                      t("sixel (force photo quality — needs terminal Sixel)"),
+                      t("blocks (Unicode blocks everywhere)"),
+                      t("off (no posters)")]
+            p_vals = ["auto", "sixel", "blocks", "off"]
+            if not terminal_image.chafa_available():
+                print_warning(t("chafa is not installed — posters won't show until you "
+                                "install it (e.g. sudo dnf install chafa)."))
+            else:
+                proto = terminal_image.detect_image_protocol()
+                nice = {"kitty": t("kitty graphics (sharp)"), "iterm": t("iTerm2 (sharp)"),
+                        "sixel": t("sixel (sharp)")}.get(proto, t("Unicode blocks"))
+                print_info(f"{t('Detected image protocol')}: [cyan]{nice}[/cyan]")
+                hint = terminal_image.sixel_hint()
+                if hint:
+                    print_warning(hint)
+            c = _pick(p_opts, t("Show Posters:"))
+            if c is not None:
+                tracker.set_poster_mode(p_vals[c])
+                terminal_image.reset_cache()
+                toast(f"{t('Show Posters')}: {p_vals[c]}")
+
+        def _a_icons():
+            i_opts = [t("emoji (works everywhere)"), t("nerd (crisp icons, needs a Nerd Font)")]
+            i_vals = ["emoji", "nerd"]
+            c = _pick(i_opts, t("Icon Style:"))
+            if c is None:
+                return
+            picked = i_vals[c]
+            if picked == "nerd" and not setup_assistant.detect_nerd_font():
+                print_info(t("CaskaydiaCove Nerd Font not found on this system."))
+                if ask_yes_no(t("Install it now?"), default=True):
+                    setup_assistant.install_nerd_font()
+            tracker.set_icon_style(picked)
+            print_success(f"{t('Icon Style')}: {picked}")
+            print_info(t("Restart FreeFlix to apply icons everywhere."))
+            pause()
+
+        def _a_analyze():
+            new = not tracker.get_analyze_players()
+            tracker.set_analyze_players(new)
+            toast(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
+
+        def _a_motion():
+            new = not bool(tracker.data.get("reduced_motion", False))
+            tracker.data["reduced_motion"] = new
+            tracker._save_data()
+            toast(f"{t('Reduce motion:')} {'ON' if new else 'OFF'}")
+
+        def _a_subs():
+            new = not tracker.get_subtitle_search()
+            tracker.set_subtitle_search(new)
+            toast(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
+
+        def _a_disk_cache():
+            new = not tracker.get_disk_cache()
+            tracker.set_disk_cache(new)
+            toast(f"{t('Aggressive disk cache:')} {'ON' if new else 'OFF'}")
+
+        def _a_clear_cache():
+            from . import httpcache
+            from .scraping import utils as _su
+            n = httpcache.clear()
+            _su.clear_origin_cache()  # mirrors are re-resolved next time
+            toast(f"{t('HTTP cache cleared')} ({n})")
+
+        def _cache_label():
+            from . import httpcache
+            count, mb = httpcache.stats()
+            return f"{count} · {mb:.1f} MB" if count else t("empty")
+
+        # ── (category, label, action) — grouped in the menu ──
+        PLY, DL, APP, ACC, AB = (t("Playback"), t("Downloads"),
+                                 t("Appearance"), t("Accounts"), t("About"))
+        # Sub-settings carry NO icon — the icon lives on the category
+        # header only (below), so the list stays clean.
+        entries = [
+            (PLY, f"{t('Choose default Player')} ({player_display})", _a_player),
+            (PLY, f"{t('Nvidia GPU offload')} ({nv_mode})", _a_nvidia),
+            (PLY, f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})", _a_analyze),
+            (PLY, f"{t('Reduce motion')} ({'ON' if tracker.data.get('reduced_motion') else 'OFF'})", _a_motion),
+            (PLY, f"{t('Buffer far ahead (disk cache)')} ({'ON' if tracker.get_disk_cache() else 'OFF'})", _a_disk_cache),
+            (DL, f"{t('Download Quality')} ({quality})", _a_quality),
+            (DL, f"{t('Parallel Downloads')} ({par_n})", _a_parallel),
+            (DL, f"{t('Download subtitles')} ({'ON' if tracker.get_subtitle_search() else 'OFF'})", _a_subs),
+            (APP, f"{t('Theme')} ({theme_label})", _a_theme),
+            (APP, f"{t('Show Posters')} ({tracker.get_poster_mode()})", _a_posters),
+            (APP, f"{t('Icon Style')} ({tracker.get_icon_style()})", _a_icons),
+            (APP, f"{t('Update Language')} ({lang_display})", _a_lang),
+            (APP, f"{t('Update Anime Language')} ({anime_lang_display})", _a_anime_lang),
+            (APP, f"{t('Clear HTTP cache')} ({_cache_label()})", _a_clear_cache),
+            (ACC, f"{t('Update AniList Token')} ({t('Set') if token else t('Not Set')})", _a_token),
+            (ACC, f"{t('OpenSubtitles API Key')} ({t('Set') if os_key else t('Not Set')})", _a_ossub),
+            (ACC, f"{t('Cloudflare token')}", _set_cloudflare_token),
+            (ACC, f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})", _a_notif),
+            (AB, f"{t('About')}", lambda: (_show_about(version), pause())),
+        ]
+
+        # Category → icon : icons appear ONLY on the big section titles.
+        cat_icon = {
+            PLY: icon("play"), DL: icon("download"), APP: icon("theme"),
+            ACC: icon("globe"), AB: icon("info"),
+        }
+
+        labels, actions, group_headers, last_cat = [], [], {}, None
+        for cat, label, fn in entries:
+            if cat != last_cat:
+                ic = cat_icon.get(cat, "")
+                group_headers[len(labels)] = f"{ic} {cat}".strip()
+                last_cat = cat
+            labels.append(label)
+            actions.append(fn)
+        labels.append(t("Back"))
+
+        s_choice = select_from_list(labels, t("Select Setting:"),
+                                    group_headers=group_headers)
+        if s_choice >= len(actions):
+            break
+        actions[s_choice]()
+
+
 def main():
     # ── Diagnostics : always log to a rotating file ; --verbose also to stderr.
     _verbose = "--verbose" in sys.argv or "-v" in sys.argv
@@ -993,9 +1302,6 @@ def main():
         pass
 
     # ── CLI flags (lightweight, before anything else) ──────────
-    if "--doctor" in sys.argv or "-D" in sys.argv:
-        from .doctor import cli_doctor
-        return cli_doctor()
     if "--setup" in sys.argv:
         # Redo the full first-launch experience : the language wizard
         # (anime language, then interface language) AND the dependency
@@ -1003,26 +1309,10 @@ def main():
         check_language_setup(force=True)
         setup_assistant.run_setup(force=True)
         return 0
-    if "--version" in sys.argv or "-V" in sys.argv:
-        try:
-            import importlib.metadata as _im
-            print(_im.version("freeflix-cli"))
-        except Exception:
-            print("dev")
-        return 0
-    if "--help" in sys.argv or "-h" in sys.argv:
-        print(t("freeflix — terminal streaming for movies / series / anime\n"))
-        print(f"  freeflix           {t('launch the TUI')}")
-        print(f"  freeflix --setup   {t('re-run setup : anime + interface language, then deps')}")
-        print(f"  freeflix --doctor  {t('run system diagnostic')}")
-        print(f"  freeflix --doctor --sources  {t('live-test every source (search + resolve)')}")
-        print(f"  freeflix --doctor --upload  {t('diagnostic + upload to Gist')}")
-        print(f"  freeflix --verbose {t('print DEBUG to the console (also always logged)')}")
-        print(f"  freeflix --version {t('print the installed version')}")
-        print(f"  freeflix --help    {t('this message')}")
-        from .logsetup import LOG_FILE
-        print(f"\n  {t('log file :')} {LOG_FILE}")
-        return 0
+
+    # --version / --help / --doctor are handled by cli.py before this module
+    # is even imported; keeping a second copy here made the help text drift
+    # from the real one.
 
     # Kill terminal focus/mouse/paste reports so their escape sequences can't
     # be misread as a stray Esc (looked like FreeFlix closing by itself), and
@@ -1232,11 +1522,18 @@ def main():
         menu_items.append(f"{icon('exit')} {t('Exit')}")
 
         crumb_reset(f"{icon('home')} {t('Home')}")
+        # The dashboard reads a lot of persisted state (counts, positions,
+        # posters). A malformed key must never prevent the menu from showing:
+        # degrade to no dashboard instead of crashing the whole app.
+        try:
+            _dash = _home_dashboard()
+        except Exception:
+            _dash = None
         choice_idx = select_from_list(
             menu_items,
             t("What would you like to do?"),
             header=f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}",
-            top=_home_dashboard(),
+            top=_dash,
             flush_input=True,        # drop the startup terminal-query burst first
             esc_selects_last=True,   # Esc on Home = Exit (stray bytes are
                                      # handled upstream : paste/reply swallow,
@@ -1341,282 +1638,7 @@ def main():
             continue
 
         if choice_idx == settings_idx:
-            # Settings menu
-            while True:
-                crumb_reset(f"{icon('home')} {t('Home')}", t("Settings"))
-                clear_screen()
-                print_header(f"{icon('settings')} {t('Settings')}")
-                token = tracker.get_anilist_token()
-                lang = tracker.get_language()
-                player = tracker.get_player()
-
-
-                lang_display = get_language_display(lang)
-                from .player_manager import get_player_display
-                player_display = t(get_player_display(player))
-                anime_lang = tracker.get_anime_language()
-                anime_lang_display = get_language_display(anime_lang)
-
-                quality = tracker.get_download_quality()
-                os_key = tracker.get_opensubtitles_key()
-                par_n = tracker.get_parallel_downloads()
-                nv_mode = tracker.get_nvidia_offload()
-                from . import notifications as notif_mod
-                from . import themes as themes_mod
-                theme_label = themes_mod.active_theme().get("label", "?")
-                notif_on = notif_mod.is_daily_notify_installed()
-                # Sub-menu picker that always has a Back row, so Esc (which
-                # select_from_list maps to the last option) reliably goes back
-                # instead of silently picking the last item.
-                def _pick(items, prompt):
-                    i = select_from_list(list(items) + [t("← Back")], prompt)
-                    return None if i >= len(items) else i
-
-                # ── Actions (each setting's handler) ──
-                def _a_token():
-                    # When a token is already set, let the user CHANGE it or
-                    # REMOVE it (removing also hides the AniList resume on the
-                    # home screen, which is gated on the token being present).
-                    if tracker.get_anilist_token():
-                        i = _pick([t("Change token"), t("Remove AniList")],
-                                  t("AniList account:"))
-                        if i is None:
-                            return
-                        if i == 1:
-                            tracker.set_anilist_token("")
-                            toast(t("AniList removed."))
-                            return
-                    nt = get_user_input(
-                        t("Enter new AniList Token"),
-                    )
-                    if nt:
-                        nt = nt.strip()
-                        if nt.lower().startswith("bearer "):
-                            nt = nt[7:].strip()
-                        # Guard against pasting the OAuth CLIENT SECRET from
-                        # anilist.co/apps/developer (a 40-char hex string):
-                        # it is not a user token, so AniList answers 400
-                        # "Invalid token" and every AniList screen fails.
-                        import re as _re
-                        if (32 <= len(nt) <= 64
-                                and _re.fullmatch(r"[A-Za-z0-9]+", nt)
-                                and "." not in nt):
-                            print_warning(t(
-                                "This looks like the API Client SECRET, not a user "
-                                "token. Open the AniList authorize page and copy "
-                                "the token from the URL."
-                            ))
-                            print_info(t(
-                                "AniList → Settings → Developer → Create client "
-                                "(use the authorize link)."
-                            ))
-                        else:
-                            tracker.set_anilist_token(nt)
-                            toast(t("Token saved."))
-
-                def _a_lang():
-                    ls = get_all_languages()
-                    c = _pick([x[1] for x in ls], t("Select Language:"))
-                    if c is not None:
-                        tracker.set_language(ls[c][0])
-                        toast(f"{t('Language updated to:')} {ls[c][1]}")
-
-                def _a_anime_lang():
-                    ls = get_all_languages()
-                    c = _pick([x[1] for x in ls], t("Anime language:"))
-                    if c is not None:
-                        tracker.set_anime_language(ls[c][0])
-                        toast(f"{t('Anime language updated to:')} {ls[c][1]}")
-
-                def _a_theme():
-                    _theme_settings()
-
-                def _a_player():
-                    from .player_manager import get_all_players
-                    ps = get_all_players()
-                    c = _pick([t(p[1]) for p in ps], t("Select default player:"))
-                    if c is not None:
-                        tracker.set_player(ps[c][0])
-                        toast(f"{t('Player updated to:')} {t(ps[c][1])}")
-
-                def _a_quality():
-                    q_opts = [t("auto (best available)"), t("1080p max"), t("720p max"), t("480p max")]
-                    q_vals = ["auto", "1080", "720", "480"]
-                    c = _pick(q_opts, t("Select download quality:"))
-                    if c is not None:
-                        tracker.set_download_quality(q_vals[c])
-                        toast(f"{t('Download quality set to:')} {q_opts[c]}")
-
-                def _a_ossub():
-                    print_info(t("Register at https://www.opensubtitles.com/en/consumers"))
-                    print_info(t("to get a free API key, then paste it here."))
-                    nk = get_user_input(t("Enter OpenSubtitles API key"))
-                    if nk:
-                        tracker.set_opensubtitles_key(nk.strip())
-                        toast(t("OpenSubtitles key saved."))
-
-                def _a_parallel():
-                    n_opts = [t("1 (sequential)"), "2", "3", "4"]
-                    c = _pick(n_opts, t("Max parallel downloads:"))
-                    if c is not None:
-                        tracker.set_parallel_downloads(c + 1)
-                        toast(f"{t('Parallel downloads set to')} {c + 1}")
-
-                def _a_notif(notif_on=notif_on):
-                    if notif_on:
-                        if select_from_list([t("Yes"), t("No")], t("Disable daily notifications?")) == 0:
-                            ok = notif_mod.uninstall_daily_notify()
-                            toast(t("Notifications disabled.") if ok else t("Failed to disable notifications."),
-                                  "success" if ok else "error")
-                    else:
-                        if os.name == "nt":
-                            print_info(t("This installs a daily scheduled task (09:00)"))
-                            print_info(t("and shows a Windows notification about new episodes."))
-                        else:
-                            print_info(t("This installs a systemd --user timer that runs once a day"))
-                            print_info(t("and uses notify-send to alert you about new episodes."))
-                        if select_from_list([t("Yes"), t("No")], t("Enable daily notifications?")) == 0:
-                            if notif_mod.install_daily_notify():
-                                toast(t("Notifications enabled (runs daily)."))
-                            else:
-                                if os.name == "nt":
-                                    print_error(t("Failed to enable. Make sure Task Scheduler is available."))
-                                else:
-                                    print_error(t("Failed to enable. Make sure systemd --user works "
-                                                  "and 'libnotify' is installed (sudo dnf install libnotify)."))
-                                pause()
-
-                def _a_nvidia():
-                    print_info(t("On laptops with Intel/AMD iGPU + Nvidia dGPU, route"))
-                    print_info(t("mpv to the Nvidia card for far better Anime4K perf."))
-                    nv_opts = [t("auto (detect nvidia-smi)"), t("on (force Nvidia)"), t("off (always iGPU)")]
-                    nv_vals = ["auto", "on", "off"]
-                    c = _pick(nv_opts, t("Nvidia GPU offload:"))
-                    if c is not None:
-                        tracker.set_nvidia_offload(nv_vals[c])
-                        toast(f"{t('Nvidia offload:')} {nv_vals[c]}")
-
-                def _a_posters():
-                    from . import terminal_image
-                    p_opts = [t("auto (best pixel protocol, else blocks)"),
-                              t("sixel (force photo quality — needs terminal Sixel)"),
-                              t("blocks (Unicode blocks everywhere)"),
-                              t("off (no posters)")]
-                    p_vals = ["auto", "sixel", "blocks", "off"]
-                    if not terminal_image.chafa_available():
-                        print_warning(t("chafa is not installed — posters won't show until you "
-                                        "install it (e.g. sudo dnf install chafa)."))
-                    else:
-                        proto = terminal_image.detect_image_protocol()
-                        nice = {"kitty": t("kitty graphics (sharp)"), "iterm": t("iTerm2 (sharp)"),
-                                "sixel": t("sixel (sharp)")}.get(proto, t("Unicode blocks"))
-                        print_info(f"{t('Detected image protocol')}: [cyan]{nice}[/cyan]")
-                        hint = terminal_image.sixel_hint()
-                        if hint:
-                            print_warning(hint)
-                    c = _pick(p_opts, t("Show Posters:"))
-                    if c is not None:
-                        tracker.set_poster_mode(p_vals[c])
-                        terminal_image.reset_cache()
-                        toast(f"{t('Show Posters')}: {p_vals[c]}")
-
-                def _a_icons():
-                    i_opts = [t("emoji (works everywhere)"), t("nerd (crisp icons, needs a Nerd Font)")]
-                    i_vals = ["emoji", "nerd"]
-                    c = _pick(i_opts, t("Icon Style:"))
-                    if c is None:
-                        return
-                    picked = i_vals[c]
-                    if picked == "nerd" and not setup_assistant.detect_nerd_font():
-                        print_info(t("CaskaydiaCove Nerd Font not found on this system."))
-                        if ask_yes_no(t("Install it now?"), default=True):
-                            setup_assistant.install_nerd_font()
-                    tracker.set_icon_style(picked)
-                    print_success(f"{t('Icon Style')}: {picked}")
-                    print_info(t("Restart FreeFlix to apply icons everywhere."))
-                    pause()
-
-                def _a_analyze():
-                    new = not tracker.get_analyze_players()
-                    tracker.set_analyze_players(new)
-                    toast(f"{t('Player analysis:')} {'ON' if new else 'OFF'}")
-
-                def _a_motion():
-                    new = not bool(tracker.data.get("reduced_motion", False))
-                    tracker.data["reduced_motion"] = new
-                    tracker._save_data()
-                    toast(f"{t('Reduce motion:')} {'ON' if new else 'OFF'}")
-
-                def _a_subs():
-                    new = not tracker.get_subtitle_search()
-                    tracker.set_subtitle_search(new)
-                    toast(f"{t('Subtitle download:')} {'ON' if new else 'OFF'}")
-
-                def _a_disk_cache():
-                    new = not tracker.get_disk_cache()
-                    tracker.set_disk_cache(new)
-                    toast(f"{t('Aggressive disk cache:')} {'ON' if new else 'OFF'}")
-
-                def _a_clear_cache():
-                    from . import httpcache
-                    from .scraping import utils as _su
-                    n = httpcache.clear()
-                    _su.clear_origin_cache()  # mirrors are re-resolved next time
-                    toast(f"{t('HTTP cache cleared')} ({n})")
-
-                def _cache_label():
-                    from . import httpcache
-                    count, mb = httpcache.stats()
-                    return f"{count} · {mb:.1f} MB" if count else t("empty")
-
-                # ── (category, label, action) — grouped in the menu ──
-                PLY, DL, APP, ACC, AB = (t("Playback"), t("Downloads"),
-                                         t("Appearance"), t("Accounts"), t("About"))
-                # Sub-settings carry NO icon — the icon lives on the category
-                # header only (below), so the list stays clean.
-                entries = [
-                    (PLY, f"{t('Choose default Player')} ({player_display})", _a_player),
-                    (PLY, f"{t('Nvidia GPU offload')} ({nv_mode})", _a_nvidia),
-                    (PLY, f"{t('Analyze players (resolutions/bitrate)')} ({'ON' if tracker.get_analyze_players() else 'OFF'})", _a_analyze),
-                    (PLY, f"{t('Reduce motion')} ({'ON' if tracker.data.get('reduced_motion') else 'OFF'})", _a_motion),
-                    (PLY, f"{t('Buffer far ahead (disk cache)')} ({'ON' if tracker.get_disk_cache() else 'OFF'})", _a_disk_cache),
-                    (DL, f"{t('Download Quality')} ({quality})", _a_quality),
-                    (DL, f"{t('Parallel Downloads')} ({par_n})", _a_parallel),
-                    (DL, f"{t('Download subtitles')} ({'ON' if tracker.get_subtitle_search() else 'OFF'})", _a_subs),
-                    (APP, f"{t('Theme')} ({theme_label})", _a_theme),
-                    (APP, f"{t('Show Posters')} ({tracker.get_poster_mode()})", _a_posters),
-                    (APP, f"{t('Icon Style')} ({tracker.get_icon_style()})", _a_icons),
-                    (APP, f"{t('Update Language')} ({lang_display})", _a_lang),
-                    (APP, f"{t('Update Anime Language')} ({anime_lang_display})", _a_anime_lang),
-                    (APP, f"{t('Clear HTTP cache')} ({_cache_label()})", _a_clear_cache),
-                    (ACC, f"{t('Update AniList Token')} ({t('Set') if token else t('Not Set')})", _a_token),
-                    (ACC, f"{t('OpenSubtitles API Key')} ({t('Set') if os_key else t('Not Set')})", _a_ossub),
-                    (ACC, f"{t('Cloudflare token')}", _set_cloudflare_token),
-                    (ACC, f"{t('Daily New-Episode Notifications')} ({'ON' if notif_on else 'OFF'})", _a_notif),
-                    (AB, f"{t('About')}", lambda: (_show_about(_VERSION), pause())),
-                ]
-
-                # Category → icon : icons appear ONLY on the big section titles.
-                cat_icon = {
-                    PLY: icon("play"), DL: icon("download"), APP: icon("theme"),
-                    ACC: icon("globe"), AB: icon("info"),
-                }
-
-                labels, actions, group_headers, last_cat = [], [], {}, None
-                for cat, label, fn in entries:
-                    if cat != last_cat:
-                        ic = cat_icon.get(cat, "")
-                        group_headers[len(labels)] = f"{ic} {cat}".strip()
-                        last_cat = cat
-                    labels.append(label)
-                    actions.append(fn)
-                labels.append(t("Back"))
-
-                s_choice = select_from_list(labels, t("Select Setting:"),
-                                            group_headers=group_headers)
-                if s_choice >= len(actions):
-                    break
-                actions[s_choice]()
+            _settings_menu(_VERSION)
             continue
 
         # Exit
@@ -1625,18 +1647,12 @@ def main():
         except Exception:
             pass
         print_success(t("Goodbye!"))
-        _stop_proxy_if_running()
-        os._exit(0)
+        _clean_exit(0)
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        try:
-            console.set_alt_screen(False)
-        except Exception:
-            pass
         print(f"\n{t('Goodbye!')}")
-        _stop_proxy_if_running()
-        os._exit(0)
+        _clean_exit(0)

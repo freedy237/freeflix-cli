@@ -84,15 +84,20 @@ ensure_permanent_path
 log "Install default mpv config (Anime4K toggle, anti-crash) ?"
 read -rp "  [Y/n] " ans
 if [[ ! "${ans:-Y}" =~ ^[Nn] ]]; then
-    mkdir -p "$HOME/.config/mpv/scripts" "$HOME/.config/mpv/shaders"
-    cp "$PROJECT_ROOT/config/mpv.conf"              "$HOME/.config/mpv/mpv.conf"
-    cp "$PROJECT_ROOT/config/input.conf"            "$HOME/.config/mpv/input.conf"
-    cp "$PROJECT_ROOT/config/freeflix_position.lua" "$HOME/.config/mpv/scripts/freeflix_position.lua"
+    # FreeFlix launches mpv with --config-dir ~/.config/freeflix/mpv: writing
+    # the global ~/.config/mpv made Anime4K invisible to the app.
+    mkdir -p "$HOME/.config/freeflix/mpv/scripts" "$HOME/.config/freeflix/mpv/shaders"
+    cp "$PROJECT_ROOT/config/mpv.conf"              "$HOME/.config/freeflix/mpv/mpv.conf"
+    cp "$PROJECT_ROOT/config/input.conf"            "$HOME/.config/freeflix/mpv/input.conf"
+    cp "$PROJECT_ROOT/config/freeflix_position.lua" "$HOME/.config/freeflix/mpv/scripts/freeflix_position.lua"
 
     BASE="https://raw.githubusercontent.com/bloc97/Anime4K/master/glsl"
-    curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Clamp_Highlights.glsl"  "$BASE/Restore/Anime4K_Clamp_Highlights.glsl"
-    curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Restore_CNN_VL.glsl"    "$BASE/Restore/Anime4K_Restore_CNN_VL.glsl"
-    curl -fsSL -o "$HOME/.config/mpv/shaders/Anime4K_Upscale_CNN_x2_VL.glsl" "$BASE/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Clamp_Highlights.glsl"  "$BASE/Restore/Anime4K_Clamp_Highlights.glsl"
+    # mpv.conf loads the S variant by default; CTRL+1 switches to VL.
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Restore_CNN_S.glsl"     "$BASE/Restore/Anime4K_Restore_CNN_S.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Upscale_CNN_x2_S.glsl"  "$BASE/Upscale/Anime4K_Upscale_CNN_x2_S.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Restore_CNN_VL.glsl"    "$BASE/Restore/Anime4K_Restore_CNN_VL.glsl"
+    curl -fsSL -o "$HOME/.config/freeflix/mpv/shaders/Anime4K_Upscale_CNN_x2_VL.glsl" "$BASE/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl"
     ok "mpv config installed (CTRL+1 toggles Anime4K)"
 fi
 

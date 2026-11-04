@@ -358,7 +358,11 @@ class TestWindowsNotifications:
                 with _mock.patch.object(n.subprocess, "run", side_effect=fake_run):
                     assert n._notify_windows_toast("A&B", "<C>") is True
         ps = " ".join(seen["cmd"])
-        assert "A&amp;B" in ps and "&lt;C&gt;" in ps
+        xml = n._toast_xml("A&B", "<C>")
+        assert "A&amp;B" in xml and "&lt;C&gt;" in xml
+        # The payload is loaded from a temp file, never interpolated into the
+        # PowerShell string (an apostrophe in a title used to break out of it).
+        assert "$doc.Load(" in ps and "A&B" not in ps
         assert "-WindowStyle" in seen["cmd"]
 
     def test_dispatch_uses_windows_backend(self):

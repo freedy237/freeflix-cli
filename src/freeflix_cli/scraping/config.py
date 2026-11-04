@@ -39,6 +39,14 @@ def _local_candidates() -> list:
     # legacy relative fallback (POSIX lib/pythonX.Y layout only)
     cands.append(os.path.join(_HERE, "..", "..", "..", "..", "..", "share",
                               "freeflix-cli", "data", "source_portal.jsonc"))
+    # PyInstaller one-file bundle: --add-data "data/source_portal.jsonc:data"
+    try:
+        import sys as _sys2
+        _meipass = getattr(_sys2, "_MEIPASS", None)
+        if _meipass:
+            cands.append(os.path.join(_meipass, "data", "source_portal.jsonc"))
+    except Exception:
+        pass
     # user-level override : ~/.config/freeflix/source_portal.jsonc
     cands.append(os.path.expanduser("~/.config/freeflix/source_portal.jsonc"))
     return [os.path.normpath(p) for p in cands]

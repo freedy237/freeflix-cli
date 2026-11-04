@@ -19,16 +19,38 @@ class ProgressTracker:
 
         self.data = self._load_data()
 
+    # Container keys whose shape the rest of the code assumes. A manual edit,
+    # an old version or a downgrade can leave e.g. history as a list; rather
+    # than crashing on the next `.get()` (the Home dashboard is outside any
+    # try), drop the malformed key and let the default be recreated.
+    _CONTAINERS = {
+        "history": dict,
+        "followed_series": dict,
+        "episode_positions": dict,
+        "episode_durations": dict,
+        "watched_episodes": list,
+        "watch_events": list,
+        "search_history": list,
+        "cf_clearance": dict,
+        "anilist_mappings": dict,
+    }
+
     def _load_data(self) -> Dict[str, Any]:
-        """Load progress data from JSON file."""
+        """Load progress data from JSON file, tolerating a wrong shape."""
         if not self.data_file.exists():
             return {}
 
         try:
             with open(self.data_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, ValueError):
             return {}
+        if not isinstance(data, dict):
+            return {}
+        for key, typ in self._CONTAINERS.items():
+            if key in data and not isinstance(data[key], typ):
+                data.pop(key, None)
+        return data
 
     def _save_data(self):
         """
