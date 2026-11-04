@@ -361,7 +361,7 @@ class ProgressTracker:
     # --- Theme preference ---
 
     def get_theme(self) -> str:
-        return self.data.get("theme", "default")
+        return self.data.get("theme", "noir")
 
     def set_theme(self, name: str):
         self.data["theme"] = name

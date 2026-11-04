@@ -67,6 +67,18 @@ jobs:
             echo ""
             echo "## Install / upgrade"
             echo ""
+            echo "# Linux / macOS"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py | python3"
+            echo '```'
+            echo ""
+            echo "# Windows (PowerShell)"
+            echo '```powershell'
+            echo 'powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"'
+            echo '```'
+            echo ""
+            echo "## Upgrade an existing install"
+            echo ""
             echo '```bash'
             echo "uv tool install --upgrade freeflix-cli"
             echo "# or"

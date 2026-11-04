@@ -101,6 +101,9 @@ _FR = {
     "No results found.": "Aucun résultat trouvé.",
     "result(s) found": "résultat(s) trouvé(s)",
     "Show more": "Afficher la suite",
+    "7d": "7J",
+    "Days": "Jours",
+    "Start watching": "Commencer à regarder",
     "Follow this anime": "Suivre cet anime",
     "Unfollow this anime": "Ne plus suivre cet anime",
     "Now following:": "Tu suis maintenant :",
@@ -194,7 +197,7 @@ _FR = {
     "Good morning": "Bonjour",
     "Good afternoon": "Bon après-midi",
     "Good evening": "Bonsoir",
-    "Streak": "Série",
+    "Streak": "Jours d'affilée",
     "In progress": "En cours",
     "Continue watching": "Reprendre",
     "Nothing watched yet — pick a source below to start!":

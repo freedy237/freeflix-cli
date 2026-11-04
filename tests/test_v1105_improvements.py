@@ -97,7 +97,5 @@ def test_progress_bar_clamps():
 # ── New themes present ────────────────────────────────────────────────
 def test_new_themes_registered():
     from freeflix_cli import themes
-    for key in ("everforest", "kanagawa", "solarized", "latte"):
+    for key in ("everforest", "kanagawa", "solarized"):
         assert key in themes.THEMES
-        # A light theme must NOT use a white header (invisible on light bg).
-    assert "white" not in themes.THEMES["latte"]["header"]

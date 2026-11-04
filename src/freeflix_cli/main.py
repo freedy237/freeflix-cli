@@ -333,8 +333,9 @@ class _LiveStatsLine:
         self._pop = streak_pop
 
     def __rich_console__(self, console, options):
+        from datetime import datetime, timedelta, date as _date
+        from rich.console import Group
         from rich.text import Text
-        from datetime import datetime
         from .themes import color as _color
 
         stats = self._stats
@@ -342,20 +343,33 @@ class _LiveStatsLine:
         hour = now.hour
         greet = (t("Good night") if hour < 6 else t("Good morning") if hour < 12
                  else t("Good afternoon") if hour < 18 else t("Good evening"))
+        width = options.max_width or console.size.width
+        narrow = width < 72
+        wide = width >= 108
+        muted = _color("muted")
+
+        # Keep the line inside the panel at 80×24: compact labels below the
+        # wide layout, and the sparkline moves to its own row when space is
+        # tight. This avoids the ugly mid-word wrap the old single line had.
+        week_label = t("This week").upper() if wide else t("7d").upper()
+        streak_label = t("Streak").upper() if wide else t("Days").upper()
         line = Text()
-        line.append(f"  {greet} · {now.strftime('%H:%M')}    ",
+        line.append(f"  {greet} · {now.strftime('%H:%M')}",
                     style=f"bold {_color('accent')}")
-        line.append(f"{icon('stats')} {t('This week')}: ", style=_color("dim"))
-        line.append(f"{stats['this_week']}", style=f"bold {_color('info')}")
-        line.append(f"    {icon('fire')} {t('Streak')}: ", style=_color("dim"))
-        # A fresh record pops in bright white for this whole home visit.
-        _flame = "bold bright_white" if self._pop else f"bold {_color('warning')}"
-        line.append(f"{stats['streak']}", style=_flame)
-        line.append(f"    {icon('play')} {t('In progress')}: ", style=_color("dim"))
-        line.append(f"{self._in_progress}", style=f"bold {_color('success')}")
+        line.append(f"    {week_label} ", style=muted)
+        line.append(f"{stats['this_week']}", style=f"bold {_color('text')}")
+        if not narrow or width >= 48:
+            line.append(f"    {streak_label} ", style=muted)
+            _flame = ("bold bright_white" if self._pop
+                      else f"bold {_color('warning')}")
+            line.append(f"{stats['streak']}", style=_flame)
+        if not narrow or width >= 62:
+            line.append(f"    {t('In progress').upper()} ", style=muted)
+            line.append(f"{self._in_progress}", style=f"bold {_color('success')}")
+
         # 7-day activity sparkline from the local watch log (no network).
+        _spark = ""
         try:
-            from datetime import timedelta, date as _date
             _today = _date.today()
             _counts = [
                 stats["by_day"].get((_today - timedelta(days=i)).isoformat(), 0)
@@ -364,29 +378,43 @@ class _LiveStatsLine:
             _mx = max(_counts) or 1
             _levels = "▁▂▃▄▅▆▇█"
             _spark = "".join(_levels[min(7, int(c / _mx * 7))] for c in _counts)
-            line.append(f"    {t('Week activity')}: ", style=_color("dim"))
-            line.append(f"{_spark}", style=_color("accent"))
         except Exception:
             pass
+
+        rows = [line]
+        if _spark and narrow:
+            spark = Text("  ")
+            spark.append(f"{t('Week activity').upper()} ", style=muted)
+            spark.append(_spark, style=_color("accent"))
+            rows.append(spark)
+        elif _spark:
+            line.append("    ", style=muted)
+            if wide:
+                line.append(f"{t('Week activity').upper()} ", style=muted)
+            line.append(_spark, style=_color("accent"))
+
         if self._new:
-            line.append(f"    {icon('sparkle')} {t('New releases')}: ",
-                        style=_color("dim"))
-            line.append(f"{self._new}", style=f"bold {_color('accent')}")
-        yield from line.__rich_console__(console, options)
+            new = Text("  ")
+            new.append(f"{t('New releases').upper()} ", style=muted)
+            new.append(f"{self._new}", style=f"bold {_color('accent')}")
+            rows.append(new)
+
+        yield from Group(*rows).__rich_console__(console, options)
 
 
 def _home_dashboard():
+    """The 2.0 home panel: Cinema Noir, editorial, poster-first and local.
+
+    A wordmark, a live stats line, Continue-watching with real progress and
+    the newest releases — all from local data, framed by the rounded
+    NeonPanel border and its travelling amber light.
     """
-    The enriched home 'wow' panel: a greeting, a quick stats line and a
-    Continue-watching carousel with real progress bars + the last title's
-    poster — all from LOCAL data (instant, no network). The poster is drawn
-    only if it's already in the render cache (warmed in the background), so the
-    home stays instant.
-    """
+    from rich import box
     from rich.console import Group
     from rich.table import Table
     from rich.text import Text
     from .themes import color
+    from . import ui
 
     stats = tracker.get_stats()
     history = tracker.get_history()
@@ -394,7 +422,7 @@ def _home_dashboard():
     from . import recent
     _new = recent.get_items()
 
-    # Fresh streak record → the flame pops bright for this home visit.
+    # Fresh streak record → the number pops bright for this home visit.
     try:
         _last = int(tracker.data.get("ui_last_streak") or 0)
     except Exception:
@@ -407,26 +435,26 @@ def _home_dashboard():
         pass
 
     topline = _LiveStatsLine(stats, in_progress, len(_new), streak_pop)
+    parts = [topline]
 
     if history:
         from .player_manager import episode_progress
-        cont = Text(f"  {icon('play')} {t('Continue watching')}",
-                    style=f"bold {color('header')}")
+        parts += [Text(""), ui.section(t("Continue watching"),
+                                       f"{len(history)}")]
 
-        # A borderless grid so title, meta and bar line up in clean columns
-        # instead of the bar floating after ragged-length titles.
+        # A borderless grid so title, meta and bar line up in clean columns.
         grid = Table.grid(padding=(0, 2), expand=False)
-        grid.add_column(no_wrap=True, overflow="ellipsis", max_width=30)  # series
-        grid.add_column(no_wrap=True, overflow="ellipsis", max_width=22)  # meta
-        grid.add_column(no_wrap=True, justify="left")                      # bar
+        grid.add_column(no_wrap=True, overflow="ellipsis", max_width=30)
+        grid.add_column(no_wrap=True, overflow="ellipsis", max_width=22)
+        grid.add_column(no_wrap=True, justify="left")
         for e in history[:4]:
-            s = e.get("series_title", "?")
+            s_ = e.get("series_title", "?")
             se = e.get("season_title", "") or ""
             ep = e.get("episode_title", "") or ""
-            title_cell = Text(f"   {s}", style="white")
+            title_cell = Text(f"   {s_}", style=color("text"))
             meta = " · ".join(x for x in (se, ep) if x)
-            meta_cell = Text(meta, style=color("dim"))
-            pos, dur = episode_progress(s, se, ep)
+            meta_cell = Text(meta, style=color("muted"))
+            pos, dur = episode_progress(s_, se, ep)
             if pos and dur and dur > 0:
                 bar_cell = _progress_bar_text(int(pos / dur * 100), width=12)
             elif pos and pos > 30:
@@ -434,21 +462,46 @@ def _home_dashboard():
             else:
                 bar_cell = Text("")
             grid.add_row(title_cell, meta_cell, bar_cell)
-        inner = Group(topline, Text(""), cont, Text(""), grid)
-        from .neon import NeonPanel
-        return NeonPanel(inner, border_style=color("accent"),
-                         title="FreeFlix", title_style=f"bold {color('accent')}",
-                         subtitle=t('anime · manga · movies · series'),
-                         subtitle_style=color("accent"))
+        parts += [grid]
 
-    nothing = Text(f"  {t('Nothing watched yet — pick a source below to start!')}",
-                   style=color("dim"))
-    inner = Group(topline, Text(""), nothing)
+        if _new:
+            parts += [Text(""), ui.section(t("New releases"), f"{len(_new)}")]
+            for it in _new[:3]:
+                row = Text("   ◆ ", style=color("accent"))
+                row.append(it.get("title", "?"), style=color("text"))
+                ep = it.get("latest_episode") or ""
+                se = it.get("latest_season") or ""
+                if se or ep:
+                    row.append("  " + " · ".join(x for x in (se, ep) if x),
+                               style=color("muted"))
+                parts.append(row)
+    else:
+        parts += [
+            Text(""),
+            ui.section(t("Start watching"), ""),
+            Text(f"   {t('Nothing watched yet — pick a source below to start!')}",
+                 style=color("muted")),
+        ]
+
     from .neon import NeonPanel
-    return NeonPanel(inner, border_style=color("accent"),
-                     title="FreeFlix", title_style=f"bold {color('accent')}",
-                     subtitle=t('anime · manga · movies · series'),
-                     subtitle_style=color("accent"))
+    return NeonPanel(
+        Group(*parts),
+        # Frame colour matches the top banner (border_soft); the interior
+        # keeps Cinema Noir's deep surface so only the frame and the amber
+        # light define the panel.
+        border_style=color("surface_alt"),
+        static_edge_style=color("border_soft"),
+        light_style=color("accent"),
+        title=ui.wordmark(),
+        title_style=f"bold {color('text')}",
+        subtitle=t('anime · manga · movies · series'),
+        subtitle_style=color("muted"),
+        animate=True,
+        box_style=box.ROUNDED,
+        cell_speed=30.0,
+        pad_y=0,
+        pad_x=1,
+    )
 
 
 def _theme_preview_panel(theme: dict, title: str):
@@ -459,16 +512,20 @@ def _theme_preview_panel(theme: dict, title: str):
     """
     from rich.panel import Panel
     from rich.text import Text
+    text = theme.get("text") or theme.get("header", "white")
+    muted = theme.get("muted") or theme.get("dim", "dim")
     body = Text()
-    body.append("  ❯ Menu item (selected)\n", style=f"bold {theme['accent']} reverse")
-    body.append("    Another item\n", style="white")
+    body.append("  ▸ ▌ Menu item (selected)\n", style=f"bold {text}")
+    body.append("    Another item\n", style=text)
+    body.append("  ", style="")
+    body.append("─" * 30 + "\n", style=theme.get("border_soft") or theme.get("border", "dim"))
     body.append(f"  {t('recommended')} ✓  ", style=f"bold {theme['success']}")
     body.append("warning  ", style=theme["warning"])
     body.append("error  ", style=theme["error"])
     body.append("info\n", style=theme["info"])
     body.append("  ", style="")
     body.append("▰" * 6, style=f"bold {theme['accent']}")
-    body.append("▱" * 4, style=theme["dim"])
+    body.append("▱" * 4, style=muted)
     body.append("  62%\n", style=theme["info"])
     body.append("  [VF] ", style=f"bold {theme['success']}")
     body.append("[VOSTFR] ", style=f"bold {theme['info']}")

@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.0.0 — Cinéma Noir
+
+- **Nouvelle identité visuelle** : **Cinema Noir** devient le thème par
+  défaut. Ivoire chaud, ambre, bleu poussière sur fond noir. Les thèmes clairs
+  pour terminaux à fond blanc ont été retirés ; les anciens thèmes sombres
+  (Gruvbox, Dracula, Catppuccin, Nord…) restent disponibles.
+- **Système de design 2.0** : tokens sémantiques (`surface`, `text`, `muted`,
+  `border_soft`, `selection`…) et primitives réutilisables (`ui.wordmark`,
+  `ui.rule`, `ui.section`, `ui.panel`) au lieu de couleurs codées en dur.
+- **Wordmark compact** : « FreeFlix » en deux tons, sans lettres espacées.
+  En Cinema Noir il garde en permanence les couleurs de la palette
+  (ambre `#E6B45E` + ivoire `#F4EEE2`), et non un simple noir/blanc ; les
+  autres thèmes suivent leur propre accent. La lumière qui passe sur le
+  cadre ne doit pas le repeindre en blanc.
+- **Accueil éditorial** : statistiques vivantes, section « Continuer »,
+  « Nouveautés » et barres de progression dans le rectangle arrondi de
+  l'accueil. Le cadre reprend exactement la couleur des deux traits qui
+  encadrent le bandeau du haut (`border_soft`, gris-bleu #2C2C36) sur le
+  thème Cinema Noir ; la lumière ambre le parcourt par-dessus. Le panneau est
+  redessiné à 30 fps (une cellule de bord par image) pour un déplacement
+  fluide au lieu de sauts de plusieurs cellules. Les titres de section
+  gardent leur casse naturelle (« Reprendre », « Nouveautés »).
+- **Menus et fiches** : curseur `▸ ▌` (rail ambre, texte ivoire, plus de
+  reverse plein écran), en-têtes filaires, métadonnées discrètes, espacement
+  cohérent ; le poster reste l'élément central.
+- **Accessibilité** : contrastes vérifiés, aucune information portée par la
+  couleur seule, animations respectant `reduce motion`, affichage testé en
+  80×24 sur fond noir.
+- **Release GitHub** : les notes incluent désormais les installateurs
+  Linux/macOS et Windows en une ligne.
+- **Tests** : 533 tests au vert, ruff OK, imports Python 3.9 OK.
+
 ## 1.16.11
 
 - **Retour du planning instantané** : après avoir regardé un épisode lancé

@@ -5,17 +5,42 @@ Each theme maps a set of semantic ROLES to Rich colour strings (hex).
 cli_utils reads the active theme via `color(role)` so every header,
 prompt, message and menu picks up the user's chosen palette.
 
-Roles :
-  accent   – signature colour : selection highlight, prompts, borders
-  header   – header panel text
+Roles (2.0 design tokens) :
+  accent / accent_soft – signature colour and its quiet companion
+  header / text        – primary type
+  border / border_soft – structural hairlines
+  surface / surface_alt – optional panel fills (None = terminal background)
+  selection / selection_text – cursor rail colours
   success / error / info / warning – message colours
-  dim      – muted text (arrows, hints)
+  dim / muted          – secondary text (arrows, hints, metadata)
 """
 
 THEMES = {
-    # The original FreeFlix look (cyan/green).
+    # ── FreeFlix 2.0 signature ────────────────────────────────────
+    # Cinema Noir: warm ivory + amber on near-black, thin borders,
+    # calm and editorial. The default from 2.0 on.
+    "noir": {
+        "label": "Cinema Noir",
+        "accent": "#E6B45E",          # amber
+        "accent_soft": "#6B5630",
+        "header": "bold #F4EEE2",     # ivory
+        "text": "#F4EEE2",
+        "border": "#3A3A46",
+        "border_soft": "#2C2C36",
+        "surface": "#121216",
+        "surface_alt": "#1A1A21",
+        "selection": "#2A2117",
+        "selection_text": "#FFF4D6",
+        "success": "#9CCB8A",
+        "error": "#D96C75",
+        "info": "#7FA8B8",            # dusty blue
+        "warning": "#E2C07A",
+        "dim": "#8B8792",
+        "muted": "#8B8792",
+    },
+    # Legacy neon look (pre-2.0 default).
     "default": {
-        "label": "Default (cyan)",
+        "label": "Legacy Cyan (pre-2.0)",
         "accent": "bright_cyan",
         "header": "bold white",
         "border": "bright_cyan",
@@ -104,15 +129,6 @@ THEMES = {
         "success": "#859900", "error": "#dc322f", "info": "#268bd2",
         "warning": "#b58900", "dim": "#586e75",
     },
-    # Catppuccin Latte — the LIGHT palette. Header text is DARK so it stays
-    # readable on a light-background terminal (the default theme's "bold white"
-    # header is invisible there).
-    "latte": {
-        "label": "Catppuccin Latte (light)",
-        "accent": "#1e66f5", "header": "bold #4c4f69", "border": "#8839ef",
-        "success": "#40a02b", "error": "#d20f39", "info": "#04a5e5",
-        "warning": "#df8e1d", "dim": "#9ca0b0",
-    },
     # High-contrast monochrome (accessibility / e-ink).
     "mono": {
         "label": "Monochrome",
@@ -122,7 +138,7 @@ THEMES = {
     },
 }
 
-DEFAULT_THEME = "default"
+DEFAULT_THEME = "noir"
 
 
 def list_themes():
@@ -130,31 +146,12 @@ def list_themes():
     return [(k, v["label"]) for k, v in THEMES.items()]
 
 
-def _terminal_is_light():
-    """True when the terminal reports a LIGHT background via COLORFGBG.
-
-    COLORFGBG is "<fg>;<bg>" with ANSI indices (e.g. "15;0" = light text on
-    black, "0;15" = dark text on white). Background index >= 7 means light.
-    Returns None when unknown."""
-    import os
-    raw = os.environ.get("COLORFGBG", "").strip()
-    if not raw:
-        return None
-    try:
-        bg = int(raw.split(";")[-1])
-    except (ValueError, IndexError):
-        return None
-    return bg >= 7
-
-
 def active_theme() -> dict:
     """
     The user's current theme (falls back to default), with an optional custom
     accent colour overlaid on top (Settings → Appearance → Theme → accent).
 
-    Smart default: when the user never chose a theme and the terminal reports
-    a LIGHT background, use the light palette automatically — a white-on-white
-    UI would otherwise be unreadable. An explicit theme always wins.
+    2.0 ships dark palettes only: Cinema Noir and the legacy dark themes.
     """
     name = DEFAULT_THEME
     accent = None
@@ -164,8 +161,6 @@ def active_theme() -> dict:
         accent = tracker.get_custom_accent()
     except Exception:
         pass
-    if name == DEFAULT_THEME and _terminal_is_light():
-        name = "latte"
     theme = dict(THEMES.get(name, THEMES[DEFAULT_THEME]))
     if accent:
         theme["accent"] = accent
@@ -183,7 +178,29 @@ def preview_theme(name: str, accent: str = None) -> dict:
     return theme
 
 
+_ROLE_FALLBACK = {
+    "text": "header",
+    "muted": "dim",
+    "border_soft": "border",
+    "surface": None,       # leave the terminal background
+    "surface_alt": None,
+    "selection": "accent",
+    "selection_text": "black",
+    "accent_soft": "accent",
+}
+
+
 def color(role: str) -> str:
-    """Return the Rich colour string for a semantic role in the active theme."""
+    """Return the Rich colour string for a semantic role in the active theme.
+
+    Older palette packs only define the original 7 roles; the 2.0 roles
+    (surface/text/muted/selection…) fall back sensibly so third-party or
+    user-added themes keep working.
+    """
     theme = active_theme()
-    return theme.get(role, THEMES[DEFAULT_THEME].get(role, "white"))
+    if role in theme and theme[role] is not None:
+        return theme[role]
+    fallback = _ROLE_FALLBACK.get(role)
+    if fallback is None:
+        return "default"  # terminal background / default foreground
+    return theme.get(fallback, THEMES[DEFAULT_THEME].get(fallback, "white"))

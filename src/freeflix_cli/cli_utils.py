@@ -1514,7 +1514,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             add(_header_panel(header))
         if _crumbs:
             add(_crumb_line(console.size.width), ("crumb",))
-        add(Text(f"\n❯ {iconify(prompt)}", style=f"bold {color('accent')}"))
+        add(Text(f"\n❯ {iconify(prompt)}", style=f"bold {color('text')}"))
         # Active filter line.
         if flt["on"]:
             add(Text(f"  / {flt['q']}▏", style=f"bold {color('info')}"),
@@ -1554,13 +1554,13 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                 row.append("▌ ", style=color("accent")
                            if bright else color("dim"))
                 row.append_text(_hl_match(option, fq,
-                                          base=f"bold {color('accent')}"))
+                                          base=f"bold {color('text')}"))
                 add(row, ("item", pos), height=1)
             else:
                 # Watched rows (✓ badge) render dim so the eye lands on what's
                 # left to watch ; the cursor row always stays bright. Badges
                 # keep their own colours either way.
-                base = color("dim") if "✓" in option else ""
+                base = color("dim") if "✓" in option else color("text")
                 un = Text("    ")
                 un.append_text(_hl_match(option, fq, base=base))
                 add(un, ("item", pos), height=1)
@@ -1600,9 +1600,14 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     # breathing cursor, the toast rail and the status line actually update
     # while the menu sits idle (previously the same frozen renderable was
     # repainted, so a toast posted by a background job only appeared after a
-    # keypress). Refresh stays modest to keep big lists cheap.
+    # keypress). Refresh stays modest for big lists, but an animated top panel
+    # (the home dashboard's travelling light) asks for 30 fps so it glides
+    # instead of stepping cell by cell.
+    screen_fps = 8
+    if top is not None:
+        screen_fps = max(screen_fps, int(getattr(top, "animation_fps", 0) or 0))
     live_kwargs = (
-        dict(console=console, refresh_per_second=8, screen=True,
+        dict(console=console, refresh_per_second=screen_fps, screen=True,
              get_renderable=generate_renderable)
         if use_screen
         else dict(refresh_per_second=6, transient=True,
@@ -2132,7 +2137,7 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         # is pre-fitted to the column width by _fit_w, so one row each. This
         # avoids calling Rich's renderer for every hover repaint (the old
         # per-line measurement was the main source of mouse lag).
-        add(Text(f"\n {head}", style=f"bold {color('accent')}"), height=2)
+        add(Text(f"\n  {head}", style=f"bold {color('text')}"), height=2)
         add(counter, ("scroll", counter.plain))
         if s > 0:
             add(Text("  ↑ …", style=color("dim")), ("page", "up"))
@@ -2140,14 +2145,12 @@ def select_with_preview(labels, prompt, previews, default_index=0):
             i = vis[pos]
             lab = _fit_w(iconify(labels[i]), lw - 5)
             if pos == sel:
-                pad = max(1, lw - cell_len(f"  ▌ {lab}") - 1)
-                srow = Text("  ▌ ", style=f"bold {color('accent')} reverse")
-                srow.append_text(_styled_option(lab, base=f"bold {color('accent')} reverse"))
-                srow.append(" " * pad, style=f"bold {color('accent')} reverse")
+                srow = Text("  ▌ ", style=f"bold {color('accent')}")
+                srow.append_text(_styled_option(lab, base=f"bold {color('text')}"))
                 add(srow, ("item", pos))
             else:
                 urow = Text("    ")
-                urow.append_text(_styled_option(lab, base="white"))
+                urow.append_text(_styled_option(lab, base=color("text")))
                 add(urow, ("item", pos))
         if end < len(vis):
             add(Text("  ↓ …", style=color("dim")), ("page", "down"))
@@ -2156,12 +2159,12 @@ def select_with_preview(labels, prompt, previews, default_index=0):
         # Always-visible mouse target: clicking it is exactly Esc/Back.
         back = Text("  ")
         if on_back:
-            back.append("▌ ", style=f"bold {color('accent')} reverse")
+            back.append("▌ ", style=f"bold {color('accent')}")
             back.append(f"{icon('back')} {_t('Back')}",
-                        style=f"bold {color('accent')} reverse")
+                        style=f"bold {color('text')}")
         else:
-            back.append(icon("back"), style=color("dim"))
-            back.append(f" {_t('Back')}", style=color("dim"))
+            back.append(icon("back"), style=color("muted"))
+            back.append(f" {_t('Back')}", style=color("muted"))
         add(back, ("back",))
         return lines, tags
 
@@ -2252,11 +2255,11 @@ def select_with_preview(labels, prompt, previews, default_index=0):
             body = [_poster_block(cover, p_cols, p_rows)]
 
         if pv.get("title"):
-            body.append(Text(f"\n{pv['title']}", style=f"bold {color('header')}",
+            body.append(Text(f"\n{pv['title']}", style=f"bold {color('text')}",
                              justify="center"))
         for ln in pv.get("lines", []):
             if ln:
-                body.append(Text(ln, style=color("dim"), justify="center"))
+                body.append(Text(ln, style=color("muted"), justify="center"))
 
         # Overlay keeps the poster at the TOP (deterministic row) ; blocks stay
         # vertically centered as before.
@@ -2812,14 +2815,12 @@ def skeleton(label: str, lines: int = 4):
 
 
 def _header_panel(text: str) -> Panel:
-    """Build the decorative header panel (shared so the static print and the
-    in-Live header stay pixel-identical and reflow the same way)."""
+    """Build the 2.0 header: a hairline banner, not a heavy neon box."""
     from rich import box as _box
     return Panel(
-        Text(iconify(text), style=color("header"), justify="center"),
-        style=color("accent"),
-        border_style=color("border"),
-        box=_box.ROUNDED,
+        Text(iconify(text), style=color("text"), justify="center"),
+        border_style=color("border_soft"),
+        box=_box.HORIZONTALS,
         padding=(0, 2),
     )
 
