@@ -1,0 +1,36 @@
+name: macOS
+
+# macOS is tested separately: the hosted macos-latest runners are often
+# unavailable (job never acquired), which must not turn every push red.
+# Run it manually before a release, or let the weekly schedule catch drift.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'   # Monday 04:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint + tests (macos-latest, py3.12)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Ruff
+        run: uvx ruff==0.17.3 check --select E,W,F,B --ignore E501,E402 src/freeflix_cli/
+      - name: Import every module
+        run: >
+          uv run --with . python -c "import pkgutil,importlib,freeflix_cli;
+          [importlib.import_module(m.name) for m in
+          pkgutil.walk_packages(freeflix_cli.__path__,'freeflix_cli.')];
+          print('all modules import OK')"
+      - name: Pytest
+        run: >
+          uv run --with . --with pytest --with pytest-cov --with pytest-timeout
+          -m pytest -q --timeout=120

@@ -77,6 +77,7 @@ def test_other_providers_are_ignored(monkeypatch):
              "season_title": "S1", "episode_title": "E1",
              "series_url": "https://x", "season_url": "https://x"}]
     monkeypatch.setattr(tracker, "get_history", lambda: hist)
+    monkeypatch.setattr(tracker, "get_followed_series", lambda: [])
     monkeypatch.setattr(tracker, "get_seen_releases", lambda: set())
     recent._state["items"] = []
     recent._state["ready"] = False

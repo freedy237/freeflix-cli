@@ -1,7 +1,9 @@
 name: CI
 
-# Lint + tests on every push and PR, on Linux, Windows AND macOS, so
-# regressions (e.g. the Windows arrow-key breakage) are caught before release.
+# Lint + tests on every push and PR, on Linux and Windows. macOS lives in
+# macos.yml: GitHub's macOS runners are frequently unavailable, and having
+# them in this required matrix turned green code into red runs. macOS is still
+# tested on demand / weekly.
 on:
   push:
     branches: [main]
@@ -26,8 +28,6 @@ jobs:
         os: [ubuntu-22.04, windows-latest]
         python-version: ['3.9', '3.12']
         include:
-          - os: macos-latest
-            python-version: '3.12'
           - os: ubuntu-22.04
             python-version: '3.11'
           - os: ubuntu-22.04

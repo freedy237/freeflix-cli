@@ -221,3 +221,34 @@ def test_ffprobe_quality_flags_short_direct_mp4(monkeypatch):
     q = pm._ffprobe_quality("https://cdn/ad.mp4", {})
     assert q["height"] == 720 and q["duration"] == 30.0
     assert pm.is_likely_ad_placeholder(q) is True
+
+
+def test_proxy_download_url_carries_token_and_hides_cookies(monkeypatch):
+    """Vidzy/fsvid downloads must use the local proxy WITH ?k= and ?h=.
+
+    Regression found after 2.1: the download URL was built without the
+    capability token, so the proxy answered 403 while streaming worked.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from freeflix_cli import player_manager as pm
+    from freeflix_cli import proxy
+
+    monkeypatch.setattr(proxy, "PROXY_URL", "http://127.0.0.1:9999")
+    monkeypatch.setattr(proxy, "PROXY_TOKEN", "tok-123")
+    monkeypatch.setattr(proxy, "ensure_started", lambda: None)
+    headers = {"Referer": "https://vidzy.cc/", "Cookie": "vz_ok=secret"}
+    url = pm._proxy_download_url(
+        "https://cdn.vidzy.cc/master.m3u8?t=1", headers, {"type": "fsvid"}, False)
+    q = parse_qs(urlparse(url).query)
+    assert q["k"] == ["tok-123"]
+    assert "h" in q and "headers" not in q
+    assert "vz_ok" not in url and "secret" not in url
+    assert url.startswith("http://127.0.0.1:9999/")
+
+
+def test_proxy_download_url_leaves_plain_hosts_alone():
+    from freeflix_cli import player_manager as pm
+
+    plain = "https://cdn.example/master.m3u8"
+    assert pm._proxy_download_url(plain, {}, {}, False) == plain

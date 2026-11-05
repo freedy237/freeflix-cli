@@ -1898,6 +1898,38 @@ def _purge_download_temp(temp_dir: str, keep_incomplete: bool = True) -> None:
             pass
 
 
+def _proxy_download_url(stream_url: str, headers: dict, player_config: dict,
+                        is_mp4: bool) -> str:
+    """Route a fingerprint-gated HLS download through the local proxy.
+
+    Vidzy/fsvid/uqload reject yt-dlp's TLS fingerprint (or serve it a 30 s ad)
+    even though the same URL streams fine through curl_cffi. The proxy URL must
+    carry the per-process capability token AND the opaque header handle: a bare
+    ``?url=`` is rejected with 403 since 2.1.
+    """
+    try:
+        from urllib.parse import quote, urlparse
+        from . import proxy
+
+        host = (urlparse(stream_url).hostname or "").lower()
+        needs_proxy = (
+            (player_config or {}).get("type") in ("fsvid", "uqload")
+            or any(h in host for h in ("vidzy", "fsvid", "uqload"))
+        )
+        if not (".m3u8" in stream_url.lower() and needs_proxy):
+            return stream_url
+        proxy.ensure_started()
+        if not proxy.PROXY_URL:
+            return stream_url
+        endpoint = _proxy_endpoint(stream_url, player_config or {}, bool(is_mp4))
+        token = proxy._headers_token(headers or {})
+        handle = f"&h={token}" if token else ""
+        return (f"{proxy.PROXY_URL}/{endpoint}?url={quote(stream_url)}"
+                f"{handle}&k={proxy.PROXY_TOKEN}")
+    except Exception:
+        return stream_url
+
+
 def _download_headers(headers: dict, referer: str = "",
                       user_agent: str = "") -> dict:
     """Sanitised headers for yt-dlp/aria2c (cookies, signed-CDN tokens…)."""
@@ -2920,26 +2952,8 @@ def play_video(
             # our curl_cffi proxy. Route the download through the SAME local
             # proxy endpoint, so yt-dlp talks to localhost while the proxy
             # fetches with the browser fingerprint and real headers/cookies.
-            dl_url = stream_url
-            try:
-                from urllib.parse import urlparse, quote
-                dl_host = (urlparse(stream_url).hostname or "").lower()
-                if ".m3u8" in stream_url.lower() and (
-                    player_config.get("type") in ("fsvid", "uqload")
-                    or any(h in dl_host for h in ("vidzy", "fsvid", "uqload"))
-                ):
-                    proxy.ensure_started()
-                    if proxy.PROXY_URL:
-                        endpoint = _proxy_endpoint(
-                            stream_url, player_config, bool(is_mp4)
-                        )
-                        dl_url = (
-                            f"{proxy.PROXY_URL}/{endpoint}"
-                            f"?url={quote(stream_url)}"
-                            f"&headers={quote(json.dumps(headers))}"
-                        )
-            except Exception:
-                dl_url = stream_url
+            dl_url = _proxy_download_url(
+                stream_url, headers, player_config, bool(is_mp4))
             success = _download_stream(
                 stream_url=dl_url,
                 referer=referer,

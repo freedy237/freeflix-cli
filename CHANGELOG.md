@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.2
+
+- **Téléchargements Vidzy / fsvid / uqload réparés** : l'URL passée à yt-dlp
+  traverse toujours le proxy local curl_cffi (fingerprint navigateur), mais
+  elle porte maintenant le **jeton de capacité `?k=`** et le **jeton
+  d'en-têtes `?h=`** ajoutés en 2.1. Sans eux, le proxy répondait 403 : le
+  streaming fonctionnait, le téléchargement échouait.
+- Vérifié en réel sur FROM S1E1 : fsvid et vidzy résolus, yt-dlp natif a
+  téléchargé 34/316 fragments via le proxy sans erreur.
+- Test du flux « Nouveautés » isolé des séries réellement suivies (plus de
+  dépendance à l'état local de la machine).
+- **CI macOS séparée** : les runners macOS GitHub sont souvent indisponibles
+  (« job was not acquired »), ce qui rendait la CI rouge sans bug de code.
+  macOS passe dans `macos.yml` (manuel + hebdomadaire) ; la CI de push reste
+  Linux + Windows.
+- 588 tests au vert, ruff OK. Aucun changement d'interface : le code écran
+  reste celui de la 2.1.1.
+
 ## 2.1.1
 
 - **Binaire Windows réparé** : `--doctor` (et le reste de l'interface) force
