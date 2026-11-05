@@ -47,8 +47,10 @@ def test_ci_has_timeout_coverage_and_installer_checks():
     assert "--timeout=120" in yml
     assert "--cov-fail-under=40" in yml
     assert "PowerShell syntax" in yml
-    assert "macos-latest" in yml
     assert "ruff==0.17.3" in yml
+    # macOS is a separate, non-blocking workflow (runners are often unavailable).
+    macos = _read(".github/workflows/macos.yml")
+    assert "macos-latest" in macos and "workflow_dispatch:" in macos
 
 
 def test_installer_scripts_are_tolerant_and_verified():
