@@ -130,7 +130,7 @@ def _choose_player(current: str, allow_cancel: bool = False):
         print_warning(t("No video player found (mpv or VLC)."))
         return None
     labels = ["mpv" if n == "mpv" else "VLC" for n in avail]
-    options = [f"{icon('play')} {label}" for label in labels]
+    options = list(labels)
     if allow_cancel:
         options.append(t("← Back"))
     default = labels.index(current) if current in labels else 0
