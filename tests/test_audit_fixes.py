@@ -252,3 +252,37 @@ def test_proxy_download_url_leaves_plain_hosts_alone():
 
     plain = "https://cdn.example/master.m3u8"
     assert pm._proxy_download_url(plain, {}, {}, False) == plain
+
+
+def test_anime4k_is_opt_in_and_osd_hint_installed(monkeypatch, tmp_path):
+    from freeflix_cli import setup_assistant
+
+    (tmp_path / "mpv.conf").write_text(
+        'glsl-shaders="~~/shaders/Anime4K_A.glsl:~~/shaders/Anime4K_B.glsl"\n'
+        "cache=yes\n"
+        "[anime4k-skip-high-res]\n"
+        "profile-cond=p[\"video-params/h\"] >= 1080\n"
+        "profile-restore=copy-equal\n"
+        "glsl-shaders=\n", encoding="utf-8")
+    (tmp_path / "input.conf").write_text(
+        'CTRL+1 change-list glsl-shaders set "~~/shaders/Anime4K_A.glsl:~~/shaders/Anime4K_B.glsl"\n',
+        encoding="utf-8")
+    monkeypatch.setattr(setup_assistant, "get_mpv_config_dir", lambda: tmp_path)
+    setup_assistant._fix_anime4k_input_conf()
+    mpv = (tmp_path / "mpv.conf").read_text(encoding="utf-8")
+    assert "Anime4K_A" not in mpv
+    assert "anime4k-skip-high-res" not in mpv
+    assert "osd-playing-msg" in mpv
+    assert "CTRL+1" in mpv
+    inp = (tmp_path / "input.conf").read_text(encoding="utf-8")
+    assert "glsl-shaders set" not in inp
+    assert "append" in inp
+
+
+def test_mpv_never_reads_global_config(monkeypatch, tmp_path):
+    from freeflix_cli import player_manager as pm
+
+    monkeypatch.setattr(pm, "get_freeflix_mpv_config_dir", lambda: str(tmp_path))
+    assert pm._mpv_config_args() == ["--no-config"]
+    (tmp_path / "mpv.conf").write_text("cache=yes\n", encoding="utf-8")
+    assert pm._mpv_config_args() == [f"--config-dir={tmp_path}"]

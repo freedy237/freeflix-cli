@@ -603,6 +603,7 @@ def _enable_windows_vt() -> bool:
         STD_INPUT_HANDLE = -10
         ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
         ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
+        ENABLE_EXTENDED_FLAGS = 0x0080
 
         h = k32.GetStdHandle(STD_OUTPUT_HANDLE)
         if not h or h == wintypes.HANDLE(-1).value:
@@ -626,9 +627,11 @@ def _enable_windows_vt() -> bool:
         if not k32.GetConsoleMode(hi, ctypes.byref(imode)):
             return _VT_READY
         if not (imode.value & ENABLE_VIRTUAL_TERMINAL_INPUT):
-            if not k32.SetConsoleMode(
-                hi, imode.value | ENABLE_VIRTUAL_TERMINAL_INPUT
-            ):
+            # Windows requires extended flags (and quick-edit off) for VT
+            # input; without it msvcrt never sees SGR mouse reports.
+            new_mode = (imode.value | ENABLE_VIRTUAL_TERMINAL_INPUT
+                        | ENABLE_EXTENDED_FLAGS)
+            if not k32.SetConsoleMode(hi, new_mode):
                 return _VT_READY
 
         _VT_READY = True
@@ -647,9 +650,13 @@ def _mouse_write(seq: str) -> None:
 
 
 def _mouse_off() -> None:
+    """Always send the disable sequence.
+
+    The terminal (notably Windows VT input) can still be in mouse mode even
+    when our flag says otherwise after a nested Live/reader; skipping the OFF
+    sequence leaves the user's terminal printing SGR reports.
+    """
     global _mouse_active
-    if not _mouse_active:
-        return
     _mouse_active = False
     _mouse_write(_MOUSE_OFF)
 
@@ -739,7 +746,39 @@ def _cursor_row(timeout: float = 0.15):
     """
     import sys
     try:
-        if os.name == "nt" or not sys.stdin.isatty():
+        if os.name == "nt":
+            # Windows has no DSR/select; GetConsoleScreenBufferInfo gives the
+            # real cursor row, so inline menus keep accurate click coordinates.
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                class COORD(ctypes.Structure):
+                    _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+                class SMALL_RECT(ctypes.Structure):
+                    _fields_ = [("Left", wintypes.SHORT),
+                                ("Top", wintypes.SHORT),
+                                ("Right", wintypes.SHORT),
+                                ("Bottom", wintypes.SHORT)]
+
+                class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+                    _fields_ = [("dwSize", COORD),
+                                ("dwCursorPosition", COORD),
+                                ("wAttributes", wintypes.WORD),
+                                ("srWindow", SMALL_RECT),
+                                ("dwMaximumWindowSize", COORD)]
+
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                handle = k32.GetStdHandle(-11)
+                info = CONSOLE_SCREEN_BUFFER_INFO()
+                if not k32.GetConsoleScreenBufferInfo(
+                        handle, ctypes.byref(info)):
+                    return None
+                return int(info.dwCursorPosition.Y) + 1
+            except Exception:
+                return None
+        if not sys.stdin.isatty():
             return None
         import select as _sel
         import termios
@@ -1539,7 +1578,8 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
                      top=None, flush_input: bool = False,
                      esc_selects_last: bool = True,
                      clear_on_back: bool = True,
-                     inline: bool = False) -> int:
+                     inline: bool = False,
+                     mouse_motion: bool = True) -> int:
     """
     Display an interactive menu where users can navigate with arrow keys.
 
@@ -1560,6 +1600,9 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
             (default). Set False for a sub-menu that returns to its parent
             inside the same detail view (seasons → languages → episodes), so
             the poster and context stay on screen until the series is left.
+        mouse_motion: False keeps click selection but ignores hover/motion —
+            useful for short quality lists where a moving mouse would change
+            the highlighted row by accident.
 
     Returns:
         Index of the selected option (0-based)
@@ -1752,7 +1795,7 @@ def select_from_list(options: list[str], prompt: str, default_index: int = 0,
     if flush_input:
         # Kept for compat — already covered by the settled flush above.
         drain_stdin()
-    with mouse_tracking():
+    with mouse_tracking(all_motion=mouse_motion):
         with Live(generate_renderable(), **live_kwargs) as live:
             while result is None:
                 key = _read_menu_key()

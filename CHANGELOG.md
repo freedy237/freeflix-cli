@@ -1,5 +1,54 @@
 # Changelog
 
+## 2.2.2
+
+- Menus **qualité** et **choix du lecteur** en plein écran : souris alignée
+  (survol + clic) sur Linux et Windows.
+- **Anime4K désactivé par défaut** : activation explicite par l'utilisateur
+  (`CTRL+1` / `CTRL+2`, `CTRL+0` pour couper), conseil affiché en bas de mpv
+  pendant 5 s, migration des anciennes configs sans toucher aux shaders perso.
+- Entrée du menu principal renommée **Films, Séries & Anime** (traduite) ;
+  la liste des providers et son fonctionnement restent inchangés.
+- **Configs lecteurs isolées** : mpv utilise toujours son dossier dédié
+  (`--config-dir`, sinon `--no-config`) ; VLC est lancé avec
+  `--ignore-config --no-media-library --no-plugins-cache`. Les réglages
+  personnels de la machine ne sont ni lus ni modifiés.
+- Derniers correctifs Windows/mise à jour (ancrage console, VT input, redémarrage
+  par nouveau processus, recherche uv/pipx hors PATH).
+- 602 tests au vert, ruff OK.
+
+## 2.2.1
+
+- **Compatibilité Windows** :
+  - ancrage souris des menus inline via `GetConsoleScreenBufferInfo`
+    (fini les clics décalés) ;
+  - activation VT input avec `ENABLE_EXTENDED_FLAGS` pour que Windows
+    Terminal transmette vraiment les rapports SGR ;
+  - écran des qualités en plein écran, ancrage fiable sur tous les OS ;
+  - redémarrage après mise à jour via un nouveau processus sur Windows
+    (`os.execv` n'est pas fiable avec un interpréteur Python verrouillé).
+- **Mises à jour** : correction de la comparaison de version en mode
+  source, détection `uv` resserrée, commande de mise à jour adaptée à
+  l'installeur réel (uv/pipx/pip).
+- VLC : lecture par **ffmpeg → TS** comme mpv (plus de fin de playlist
+  HLS), timestamps normalisés, audio calé.
+- 600 tests + tests Windows dédiés au vert, ruff OK.
+
+## 2.2.0
+
+- **Nouvel onglet Match** dans le menu principal : matchs de football du
+  catalogue YacineTV, à l'heure du Cameroun (UTC+1), avec badge `LIVE`,
+  à venir et terminés.
+- Qualités HD/SD/Low + **Auto** (meilleure disponible), choix du lecteur
+  **mpv / VLC** mémorisé, souris en clic seul sur les qualités.
+- Noms d'équipes et de compétitions **traduits dynamiquement** en français
+  ou anglais (cache local, aucun mapping en dur).
+- Flux live servis par un mini-proxy HLS local : en-têtes UTF-8 exacts et
+  segments `.php/.pdf` réécrits pour mpv/VLC.
+- mpv en direct : cache mémoire 3 s, démarrage au bord du live, plus de
+  cache disque de 30 min.
+- 598 tests au vert, ruff OK.
+
 ## 2.1.2
 
 - **Téléchargements Vidzy / fsvid / uqload réparés** : l'URL passée à yt-dlp

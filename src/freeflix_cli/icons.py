@@ -64,6 +64,7 @@ _EMOJI = {
     "arrow_down": "⬇",
     "books": "📚",
     "package": "📦",
+    "football": "⚽",
 }
 
 # Semantic name -> Nerd Font codepoint (Font Awesome range, present in every
@@ -120,6 +121,7 @@ _NERD = {
     "arrow_down": chr(0xF063),  # arrow-down (badges keep ✓/⬇/▸ readout)
     "books": chr(0xF02D),     # book
     "package": chr(0xF187),   # archive
+    "football": chr(0xF1E3),  # Font Awesome soccer ball (same size as peers)
 }
 
 

@@ -176,3 +176,21 @@ def test_prompt_and_update_declined_does_nothing(monkeypatch):
     monkeypatch.setattr(uc, "reload_process", lambda: order.append("reload"))
     assert uc.prompt_and_update() is False
     assert order == ["ask"]
+
+
+def test_reload_process_windows_spawns_and_exits(monkeypatch):
+    monkeypatch.setattr(uc.os, "name", "nt")
+    monkeypatch.setattr(uc.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(uc.sys, "executable", r"C:\Python\python.exe")
+    monkeypatch.setattr(uc.sys, "argv", ["freeflix", "--doctor"])
+    seen = []
+    monkeypatch.setattr(uc.subprocess, "Popen",
+                        lambda argv, **kw: seen.append(argv))
+    try:
+        uc.reload_process()
+    except SystemExit as exc:
+        assert exc.code == 0
+    else:
+        raise AssertionError("reload_process must exit on Windows")
+    assert seen == [[r"C:\Python\python.exe", "-m", "freeflix_cli",
+                     "--doctor"]]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import shutil
 import platform
 import os
@@ -37,6 +38,18 @@ DEFAULT_USER_AGENT = (
 # Set after each mpv playback (via IPC) : did the video reach end-of-file
 # (finished) or did the user quit? Consumed by the auto-play-next / binge flow.
 _LAST_PLAYBACK = {"finished": False}
+_VLC_KEEPALIVE = []  # proxies kept alive when VLC detaches its window
+
+
+def _stop_vlc_keepalive() -> None:
+    while _VLC_KEEPALIVE:
+        try:
+            _VLC_KEEPALIVE.pop().stop()
+        except Exception:
+            pass
+
+
+atexit.register(_stop_vlc_keepalive)
 
 
 def last_playback_finished_naturally() -> bool:
@@ -298,11 +311,20 @@ def _mpv_resilience_args() -> list:
 
 
 def _mpv_config_args() -> list:
-    """Return ['--config-dir=...'] if the FreeFlix mpv config dir exists."""
+    """Isolate mpv from the machine's global ~/.config/mpv.
+
+    The tuned FreeFlix config lives in a dedicated dir. If it is missing we
+    pass --no-config rather than letting mpv load the user's global config
+    (which would silently change shaders/cache/subtitles for FreeFlix).
+    """
     cfg = get_freeflix_mpv_config_dir()
-    if os.path.isdir(cfg) and os.path.isfile(os.path.join(cfg, "mpv.conf")):
+    try:
+        os.makedirs(cfg, exist_ok=True)
+    except OSError:
+        pass
+    if os.path.isfile(os.path.join(cfg, "mpv.conf")):
         return [f"--config-dir={cfg}"]
-    return []
+    return ["--no-config"]
 
 
 def _proxy_request_headers(url: str, player_config: dict, is_direct: bool,
@@ -2564,7 +2586,7 @@ def _proxy_endpoint(stream_url: str, player_config: dict, is_mp4: bool) -> str:
 
 
 def _play_dash_mpv(player_executable, stream_url, headers, title,
-                   subtitle_path=None):
+                   subtitle_path=None, live=False):
     """Play a DASH manifest with mpv, forwarding the signed CDN headers.
 
     Vidlink's DASH manifest lives on CloudFront and needs the signed Cookie on
@@ -2598,11 +2620,27 @@ def _play_dash_mpv(player_executable, stream_url, headers, title,
     ]
     if subtitle_path:
         cmd.append(f"--sub-files={subtitle_path}")
-
-    pos_args, pos_file, pos_key = _mpv_position_args(title)
-    cmd.extend(pos_args)
-    ipc_args, ipc_monitor = _mpv_ipc_args(pos_key)
-    cmd.extend(ipc_args)
+    if live:
+        # Live HLS: never resume a saved position, and don't create IPC state
+        # that only makes sense for on-demand episodes. yt-dlp would bypass
+        # the local proxy and lose the exact headers.
+        cmd.append("--no-resume-playback")
+        cmd.append("--force-window=yes")
+        cmd.append("--ytdl=no")
+        # The VOD config buffers 30 min and writes it to disk; on a live HLS
+        # that delays the first frame for minutes. Keep a small memory cache.
+        # Live: a short buffer keeps playback near the edge instead of
+        # drifting minutes behind (the VOD config buffers 30 min). Too small
+        # (<2 s) makes ffmpeg give up on the first unavailable edge segment.
+        cmd.extend(["--cache=yes", "--cache-secs=3",
+                    "--demuxer-readahead-secs=1", "--cache-on-disk=no"])
+        pos_file = pos_key = None
+        ipc_monitor = None
+    else:
+        pos_args, pos_file, pos_key = _mpv_position_args(title)
+        cmd.extend(pos_args)
+        ipc_args, ipc_monitor = _mpv_ipc_args(pos_key)
+        cmd.extend(ipc_args)
     cmd.append(stream_url)
 
     if ipc_monitor:
@@ -2610,7 +2648,8 @@ def _play_dash_mpv(player_executable, stream_url, headers, title,
         ipc_monitor.start()
     try:
         subprocess.run(cmd, check=True, env=_nvidia_env())
-        _save_mpv_position(pos_file, pos_key)
+        if not live:
+            _save_mpv_position(pos_file, pos_key)
         print_success(t("Playback completed successfully!"))
         return True
     except subprocess.CalledProcessError as e:
@@ -2624,6 +2663,238 @@ def _play_dash_mpv(player_executable, stream_url, headers, title,
             ipc_monitor.stop()
             _LAST_PLAYBACK["finished"] = ipc_monitor.finished_naturally()
         _set_term_title("FreeFlix CLI")
+
+
+def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
+                      title: str) -> bool:
+    """ExoPlayer-like path: ffmpeg handles HLS, mpv plays the remuxed TS.
+
+    ffmpeg tolerates the CDN's ``.php`` segments (``allowed_segment_extensions
+    ALL``), sends the exact UTF-8 Referer bytes, and normalises live
+    timestamps. mpv only sees a continuous MPEG-TS stream on stdin, so its own
+    HLS demuxer can no longer reset/seek the live timeline.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    hdr = "".join(
+        f"{k}: {str(v).replace(chr(13), ' ').replace(chr(10), ' ')}\r\n"
+        for k, v in (headers or {}).items() if v
+    )
+    ff_cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-headers", hdr,
+        "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
+        "-fflags", "+genpts+discardcorrupt",
+        "-i", stream_url, "-c", "copy",
+        "-muxdelay", "0", "-muxpreload", "0",
+        "-avoid_negative_ts", "make_zero", "-f", "mpegts", "pipe:1",
+    ]
+    mpv_cmd = [
+        player_executable, *_mpv_config_args(),
+        f"--title={title}", "--no-resume-playback", "--force-window=yes",
+        "--ytdl=no", "--cache=yes", "--cache-secs=2",
+        "--demuxer-readahead-secs=1", "--cache-on-disk=no", "-",
+    ]
+    ff = None
+    try:
+        ff = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+        mpv = subprocess.Popen(mpv_cmd, stdin=ff.stdout, env=_nvidia_env())
+        ff.stdout.close()
+        rc = mpv.wait()
+        if rc != 0:
+            print_error(t("The stream ended unexpectedly."))
+            return False
+        print_success(t("Playback completed successfully!"))
+        return True
+    except Exception as e:
+        print_error(f"{t('Error running player:')} {e}")
+        return False
+    finally:
+        if ff is not None:
+            try:
+                ff.terminate()
+                ff.wait(timeout=3)
+            except Exception:
+                try:
+                    ff.kill()
+                except Exception:
+                    pass
+
+
+def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
+                   title: str) -> bool:
+    """Same ffmpeg->TS pipe as mpv, but VLC reads it on stdin.
+
+    VLC's adaptive HLS module ends the playlist when the CDN briefly stops
+    publishing segments; giving it a continuous TS from ffmpeg removes that
+    failure mode entirely.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    hdr = "".join(
+        f"{k}: {str(v).replace(chr(13), ' ').replace(chr(10), ' ')}\r\n"
+        for k, v in (headers or {}).items() if v
+    )
+    ff_cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-headers", hdr,
+        "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
+        "-fflags", "+genpts+discardcorrupt",
+        "-i", stream_url, "-c", "copy",
+        "-muxdelay", "0", "-muxpreload", "0",
+        "-avoid_negative_ts", "make_zero", "-f", "mpegts", "pipe:1",
+    ]
+    # --intf dummy makes VLC consume stdin (plain VLC treats it as CLI
+    # commands); the video window is still created by the normal vout.
+    vlc_log = os.path.join(tempfile.gettempdir(), "freeflix-vlc.log")
+    try:
+        os.unlink(vlc_log)
+    except OSError:
+        pass
+    vlc_cmd = [
+        player_executable, "--no-one-instance", "--intf", "dummy",
+        "--demux=ts", "--play-and-exit", "--quiet",
+        "--avcodec-hw=none", "--clock-synchro=0",
+        "--ignore-config", "--no-media-library", "--no-plugins-cache",
+        "--file-logging", f"--logfile={vlc_log}", "--log-verbose=1",
+    ]
+    # With the dummy interface, auto-vout can fall back to terminal ASCII art
+    # when no display is detected; force the X11 window when one is available.
+    if os.name == "posix" and os.environ.get("DISPLAY"):
+        vlc_cmd.append("--vout=xcb_x11")
+    vlc_cmd.append("-")
+    ff = None
+    try:
+        ff = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+        vlc = subprocess.Popen(vlc_cmd, stdin=ff.stdout,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+        ff.stdout.close()
+        rc = vlc.wait()
+        if rc != 0:
+            print_error(t("Error running player:"))
+            return False
+        print_success(t("Playback completed successfully!"))
+        return True
+    except Exception as e:
+        print_error(f"{t('Error running player:')} {e}")
+        return False
+    finally:
+        if ff is not None:
+            try:
+                ff.terminate()
+                ff.wait(timeout=3)
+            except Exception:
+                try:
+                    ff.kill()
+                except Exception:
+                    pass
+
+
+def play_direct_stream(stream_url: str, headers: dict, title: str,
+                       player_name: str = None) -> bool:
+    """Play a live stream that needs UTF-8 HTTP headers (YacineTV).
+
+    The local curl_cffi proxy cannot carry header values containing characters
+    above U+00FF (the CDN's Referer uses zero-width characters), so this path
+    goes straight to mpv/VLC with the exact header strings.
+    """
+    from .tracker import tracker
+
+    name = (player_name or tracker.get_match_player()
+            or tracker.get_player() or "mpv").lower()
+
+    from .yacine_live_proxy import start_live_proxy
+
+    # Match streams need exact HTTP headers and a rewritten HLS proxy; the
+    # browser player cannot consume that local manifest. Fall back to mpv (or
+    # VLC) instead of showing a dead-end "impossible".
+    if name not in ("mpv", "mpv.net", "mpvnet", "vlc"):
+        print_info(t("Match streams use mpv or VLC; launching mpv."))
+        name = "mpv"
+
+    if name in ("mpv", "mpv.net", "mpvnet"):
+        exe = _resolve_or_install("mpv")
+        if not exe:
+            print_error(t("mpv is not installed or not in PATH."))
+            return False
+        if shutil.which("ffmpeg") and _play_ffmpeg_pipe(
+                exe, stream_url, headers, title):
+            return True
+        # No ffmpeg (or pipe failed): fall back to the local HLS proxy.
+        proxy, local_url = start_live_proxy(stream_url, headers)
+        try:
+            return _play_dash_mpv(exe, local_url, {}, title, live=True)
+        finally:
+            proxy.stop()
+
+    if name == "vlc":
+        exe = _resolve_or_install("vlc")
+        if not exe:
+            print_error(t("VLC is not installed or not in PATH."))
+            return False
+        if shutil.which("ffmpeg") and _play_vlc_pipe(
+                exe, stream_url, headers, title):
+            return True
+        proxy, local_url = start_live_proxy(stream_url, headers)
+        # Fallback without ffmpeg: normal VLC + local HLS proxy.
+        # --no-one-instance is mandatory:
+        # otherwise it forwards the URL to an existing instance and exits.
+        vlc_log = os.path.join(tempfile.gettempdir(), "freeflix-vlc.log")
+        try:
+            os.unlink(vlc_log)
+        except OSError:
+            pass
+        cmd = [exe, "--no-one-instance", "--play-and-exit", "--quiet",
+               "--avcodec-hw=none", "--ignore-config",
+               "--no-media-library", "--no-plugins-cache",
+               "--file-logging", f"--logfile={vlc_log}",
+               "--log-verbose=1", local_url]
+        # Stop a previous detached VLC proxy before starting a new one.
+        _stop_vlc_keepalive()
+        # VLC's libva/DBus warnings would otherwise be printed over the TUI.
+        proc = subprocess.Popen(cmd, env=_nvidia_env(),
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        try:
+            rc = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            # VLC stayed in the foreground: wait until the window is closed.
+            try:
+                rc = proc.wait()
+                if rc == 0:
+                    print_success(t("Playback completed successfully!"))
+                else:
+                    print_error(t("Error running player:"))
+                return rc == 0
+            finally:
+                proxy.stop()
+        if rc == 0:
+            try:
+                with open(vlc_log, encoding="utf-8", errors="replace") as f:
+                    vlc_text = f.read()
+            except OSError:
+                vlc_text = ""
+            low = vlc_text.lower()
+            if ("connection failure" in low or "cannot connect" in low
+                    or "http error" in low or "error: http" in low):
+                print_warning(f"{t('VLC stopped early. Log:')} {vlc_log}")
+                proxy.stop()
+                return False
+            # VLC detached its window and returned immediately: the local
+            # proxy must survive in the background so the window can play.
+            _VLC_KEEPALIVE.append(proxy)
+            print_success(t("Playing in VLC…"))
+            return True
+        print_warning(f"{t('VLC stopped early. Log:')} {vlc_log}")
+        proxy.stop()
+        print_error(t("Error running player:"))
+        return False
+
+    print_error(t("This stream needs mpv or VLC: the required HTTP headers cannot be forwarded to a browser."))
+    return False
 
 
 def play_video(

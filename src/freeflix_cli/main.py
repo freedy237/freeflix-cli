@@ -1481,11 +1481,15 @@ def main():
             menu_items.append(f"{icon('play')} {t('Continue from AniList')}")
             anilist_resume_idx = len(menu_items) - 1
 
-        # 3. Browse sources — right after Resume (the main action)
-        menu_items.append(f"{icon('globe')} {t('Browse Providers')}")
+        # 3. Browse the catalogue — label says Films / Séries / Anime.
+        menu_items.append(f"{icon('globe')} {t('Movies, Series & Anime')}")
         providers_idx = len(menu_items) - 1
 
-        # 3b. New releases — present whenever the feed has items OR the user
+        # 4. Live football.
+        menu_items.append(f"{icon('football')} {t('Match')}")
+        match_idx = len(menu_items) - 1
+
+        # 5. New releases — present whenever the feed has items OR the user
         # follows an Anime-Sama series (the background fetch may simply not be
         # finished yet; opening it then waits, bounded, instead of hiding the
         # entry until the next home visit).
@@ -1503,19 +1507,19 @@ def main():
             menu_items.append(label)
             new_idx = len(menu_items) - 1
 
-        # 4. My History
+        # 5. My History
         menu_items.append(f"{icon('history')} {t('My History')}")
         history_idx = len(menu_items) - 1
 
-        # 5. My Downloads (local files in ~/Downloads/FreeFlix/)
+        # 6. My Downloads (local files in ~/Downloads/FreeFlix/)
         menu_items.append(f"{icon('folder')} {t('My Downloads')}")
         downloads_idx = len(menu_items) - 1
 
-        # 6. My Stats
+        # 7. My Stats
         menu_items.append(f"{icon('stats')} {t('My Stats')}")
         stats_idx = len(menu_items) - 1
 
-        # 6. Settings / Exit
+        # 8. Settings / Exit
         menu_items.append(f"{icon('settings')} {t('Settings (AniList)')}")
         settings_idx = len(menu_items) - 1
 
@@ -1547,6 +1551,12 @@ def main():
         if choice_idx == anilist_resume_idx:
             from .handlers import anilist
             anilist.handle_anilist_continue()
+            continue
+
+        if choice_idx == match_idx:
+            crumb_reset(f"{icon('home')} {t('Home')}", t("Match"))
+            from .handlers import match as match_ui
+            match_ui.handle_match()
             continue
 
         if new_idx >= 0 and choice_idx == new_idx:

@@ -136,8 +136,9 @@ def run_update(package_name: str = "freeflix-cli") -> bool:
     # Only PIP would overwrite the sources of a checkout; uv/pipx installs are
     # separate environments and must still update.
     if installer_kind() == "pip" and _dev_checkout():
-        current, latest = (_running_version(package_name),
-                           update_plan(package_name) or (None, None))[1]
+        current = _running_version(package_name)
+        plan = update_plan(package_name)
+        latest = plan[1] if plan else current
         if current == latest:
             print_success(f"{t('FreeFlix is up to date:')} {current}")
         else:
@@ -217,13 +218,30 @@ def installer_kind() -> str:
     prefix = sys.prefix.replace("\\", "/").lower()
     if getattr(sys, "frozen", False):
         return "exe"
-    if "/uv/tools/" in exe or "/uv/tools/" in prefix or "/tools/" in exe:
+    if "/uv/tools/" in exe or "/uv/tools/" in prefix:
         return "uv"
     if "/pipx/venvs/" in exe or "/pipx/" in prefix:
         return "pipx"
     if "/pipx/" in exe:
         return "pipx"
     return "pip"
+
+
+def _find_tool(name: str):
+    """shutil.which + the usual per-user install locations.
+
+    A just-installed uv/pipx is often at ~/.local/bin (Windows included) even
+    when the current terminal's PATH has not been refreshed yet.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    exe = name + (".exe" if os.name == "nt" else "")
+    for cand in (os.path.expanduser(os.path.join("~", ".local", "bin", exe)),
+                 os.path.expanduser(os.path.join("~", ".cargo", "bin", exe))):
+        if os.path.isfile(cand):
+            return cand
+    return None
 
 
 def _upgrade_command(package_name: str):
@@ -234,12 +252,12 @@ def _upgrade_command(package_name: str):
     """
     kind = installer_kind()
     if kind == "uv":
-        uv = shutil.which("uv")
+        uv = _find_tool("uv")
         if uv:
             return [uv, "tool", "upgrade", package_name], "uv tool upgrade"
         return [], "download"
     if kind == "pipx":
-        pipx = shutil.which("pipx")
+        pipx = _find_tool("pipx")
         if pipx:
             return [pipx, "upgrade", package_name], "pipx upgrade"
         return [], "download"
@@ -284,13 +302,24 @@ def ask_update(package_name: str = "freeflix-cli") -> bool:
 
 
 def reload_process() -> None:  # pragma: no cover - replaces the process
-    """Restart FreeFlix in place so the NEW code runs (same terminal)."""
+    """Restart FreeFlix in place so the NEW code runs (same terminal).
+
+    Windows cannot reliably os.execv a Python console process (and the old
+    interpreter may still hold files from the just-upgraded environment), so
+    spawn the replacement and let the current process exit.
+    """
     try:
         sys.stdout.flush()
         sys.stderr.flush()
     except Exception:
         pass
-    argv = [sys.executable, "-m", "freeflix_cli"] + sys.argv[1:]
+    argv = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        argv += ["-m", "freeflix_cli"]
+    argv += sys.argv[1:]
+    if os.name == "nt":
+        subprocess.Popen(argv, close_fds=True)
+        raise SystemExit(0)
     os.execv(sys.executable, argv)
 
 

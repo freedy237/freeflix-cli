@@ -990,6 +990,52 @@ _FR = {
         "AniList : ton jeton est invalide ou expiré. "
         "Réglages → AniList → Changer le jeton.",
     'AniList is unreachable right now:': 'AniList est injoignable pour le moment :',
+    # ── Match / football (YacineTV) ──
+    'Match': 'Match',
+    'Football': 'Football',
+    'Football matches': 'Matchs de football',
+    'Cameroon time (UTC+1)': 'Heure du Cameroun (UTC+1)',
+    'Select a match': 'Choisis un match',
+    'Select quality': 'Choisis la qualité',
+    'Choose the quality': 'Choisis la qualité',
+    'Loading matches…': 'Chargement des matchs…',
+    'Matches unavailable:': 'Matchs indisponibles :',
+    'Showing cached matches — network unavailable.':
+        'Affichage des matchs en cache — réseau indisponible.',
+    'No football matches right now.':
+        'Aucun match de football pour le moment.',
+    'Loading streams…': 'Chargement des flux…',
+    'Streams unavailable:': 'Flux indisponibles :',
+    'No stream available for this match.':
+        'Aucun flux disponible pour ce match.',
+    'Auto (best quality)': 'Auto (meilleure qualité)',
+    'Auto quality:': 'Qualité auto :',
+    'Selected quality:': 'Qualité sélectionnée :',
+    'Could not start the match stream.':
+        'Impossible de lancer le flux du match.',
+    'Tomorrow': 'Demain',
+    'Upcoming': 'À venir',
+    'LIVE': 'LIVE',
+    'Match streams use mpv or VLC; launching mpv.':
+        'Les matchs utilisent mpv ou VLC ; lancement de mpv.',
+    'The stream ended unexpectedly.':
+        'Le flux s’est arrêté de façon inattendue.',
+    'Playing in VLC…': 'Lecture dans VLC…',
+    'VLC stopped early. Log:': 'VLC s’est arrêté trop tôt. Journal :',
+    'Movies, Series & Anime': 'Films, Séries & Anime',
+    'Match player:': 'Lecteur des matchs :',
+    'Match player set to:': 'Lecteur des matchs :',
+    'Choose a player': 'Choisis un lecteur',
+    'No video player found (mpv or VLC).':
+        'Aucun lecteur vidéo trouvé (mpv ou VLC).',
+    'Auto': 'Auto',
+    'mpv is not installed or not in PATH.':
+        "mpv n'est pas installé ou absent du PATH.",
+    'VLC is not installed or not in PATH.':
+        "VLC n'est pas installé ou absent du PATH.",
+    'This stream needs mpv or VLC: the required HTTP headers cannot be forwarded to a browser.':
+        'Ce flux nécessite mpv ou VLC : les en-têtes HTTP requis ne peuvent pas '
+        "être transmis à un navigateur.",
 }
 
 

@@ -320,11 +320,12 @@ def test_mouse_filter_toggle_is_idempotent(monkeypatch):
     monkeypatch.setattr(cu, "_mouse_available", lambda: True)
     monkeypatch.setattr(cu, "_mouse_write", writes.append)
     monkeypatch.setattr(cu, "_mouse_active", False)
-    cu._mouse_set(False)  # already off → no write
-    assert writes == []
+    cu._mouse_set(False)  # always sends OFF (state can desync)
+    assert writes == [cu._MOUSE_OFF]
+    writes.clear()
     cu._mouse_set(True)
-    assert writes and cu._mouse_active is True
-    cu._mouse_set(True)  # idempotent
+    assert writes == [cu._MOUSE_ON] and cu._mouse_active is True
+    cu._mouse_set(True)  # idempotent ON
     assert len(writes) == 1
     cu._mouse_set(False)
-    assert cu._mouse_active is False and len(writes) == 2
+    assert cu._mouse_active is False and writes[-1] == cu._MOUSE_OFF

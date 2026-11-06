@@ -380,6 +380,14 @@ class ProgressTracker:
         self.data["player"] = player_code
         self._save_data()
 
+    def get_match_player(self) -> Optional[str]:
+        """Player override for live Match streams (mpv/vlc), or None."""
+        return self.data.get("match_player")
+
+    def set_match_player(self, player_code: str):
+        self.data["match_player"] = player_code
+        self._save_data()
+
     # --- Theme preference ---
 
     def get_theme(self) -> str:

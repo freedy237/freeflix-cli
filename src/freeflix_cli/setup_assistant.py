@@ -1775,15 +1775,13 @@ def _fix_anime4k_input_conf():
 
       1. input.conf  : the CTRL+1/2 toggle joined shaders with ':' in a single
          `set` → rewrite to per-shader `append` (cross-platform, no separator).
-      2. mpv.conf    : the STARTUP `glsl-shaders="A:B:C"` line (loads on every
-         video) — on Windows rewrite ':' to ';' between shader paths. This is
-         the one that printed "Cannot open file …A.glsl:/shaders/B.glsl" when a
-         video started.
+      2. mpv.conf    : the old STARTUP `glsl-shaders=` line is removed so
+         Anime4K is opt-in on every OS; the OSD hint is installed at the same
+         time. Existing installs are migrated in place.
 
     In-place, offline, idempotent — safe to run on every launch.
     """
     cfg = get_mpv_config_dir()
-    is_win = sys.platform in ("win32", "cygwin")
 
     # 1) input.conf toggle → append form
     inp = cfg / "input.conf"
@@ -1803,17 +1801,29 @@ def _fix_anime4k_input_conf():
         except Exception:
             pass
 
-    # 2) mpv.conf startup line → ';' separator on Windows
-    if is_win:
-        mpv = cfg / "mpv.conf"
-        if mpv.is_file():
-            try:
-                txt = mpv.read_text(encoding="utf-8")
-                fixed = txt.replace(".glsl:~~/", ".glsl;~~/")
-                if fixed != txt:
-                    mpv.write_text(fixed, encoding="utf-8")
-            except Exception:
-                pass
+    # 2) mpv.conf : Anime4K off par défaut (choix utilisateur) + hints OSD.
+    #    Existing installs still carry the old startup glsl-shaders= line;
+    #    strip it in place so upgrades behave like fresh installs.
+    mpv = cfg / "mpv.conf"
+    if mpv.is_file():
+        try:
+            txt = mpv.read_text(encoding="utf-8")
+            # Only our Anime4K startup line (never a user's own shader line).
+            fixed = re.sub(
+                r'(?m)^\s*glsl-shaders\s*=.*Anime4K.*(?:\n|$)', "", txt
+            )
+            # Drop the old auto-skip profile: it would clear shaders on
+            # 1080p+ even after the user explicitly enabled Anime4K.
+            fixed = re.sub(
+                r'(?ms)^\[anime4k-skip-high-res\]\s*.*?(?=^\[|\Z)', "", fixed
+            )
+            if "osd-playing-msg" not in fixed:
+                fixed += ('\nosd-playing-msg="Anime4K OFF · CTRL+1 max · '
+                          'CTRL+2 léger · CTRL+0 off"\nosd-duration=5000\n')
+            if fixed != txt:
+                mpv.write_text(fixed, encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _migrate_install_nerd_font():
@@ -1835,6 +1845,7 @@ def _migrations():
     return [
         ("1.5.7", "Anime posters need chafa", install_chafa),
         ("1.7.4", "Fix Anime4K shader toggle on Windows", _fix_anime4k_input_conf),
+        ("2.2.1", "Disable Anime4K by default (user opt-in)", _fix_anime4k_input_conf),
         ("1.7.8", "Install Nerd Font for crisp icons", _migrate_install_nerd_font),
     ]
 
