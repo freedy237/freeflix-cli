@@ -17,7 +17,7 @@
 
 <p align="center">
   <b>🎬 Movies · 📺 Series · 🍿 Anime (VF / VOSTFR / VO)</b><br>
-  <sub>mpv-powered · Anime4K upscaling · downloads · resume · AniList sync</sub>
+  <sub>mpv/VLC-powered · live football · Anime4K opt-in · downloads · resume · AniList sync</sub>
 </p>
 
 <p align="center">
@@ -33,13 +33,15 @@
 - **Everything, always up to date** — anime (Anime-Sama, HiAnime,
   GoldenAnime), films & series (GoldenMS, Coflix, French-Stream, YTS/EZTV),
   in **French (VF/VOSTFR)** or **VO**.
-- **Live planning & Nouveautés** — the Anime-Sama weekly schedule, and a feed
-  of new episodes for the shows you follow.
+- **Live planning, Match & Nouveautés** — the Anime-Sama weekly schedule, live
+  football (YacineTV, Cameroon time, HD/SD/Low + Auto), and a feed of new
+  episodes for the shows you follow.
 - **Actually nice to use** — poster previews in the terminal (chafa), breadcrumb
   navigation, `/` to filter, `Esc` to go back anywhere, `?` for help.
 - **Download & keep** — pick a quality, batch a whole season into its own folder,
   resume interrupted downloads, see ✓ watched / ▸ resume / ⬇ downloaded badges.
-- **Crisp picture** — Anime4K GPU upscaling pre-tuned, one keypress to toggle.
+- **Crisp picture on demand** — Anime4K GPU upscaling pre-bundled but **off by
+  default**; enable it with `CTRL+1` (max) or `CTRL+2` (light).
 - **Optional AniList sync** — your progress updates automatically as you watch.
 
 ---
@@ -55,7 +57,13 @@
 - **Daily new-episode notifications** via systemd timer + libnotify ;
 - A **Nyaa torrent provider** (downloads via aria2 BitTorrent) ;
 - A **Local Downloads browser** in the home menu ;
-- **Anime4K** shaders pre-bundled (S by default, VL with CTRL+1, off with CTRL+0) ;
+- **Live football Match** (YacineTV) : schedule in Cameroon time, LIVE badges,
+  HD/SD/Low + Auto, mpv or VLC;
+- **Anime4K** shaders pre-bundled but **opt-in** (CTRL+1 max, CTRL+2 light,
+  CTRL+0 off), with an OSD hint at playback start;
+- **Player configs isolated** : mpv uses a dedicated `--config-dir` (or
+  `--no-config`), VLC runs with `--ignore-config`; your machine's own player
+  settings are never read or modified;
 - **French localisation** of the whole UI (auto-switched based on language pref) ;
 - Multi-mirror portal fallback + `website_origin` caching (24 h TTL) ;
 - Multiple **bug fixes** : 403 on `/catalogue/?search=` (animes-sama.fr refactor), double-slash legacy URLs in history, settings-menu exit loop, ffmpeg infinite-reconnect at byte 1506, Videasy/Vidlink Referer not propagated, history resume silent-failure, and more.
@@ -81,10 +89,13 @@
 | 🆕 | **Nouveautés** : new episodes of the shows you follow, cleared once watched |
 | 🖱 | **Full mouse control** : hover, click, wheel, right-click back, clickable pagination |
 | 🎨 | **Cinema Noir** (2.0) design system, 12 themes, reduced-motion support |
+| ⚽ | **Match** : live football from YacineTV, Cameroon time, HD/SD/Low + Auto, mpv/VLC |
+| 🎬 | **Browse Films, Séries & Anime** : the provider list, grouped as before |
 | 🎮 | **4 player backends** : mpv, VLC, browser, download-only |
 | 🇫🇷 | **French UI** : the whole CLI is in French when language is set to FR |
 | 🛡 | **Anti-crash mpv config** : ytdl-hook off, gpu renderer, no infinite reconnect |
-| 🎨 | **Anime4K** pre-bundled with runtime toggle CTRL+1 / CTRL+0 |
+| 🎨 | **Anime4K** pre-bundled, **off by default** — CTRL+1 max, CTRL+2 light, CTRL+0 off |
+| 🔒 | **Player configs isolated** — global mpv/VLC settings untouched |
 | 🩺 | **`freeflix --doctor`** system diagnostic (check deps, config, network) |
 | 🔄 | **Startup updater** : asks yes/no, upgrades with the same installer (uv/pipx/pip), reloads |
 
@@ -202,12 +213,19 @@ freeflix
 
 That's it. The menu walks you through everything.
 
+- **Films, Séries & Anime** opens the provider list (unchanged grouping).
+- **Match** shows live/upcoming football with kick-off in Cameroon time
+  (UTC+1); pick a match, then HD/SD/Low or **Auto**, then mpv or VLC.
+- Player settings are isolated: FreeFlix never edits your global mpv/VLC
+  configuration.
+
 ### Common keyboard shortcuts in mpv
 
 | Key | Action |
 |---|---|
-| **CTRL + 1** | Enable Anime4K Mode A_VL |
-| **CTRL + 0** | Disable Anime4K |
+| **CTRL + 1** | Enable Anime4K Mode A_VL (max) |
+| **CTRL + 2** | Enable Anime4K Mode A_S (light) |
+| **CTRL + 0** | Disable Anime4K (default) |
 | **`#`** | Cycle audio track |
 | **`j`** | Cycle subtitle track |
 | **`_`** (Shift + `-`) | Cycle video track |
