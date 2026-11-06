@@ -6,6 +6,8 @@ falls back to the last snapshot only when the API is unreachable.
 
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timedelta, timezone
 
 from ..cli_utils import (
@@ -33,6 +35,12 @@ def _when_label(ev: ym.MatchEvent, now: datetime) -> str:
     return f"{dt:%d/%m %H:%M}"
 
 
+def _channel_label(channel: str) -> str:
+    """Short live-TV badge: beIN SPORTS 1..4 → B1..B4."""
+    m = re.search(r"be\s*in\s*sports?\s*([1-4])", channel or "", re.I)
+    return f"B{m.group(1)}" if m else (channel or "")
+
+
 def _match_label(ev: ym.MatchEvent, now_ts: int, now: datetime) -> str:
     state = ev.status(now_ts)
     when = _when_label(ev, now)
@@ -43,7 +51,8 @@ def _match_label(ev: ym.MatchEvent, now_ts: int, now: datetime) -> str:
     else:
         badge = f"○ {t('Upcoming')}"
     league = f"  ·  {ev.championship}" if ev.championship else ""
-    return f"{badge}  {when}  ·  {ev.home}  VS  {ev.away}{league}"
+    channel = f"({_channel_label(ev.channel)})  " if ev.channel else ""
+    return f"{channel}{badge}  {when}  ·  {ev.home}  VS  {ev.away}{league}"
 
 
 def _sort_events(events: list[ym.MatchEvent], now_ts: int) -> list[ym.MatchEvent]:
@@ -51,9 +60,35 @@ def _sort_events(events: list[ym.MatchEvent], now_ts: int) -> list[ym.MatchEvent
     return sorted(events, key=lambda e: (order.get(e.status(now_ts), 3), e.start))
 
 
+# Conservative live HLS minimums (Mbps) used for the GB/hour estimate.
+_MIN_MBPS = {1080: 5.0, 720: 2.5, 480: 1.0, 360: 0.7}
+
+
+def _quality_metrics(stream: dict) -> tuple[int | None, float, float]:
+    """(height, minimum Mbps, estimated GB/hour) for a stream label."""
+    name = str(stream.get("name") or "?")
+    low = name.lower()
+    m = re.search(r"(\d{3,4})p", low)
+    if m:
+        height = int(m.group(1))
+    elif "hd" in low:
+        height = 1080
+    elif "sd" in low:
+        height = 720
+    elif "low" in low:
+        height = 480
+    else:
+        height = None
+    mbps = _MIN_MBPS.get(height, 2.0)
+    return height, mbps, mbps * 3600 / 8 / 1000
+
+
 def _quality_label(stream: dict) -> str:
     name = str(stream.get("name") or "?")
-    return f"{icon('play')} {name}"
+    height, mbps, gb = _quality_metrics(stream)
+    res = f" ({height}p)" if height else ""
+    return (f"{icon('play')} {name}{res}  ·  ≥ {mbps:.1f} Mbps  ·  "
+            f"~{gb:.2f} {t('GB/h')}")
 
 
 def _play(event: ym.MatchEvent, stream: dict, player_name: str = "") -> None:
@@ -165,7 +200,10 @@ def handle_match() -> None:
         choice = select_from_list(
             options,
             f"{t('Choose the quality')}  ·  {event.home}  VS  {event.away}",
-            header=f"{icon('football')} {event.championship or t('Football')}",
+            header=(f"{icon('football')} "
+                    f"{event.championship or t('Football')}"
+                    + (f"  ·  {_channel_label(event.channel)}"
+                       if event.channel else "")),
         )
         if choice < 0 or choice >= auto_idx:
             if choice == auto_idx:
@@ -173,7 +211,10 @@ def handle_match() -> None:
                 if not stream:
                     print_warning(t("No stream available for this match."))
                     continue
-                print_info(f"{t('Auto quality:')} {stream.get('name', '?')}")
+                _h, _mbps, _gb = _quality_metrics(stream)
+                print_info(f"{t('Auto quality:')} {stream.get('name', '?')}  ·  "
+                           f"≥ {_mbps:.1f} {t('Mbps')}  ·  ~{_gb:.2f} "
+                           f"{t('GB/h')}")
                 chosen = _choose_player(player_name, allow_cancel=True)
                 if chosen:
                     _play(event, stream, chosen)

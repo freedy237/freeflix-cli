@@ -1023,6 +1023,8 @@ _FR = {
     'Playing in VLC…': 'Lecture dans VLC…',
     'VLC stopped early. Log:': 'VLC s’est arrêté trop tôt. Journal :',
     'Movies, Series & Anime': 'Films, Séries & Anime',
+    'Mbps': 'Mbps',
+    'GB/h': 'Go/h',
     'Match player:': 'Lecteur des matchs :',
     'Match player set to:': 'Lecteur des matchs :',
     'Choose a player': 'Choisis un lecteur',

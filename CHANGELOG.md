@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.0
+
+- **Match** : la chaîne est affichée entre parenthèses **devant** le match,
+  avec un badge court (`beIN SPORTS 1..4` → `B1..B4`), ex.
+  `(B4) ● LIVE 20:45 · Toulouse VS Strasbourg`.
+- **Qualités Match** : chaque ligne affiche désormais la résolution, le débit
+  minimum estimé et la consommation horaire estimée, ex.
+  `HD (1080p) · ≥ 5.0 Mbps · ~2.25 Go/h`, `SD (720p) · ≥ 2.5 Mbps · ~1.13 Go/h`,
+  `Low (480p) · ≥ 1.0 Mbps · ~0.45 Go/h` ; `Auto` reste en bas.
+- 604 tests au vert, ruff OK.
+
 ## 2.2.2
 
 - Menus **qualité** et **choix du lecteur** en plein écran : souris alignée

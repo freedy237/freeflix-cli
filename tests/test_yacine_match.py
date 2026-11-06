@@ -279,3 +279,19 @@ def test_play_direct_stream_respects_explicit_vlc(monkeypatch):
         assert pm._VLC_KEEPALIVE
     finally:
         pm._stop_vlc_keepalive()
+
+
+def test_match_channel_and_quality_estimates():
+    from datetime import datetime, timedelta, timezone
+    from freeflix_cli.handlers import match as mh
+
+    now = datetime.now(tz=timezone(timedelta(hours=1)))
+    ev = ym.MatchEvent("1", "Ligue 1", "beIN SPORTS 4",
+                       int(now.timestamp()) - 60, int(now.timestamp()) + 3600,
+                       "Toulouse", "Strasbourg")
+    label = mh._match_label(ev, int(now.timestamp()), now)
+    assert label.startswith("(B4)")
+    hd = mh._quality_label({"name": "HD"})
+    assert "5.0" in hd and "2.25" in hd
+    low = mh._quality_label({"name": "Low"})
+    assert "1.0" in low and "0.45" in low
