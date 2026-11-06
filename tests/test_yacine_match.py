@@ -295,3 +295,29 @@ def test_match_channel_and_quality_estimates():
     assert "5.0" in hd and "2.25" in hd
     low = mh._quality_label({"name": "Low"})
     assert "1.0" in low and "0.45" in low
+
+
+def test_channel_aliases_and_other_channels():
+    from freeflix_cli.handlers import match as mh
+    assert mh._channel_label("beIN SPORTS 1") == "B1"
+    assert mh._channel_label("beIN SPORTS 4") == "B4"
+    assert mh._channel_label("beIN SPORTS 5") == "beIN SPORTS 5"
+    assert mh._channel_label("Canal+ Sport") == "Canal+ Sport"
+
+
+def test_future_4k_quality_estimate():
+    from freeflix_cli.handlers import match as mh
+    label = mh._quality_label({"name": "4K"})
+    assert "2160p" in label and "15.0" in label and "6.75" in label
+
+
+def test_other_teams_are_dynamic(monkeypatch, tmp_path):
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_translate_one",
+                        lambda text, lang, timeout=5:
+                        {"الأهلي": "Al Ahly", "الزمالك": "Zamalek"}.get(text, text))
+    ev = ym.MatchEvent("x", "الدوري المصري", "Canal+ Sport", 1, 2,
+                       "الأهلي", "الزمالك")
+    out = ym.localize_events([ev], "fr")[0]
+    assert out.home == "Al Ahly" and out.away == "Zamalek"
+    assert out.championship == "الدوري المصري"

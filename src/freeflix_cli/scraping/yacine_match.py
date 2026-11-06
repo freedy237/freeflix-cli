@@ -220,6 +220,10 @@ def fetch_events(timeout: int = 10) -> tuple[list[MatchEvent], bool]:
 
 def _quality_rank(name: str) -> int:
     n = (name or "").lower()
+    if any(k in n for k in ("4k", "2160", "uhd")):
+        return 4
+    if any(k in n for k in ("1440", "2k")):
+        return 3
     if any(k in n for k in ("hd", "fhd", "1080", "full")):
         return 3
     if any(k in n for k in ("sd", "720", "medium")):

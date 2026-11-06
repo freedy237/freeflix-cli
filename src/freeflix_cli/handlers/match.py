@@ -61,7 +61,8 @@ def _sort_events(events: list[ym.MatchEvent], now_ts: int) -> list[ym.MatchEvent
 
 
 # Conservative live HLS minimums (Mbps) used for the GB/hour estimate.
-_MIN_MBPS = {1080: 5.0, 720: 2.5, 480: 1.0, 360: 0.7}
+_MIN_MBPS = {2160: 15.0, 1440: 8.0, 1080: 5.0, 720: 2.5,
+             480: 1.0, 360: 0.7}
 
 
 def _quality_metrics(stream: dict) -> tuple[int | None, float, float]:
@@ -71,7 +72,11 @@ def _quality_metrics(stream: dict) -> tuple[int | None, float, float]:
     m = re.search(r"(\d{3,4})p", low)
     if m:
         height = int(m.group(1))
-    elif "hd" in low:
+    elif any(k in low for k in ("4k", "uhd", "2160")):
+        height = 2160
+    elif any(k in low for k in ("1440", "2k")):
+        height = 1440
+    elif "hd" in low or "fhd" in low:
         height = 1080
     elif "sd" in low:
         height = 720

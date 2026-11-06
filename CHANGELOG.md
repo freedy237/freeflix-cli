@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.1
+
+- **Qualités Match prêtes pour le futur** : 4K/2160p (≥ 15,0 Mbps,
+  ~6,75 Go/h) et 1440p (≥ 8,0 Mbps, ~3,60 Go/h) ; une qualité inconnue
+  garde une estimation prudente au lieu de casser l'affichage.
+- Tests supplémentaires avec des équipes/compétitions arbitraires
+  (Al Ahly / Zamalek) et des chaînes hors beIN : la traduction et
+  l'affichage restent dynamiques.
+- 607 tests au vert, ruff OK.
+
 ## 2.3.0
 
 - **Match** : la chaîne est affichée entre parenthèses **devant** le match,

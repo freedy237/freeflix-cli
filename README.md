@@ -89,7 +89,7 @@
 | 🆕 | **Nouveautés** : new episodes of the shows you follow, cleared once watched |
 | 🖱 | **Full mouse control** : hover, click, wheel, right-click back, clickable pagination |
 | 🎨 | **Cinema Noir** (2.0) design system, 12 themes, reduced-motion support |
-| ⚽ | **Match** : live football from YacineTV, Cameroon time, HD/SD/Low + Auto, mpv/VLC |
+| ⚽ | **Match** : live football from YacineTV, Cameroon time, B1–B4 channel badges, HD/SD/Low/4K + Auto, minimum bitrate + GB/h estimate, mpv/VLC |
 | 🎬 | **Browse Films, Séries & Anime** : the provider list, grouped as before |
 | 🎮 | **4 player backends** : mpv, VLC, browser, download-only |
 | 🇫🇷 | **French UI** : the whole CLI is in French when language is set to FR |
@@ -215,7 +215,9 @@ That's it. The menu walks you through everything.
 
 - **Films, Séries & Anime** opens the provider list (unchanged grouping).
 - **Match** shows live/upcoming football with kick-off in Cameroon time
-  (UTC+1); pick a match, then HD/SD/Low or **Auto**, then mpv or VLC.
+  (UTC+1), the channel badge (B1–B4), and quality rows with resolution,
+  minimum bitrate and estimated GB/hour; pick **Auto** or a quality, then
+  mpv or VLC.
 - Player settings are isolated: FreeFlix never edits your global mpv/VLC
   configuration.
 
