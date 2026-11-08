@@ -403,7 +403,11 @@ _TS_FIXTURE = ""
 
 def _make_ts_fixture(path):
     """Tiny real MPEG-TS so ffmpeg can decode at least one frame."""
+    import shutil as _sh
     import subprocess
+
+    if not _sh.which("ffmpeg"):
+        return False
 
     subprocess.run(
         ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
@@ -411,6 +415,7 @@ def _make_ts_fixture(path):
          "sine=frequency=440", "-t", "2", "-c:v", "libx264",
          "-preset", "ultrafast", "-c:a", "aac", "-f", "mpegts", path],
         check=True, timeout=60)
+    return True
 
 
 def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
@@ -425,7 +430,7 @@ def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
 
         def do_GET(self):
             if "seg" in self.path:
-                body = open(_TS_FIXTURE, "rb").read()
+                body = b"\x47" * 188
             else:
                 body = b"#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg.ts\n"
             self.send_response(200)
@@ -434,9 +439,9 @@ def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
             self.end_headers()
             self.wfile.write(body)
 
-    global _TS_FIXTURE
-    _TS_FIXTURE = str(tmp_path / "seg.ts")
-    _make_ts_fixture(_TS_FIXTURE)
+    # CI runners have no ffmpeg: force the proxy fallback path.
+    monkeypatch.setattr(pm.shutil, "which",
+                        lambda name: None if name == "ffmpeg" else "x")
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
@@ -503,6 +508,8 @@ def test_preflight_rejects_manifest_with_dead_segments(monkeypatch):
             self.end_headers()
             self.wfile.write(body)
 
+    monkeypatch.setattr(pm.shutil, "which",
+                        lambda name: None if name == "ffmpeg" else "x")
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:

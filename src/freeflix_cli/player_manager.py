@@ -2894,6 +2894,17 @@ def match_stream_reachable(stream_url: str, headers: dict,
             text = body.decode("utf-8", "replace")
             if "#EXTM3U" not in text and "#EXT-X" not in text:
                 return False, t("Channel server refused the stream.")
+            segs = [ln.strip() for ln in text.splitlines()
+                    if ln.strip() and not ln.startswith("#")]
+            if segs and segs[0].startswith("/p/"):
+                base = f"http://127.0.0.1:{proxy.httpd.server_address[1]}"
+                try:
+                    with urllib.request.urlopen(base + segs[-1],
+                                                timeout=timeout) as seg:
+                        if not seg.read(64):
+                            return False, t("The stream has no data (offline).")
+                except Exception:
+                    return False, t("The stream has no data (offline).")
             return True, ""
         finally:
             proxy.stop()
