@@ -33,6 +33,32 @@ _EVENTS_CACHE = "events.json"
 _CACHE_MAX_AGE = 24 * 3600
 _ARABIC = re.compile(r"[\u0600-\u06ff]")
 
+# Bundled reference data (no network needed for the common case):
+#  * clubs.json          → club lookup keys (Arabic / short / EN) → EN + FR
+#  * channel_logos.json  → channel name → logo (iptv-org catalogue)
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DICT_CACHE: dict = {}
+
+
+def _load_data(name: str) -> dict:
+    """Load a bundled JSON once (empty dict on failure)."""
+    if name not in _DICT_CACHE:
+        try:
+            _DICT_CACHE[name] = json.loads(
+                (_DATA_DIR / name).read_text(encoding="utf-8"))
+        except Exception:
+            _DICT_CACHE[name] = {}
+    return _DICT_CACHE[name] or {}
+
+
+def _norm_key(text: str) -> str:
+    """Lowercase, strip accents/punctuation → stable lookup key."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", text or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9 ]+", " ", s.lower())
+    return re.sub(r"\s+", " ", s).strip()
+
 
 def _cache_dir() -> Path:
     d = Path(user_cache_dir("freeflix-cli", "PaulExplorer")) / "yacine"
@@ -305,6 +331,116 @@ def _translate_one(text: str, lang: str, timeout: int = 5) -> str:
         return text
 
 
+# Words a machine translation gets wrong on its own: generic football nouns
+# that are NOT part of a club name. They are only used to reject a translation
+# that is obviously a literal word (e.g. "ليل" → "night" instead of "Lille").
+_GENERIC_WORDS = {
+    "night", "day", "sun", "sunset", "sunrise", "save", "save it", "twenty",
+    "the chi", "union of algeria", "union de l'algerie", "lance", "le mans",
+    "ren", "man", "city", "united", "real", "sport", "sports", "league",
+    "championship", "cup", "super cup", "premier league", "village",
+}
+
+
+# Arabic spellings that a machine translator mangles ("ليل" → "night").
+# Values are keys of the bundled clubs.json.
+_AR_CLUB_KEYS = {
+    "ليل": "lille", "لانس": "lens", "ليون": "lyon", "مان يونايتد": "manchester united",
+    "تونتي": "twente", "انجيه": "angers", "رين": "rennes", "كامبور": "cambuur",
+    "فينورد روتردام": "feyenoord", "كريستال بلاس": "crystal palace",
+    "التشي": "chievo", "ليفانتي": "levante", "برايتون": "brighton",
+    "برينتفورد": "brentford", "اشبيلية": "sevilla",
+    "اياكس": "ajax", "ايندهوفن": "psv", "فياريال": "villarreal",
+    "خيتافي": "getafe", "سيلتا فيغو": "celta", "سندرلاند": "sunderland",
+    "تشيلسي": "chelsea", "ليفربول": "liverpool", "برشلونة": "barcelona",
+    "ريال مدريد": "real madrid", "اتلتيكو مدريد": "atletico",
+    "مارسيليا": "marseille", "موناكو": "monaco", "لاهاي": "den haag",
+    "لومان": "le mans", "بريست": "brest", "نيس": "nice", "بون": "bonn",
+    "سونداونز": "sundowns", "اتحاد الجزائر": "usm alger",
+    "مولودية الجزائر": "mca", "مانشستر يونايتد": "manchester united",
+}
+
+
+def _club_lookup(text: str, lang: str) -> str | None:
+    """Bundled club dictionary: Arabic/short/EN name → EN or FR club name."""
+    clubs = _load_data("clubs.json")
+    if not clubs:
+        return None
+    ar_text = (text or "").strip().replace("\u0623", "\u0627").replace("\u0625", "\u0627")
+    ar = _AR_CLUB_KEYS.get(ar_text) or _AR_CLUB_KEYS.get((text or "").strip())
+    if ar:
+        entry = clubs.get(ar)
+        if entry:
+            return entry.get(lang) or entry.get("en")
+    key = _norm_key(text)
+    if key in clubs:
+        return clubs[key].get(lang) or clubs[key].get("en")
+    # token fallback: "Manchester City FC" → "manchester city"
+    tokens = key.split()
+    for size in (3, 2, 1):
+        if len(tokens) >= size:
+            cand = " ".join(tokens[:size])
+            if cand in clubs:
+                return clubs[cand].get(lang) or clubs[cand].get("en")
+    return None
+
+
+def channel_logo(channel: str) -> str:
+    """Logo URL for a live-TV channel name (bundled iptv-org index)."""
+    logos = _load_data("channel_logos.json")
+    if not logos:
+        return ""
+    key = _norm_key(channel)
+    if key in logos:
+        return logos[key].get("l") or logos[key].get("logo") or ""
+    # "beIN SPORTS 1 HD" → "bein sports 1"; "Dubai Sports 1 (HD)" → …
+    stripped = re.sub(r"\s+(hd|fhd|uhd|sd|4k|\d{3,4}p?)$", "", key)
+    for cand in (stripped, stripped.replace(" ", ""), key.replace(" ", "")):
+        if cand in logos:
+            return logos[cand].get("l") or logos[cand].get("logo") or ""
+    # last resort: same name with a country suffix ("bein sports 1 fr")
+    prefix = stripped + " "
+    for k, v in logos.items():
+        if k.startswith(prefix):
+            url = v.get("l") or v.get("logo")
+            if url:
+                return url
+    return ""
+
+
+def _translate_cached(text: str, lang: str, cache: dict) -> str:
+    """Translate one name, preferring curated data then a cached MT result."""
+    if not text:
+        return text
+    if text in cache:
+        return cache[text]
+    club = _club_lookup(text, lang)
+    if club:
+        cache[text] = club
+        return club
+    if _ARABIC.search(text) and lang == "fr":
+        # French names straight from English are usually correct for clubs.
+        en = _translate_one(text, "en")
+        if en and en.lower() not in _GENERIC_WORDS:
+            club = _club_lookup(en, "fr")
+            if club:
+                cache[text] = club
+                return club
+    out = _translate_one(text, lang)
+    if out and out.strip().lower() in _GENERIC_WORDS:
+        # Literal word ("ليل" → "night"): keep the original Arabic name rather
+        # than a wrong translation, and try the English reference instead.
+        en = _translate_one(text, "en")
+        if en and en.lower() not in _GENERIC_WORDS:
+            club = _club_lookup(en, lang)
+            if club:
+                cache[text] = club
+                return club
+        return text
+    cache[text] = out
+    return out
+
+
 def localize_events(events: list[MatchEvent], lang: str = "fr") -> list[MatchEvent]:
     """Translate Arabic team/league names to the UI language, with a cache.
 
@@ -318,11 +454,16 @@ def localize_events(events: list[MatchEvent], lang: str = "fr") -> list[MatchEve
     names = set()
     for ev in events:
         names.update((ev.home, ev.away, ev.championship))
-    missing = [n for n in names if n and n not in cache and _ARABIC.search(n)]
+    # Explainable cache: only values PRODUCED BY THIS PIPELINE are trusted.
+    # Older builds cached raw machine translations ("ليل" → "nuit"), which
+    # would otherwise stay wrong forever.
+    if not isinstance(cache.get("__v"), int) or cache.get("__v") != 2:
+        cache = {"__v": 2}
+    missing = [n for n in names if n and n not in cache]
     if missing:
         with ThreadPoolExecutor(max_workers=min(6, len(missing))) as pool:
             for src, dst in zip(missing, pool.map(
-                    lambda n: _translate_one(n, lang), missing)):
+                    lambda n: _translate_cached(n, lang, cache), missing)):
                 if dst and dst != src:
                     cache[src] = dst
         _write_json(_translations_path(lang), cache)

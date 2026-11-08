@@ -2632,8 +2632,9 @@ def _play_dash_mpv(player_executable, stream_url, headers, title,
         # Live: a short buffer keeps playback near the edge instead of
         # drifting minutes behind (the VOD config buffers 30 min). Too small
         # (<2 s) makes ffmpeg give up on the first unavailable edge segment.
-        cmd.extend(["--cache=yes", "--cache-secs=3",
-                    "--demuxer-readahead-secs=1", "--cache-on-disk=no"])
+        cmd.extend(["--cache=yes", "--cache-secs=20",
+                    "--demuxer-readahead-secs=20", "--cache-pause=no",
+                    "--cache-on-disk=no"])
         pos_file = pos_key = None
         ipc_monitor = None
     else:
@@ -2692,8 +2693,9 @@ def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
     mpv_cmd = [
         player_executable, *_mpv_config_args(),
         f"--title={title}", "--no-resume-playback", "--force-window=yes",
-        "--ytdl=no", "--cache=yes", "--cache-secs=2",
-        "--demuxer-readahead-secs=1", "--cache-on-disk=no", "-",
+        "--ytdl=no", "--cache=yes", "--cache-secs=20",
+        "--demuxer-readahead-secs=20", "--cache-pause=no",
+        "--cache-on-disk=no", "-",
     ]
     ff = None
     try:
@@ -2793,6 +2795,44 @@ def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
                     pass
 
 
+def match_stream_reachable(stream_url: str, headers: dict,
+                           timeout: int = 8) -> tuple[bool, str]:
+    """Preflight a live Match stream: is the CDN manifest reachable at all?
+
+    Some catalogue entries point to hosts that no longer resolve (a sports
+    rights takedown) or that only answer with the exact Referer. Checking once
+    here turns "player opens then dies" into a clear, actionable message.
+    """
+    import urllib.parse
+
+    host = ""
+    try:
+        host = urllib.parse.urlsplit(stream_url).hostname or ""
+    except Exception:
+        pass
+    try:
+        import socket
+        if host:
+            socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return False, t("Channel server unreachable (DNS).")
+    try:
+        from .yacine_live_proxy import start_live_proxy
+        proxy, local = start_live_proxy(stream_url, headers or {})
+        try:
+            import urllib.request
+            with urllib.request.urlopen(local, timeout=timeout) as r:
+                body = r.read(200)
+            if b"#EXTM3U" not in body and b"#EXT-X" not in body:
+                return False, t("Channel server refused the stream.")
+            return True, ""
+        finally:
+            proxy.stop()
+    except Exception as e:  # noqa: BLE001 - network noise
+        msg = str(e) or type(e).__name__
+        return False, f"{t('Channel server refused the stream.')} ({msg[:60]})"
+
+
 def play_direct_stream(stream_url: str, headers: dict, title: str,
                        player_name: str = None) -> bool:
     """Play a live stream that needs UTF-8 HTTP headers (YacineTV).
@@ -2838,8 +2878,8 @@ def play_direct_stream(stream_url: str, headers: dict, title: str,
         if shutil.which("ffmpeg") and _play_vlc_pipe(
                 exe, stream_url, headers, title):
             return True
-        proxy, local_url = start_live_proxy(stream_url, headers)
         # Fallback without ffmpeg: normal VLC + local HLS proxy.
+        proxy, local_url = start_live_proxy(stream_url, headers)
         # --no-one-instance is mandatory:
         # otherwise it forwards the URL to an existing instance and exits.
         vlc_log = os.path.join(tempfile.gettempdir(), "freeflix-vlc.log")

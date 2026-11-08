@@ -1015,7 +1015,7 @@ _FR = {
         'Impossible de lancer le flux du match.',
     'Tomorrow': 'Demain',
     'Upcoming': 'À venir',
-    'LIVE': 'LIVE',
+    'LIVE': 'EN DIRECT',
     'Match streams use mpv or VLC; launching mpv.':
         'Les matchs utilisent mpv ou VLC ; lancement de mpv.',
     'The stream ended unexpectedly.':
@@ -1023,6 +1023,14 @@ _FR = {
     'Playing in VLC…': 'Lecture dans VLC…',
     'VLC stopped early. Log:': 'VLC s’est arrêté trop tôt. Journal :',
     'Movies, Series & Anime': 'Films, Séries & Anime',
+    'LIVE now': 'En direct',
+    'Channel server unreachable (DNS).':
+        'Serveur de la chaîne injoignable (DNS).',
+    'Channel server refused the stream.':
+        'Le serveur de la chaîne refuse le flux.',
+    'Cannot play this match:': 'Impossible de lire ce match :',
+    'This channel is often blocked or taken down; try another match.':
+        'Cette chaîne est souvent bloquée ou retirée ; essaie un autre match.',
     'Mbps': 'Mbps',
     'GB/h': 'Go/h',
     'Match player:': 'Lecteur des matchs :',

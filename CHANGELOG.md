@@ -1,5 +1,50 @@
 # Changelog
 
+## 2.4.0
+
+- **Match regroupé par statut** : sections `En direct (n)`, `À venir (n)`,
+  `Terminés (n)` avec une **grille à colonnes fixes** (chaîne · heure ·
+  équipes · compétition). Les largeurs sont calculées en cellules réelles
+  sur tout l'écran, donc les heures et les équipes sont parfaitement
+  alignées d'une section à l'autre.
+- **Badges de chaîne génériques** : `beIN N` → `BN` (toutes les chaînes),
+  `Dubai Sports N` → `DSN`, et toute autre chaîne reçoit une abréviation
+  courte (≤ 6 caractères).
+- **Noms d'équipes corrigés** : dictionnaire de clubs embarqué
+  (`data/clubs.json`, ~430 entrées) utilisé avant la traduction machine,
+  plus une liste de rejets pour les traductions littérales. Fini
+  « ليل → nuit », « مان يونايتد → Homme Uni », « انجيه → Enregistrez-le ».
+- **`LIVE` traduit** en `EN DIRECT` (FR).
+- **Logos de chaînes** : index iptv-org embarqué
+  (`data/channel_logos.json`, ~30 k entrées) pour afficher le logo d'une
+  chaîne à partir de son nom.
+- Cache de traductions versionné : les valeurs erronées des anciennes
+  versions sont automatiquement régénérées.
+- **Contrôle avant lecture d'un match** : le manifeste est testé (DNS + HLS)
+  avant de lancer le lecteur. Une chaîne retirée ou bloquée affiche
+  « Impossible de lire ce match : serveur injoignable » au lieu d'ouvrir un
+  lecteur qui se referme aussitôt. Les chaînes Dubai Sports sont concernées
+  aujourd'hui (CDN `mgmlcdn.com`/`mangomolo.com` ne résout plus).
+- 614 tests au vert, ruff OK.
+
+## 2.3.3
+
+- **Match : badges de chaîne généralisés**. beIN 1..N → `B1`..`BN`
+  (plus seulement 1–4), Dubai Sports N → `DSN`, et toute autre chaîne reçoit
+  une abréviation courte (`Canal+ Sport 2` → `CS2`, `Sky Sports F1` → `SSF`,
+  `ESPN` → `E`). Fin des libellés complets dans la liste.
+- Testé sur le catalogue courant (18 matchs, 8 chaînes différentes).
+
+## 2.3.2
+
+- **Match buffer 20 s, démarrage rapide** : mpv utilise
+  `cache-secs=20` + `demuxer-readahead-secs=20` + `cache-pause=no`
+  (première image en ~1 s sur le test synthétique) ;
+- VLC revient à la lecture **ffmpeg → TS** (celle qui ne s'arrêtait pas),
+  sans cache réseau 20 s : démarrage immédiat et flux continu ;
+- la lecture reste au bord du live tout en gardant 20 s de marge pour
+  les connexions instables.
+
 ## 2.3.1
 
 - **Qualités Match prêtes pour le futur** : 4K/2160p (≥ 15,0 Mbps,

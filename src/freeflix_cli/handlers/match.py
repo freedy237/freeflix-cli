@@ -36,9 +36,30 @@ def _when_label(ev: ym.MatchEvent, now: datetime) -> str:
 
 
 def _channel_label(channel: str) -> str:
-    """Short live-TV badge: beIN SPORTS 1..4 → B1..B4."""
-    m = re.search(r"be\s*in\s*sports?\s*([1-4])", channel or "", re.I)
-    return f"B{m.group(1)}" if m else (channel or "")
+    """Short, stable live-TV badge for every channel.
+
+    beIN SPORTS 1..N → B1..BN · Dubai Sports N → DS N · any other channel
+    keeps a compact form of its own name, so new sources never print a long
+    full label in front of the match.
+    """
+    name = (channel or "").strip()
+    if not name:
+        return ""
+    m = re.search(r"be\s*in\s*sports?\s*(\d+)", name, re.I)
+    if m:
+        return f"B{m.group(1)}"
+    m = re.search(r"dubai\s*sports?\s*(\d*)", name, re.I)
+    if m:
+        return f"DS{m.group(1)}"
+    # Generic: initials of the words, then a trailing number (never twice).
+    # "Canal+ Sport 2" → "CS2", "Sky Sports F1" → "SSF1", "ESPN" → "E".
+    words = [w for w in re.split(r"[\s\-]+", name) if w and w[0].isalnum()]
+    letters = "".join(w[0] for w in words).upper()
+    if words and words[-1].isdigit():
+        short = letters[:-1] + words[-1]
+    else:
+        short = letters
+    return (short or name)[:6]
 
 
 def _match_label(ev: ym.MatchEvent, now_ts: int, now: datetime) -> str:
@@ -58,6 +79,73 @@ def _match_label(ev: ym.MatchEvent, now_ts: int, now: datetime) -> str:
 def _sort_events(events: list[ym.MatchEvent], now_ts: int) -> list[ym.MatchEvent]:
     order = {"live": 0, "upcoming": 1, "ended": 2}
     return sorted(events, key=lambda e: (order.get(e.status(now_ts), 3), e.start))
+
+
+_GROUP_ICONS = {"live": "fire", "upcoming": "clock", "ended": "check"}
+
+
+def _group_label(state: str, count: int) -> str:
+    key = {"live": "LIVE now", "upcoming": "Upcoming",
+           "ended": "Finished"}.get(state, state)
+    return f"{icon(_GROUP_ICONS.get(state, 'clock'))} {t(key)} ({count})"
+
+
+def _fit(text: str, width: int) -> str:
+    """Pad/truncate to an exact DISPLAY width (wide glyphs count as 2)."""
+    from rich.cells import cell_len
+
+    out = ""
+    for ch in str(text or ""):
+        if cell_len(out + ch) > width:
+            break
+        out += ch
+    if cell_len(out) < width:
+        out += " " * (width - cell_len(out))
+    return out
+
+
+def _column_widths(events: list[ym.MatchEvent], now: datetime) -> dict:
+    """Widths shared by EVERY row of the screen (all status sections)."""
+    from rich.cells import cell_len
+
+    chans = [f"({_channel_label(e.channel)})" if e.channel else "" for e in events]
+    whens = [_when_label(e, now) for e in events]
+    teams = [f"{e.home}  VS  {e.away}" for e in events]
+    leagues = [e.championship or "" for e in events]
+
+    def width(values, minimum=0, maximum=10_000):
+        w = max([cell_len(v) for v in values] + [minimum])
+        return min(w, maximum)
+
+    return {"channel": width(chans), "when": width(whens, minimum=5),
+            "teams": width(teams, maximum=46), "league": width(leagues, maximum=30)}
+
+
+def _build_rows(events: list[ym.MatchEvent], now: datetime, widths: dict = None):
+    """Aligned table: channel | time | teams | competition.
+
+    Column widths are computed from the actual content (display cells, so
+    accented and Arabic names line up correctly) — every row has the same
+    shape, no more ragged badges pushing the times around.
+    """
+    chans = [f"({_channel_label(e.channel)})" if e.channel else "" for e in events]
+    whens = [_when_label(e, now) for e in events]
+    teams = [f"{e.home}  VS  {e.away}" for e in events]
+    leagues = [e.championship or "" for e in events]
+
+    widths = widths or _column_widths(events, now)
+    w_channel = widths["channel"]
+    w_when = widths["when"]
+    w_teams = widths["teams"]
+    w_league = widths["league"]
+
+    rows = []
+    for ch, wh, tm, lg in zip(chans, whens, teams, leagues):
+        row = _fit(ch, w_channel) + "  " + _fit(wh, w_when) + "  " + _fit(tm, w_teams)
+        if lg:
+            row += "  ·  " + _fit(lg, w_league)
+        rows.append(row.rstrip())
+    return rows
 
 
 # Conservative live HLS minimums (Mbps) used for the GB/hour estimate.
@@ -97,10 +185,15 @@ def _quality_label(stream: dict) -> str:
 
 
 def _play(event: ym.MatchEvent, stream: dict, player_name: str = "") -> None:
-    from ..player_manager import play_direct_stream
+    from ..player_manager import match_stream_reachable, play_direct_stream
 
     title = f"YacineTV · {event.home}  VS  {event.away}"
     print_info(f"{t('Selected quality:')} {stream.get('name', '?')}")
+    ok, why = match_stream_reachable(stream["url"], stream.get("headers") or {})
+    if not ok:
+        print_warning(f"{t('Cannot play this match:')} {why}")
+        print_info(t("This channel is often blocked or taken down; try another match."))
+        return
     ok = play_direct_stream(stream["url"], stream.get("headers") or {}, title,
                             player_name=player_name or None)
     if not ok:
@@ -175,13 +268,24 @@ def handle_match() -> None:
         now_ts = int(now.timestamp())
         ordered = _sort_events(events, now_ts)
         player_name = _current_player()
-        labels = [_match_label(ev, now_ts, now) for ev in ordered]
+        # Group by status with section headers so the rows line up in
+        # columns; "finished" stays collapsed at the bottom.
+        labels = []
+        group_headers = {}
+        widths = _column_widths(ordered, now)
+        for state in ("live", "upcoming", "ended"):
+            group = [ev for ev in ordered if ev.status(now_ts) == state]
+            if not group:
+                continue
+            group_headers[len(labels)] = _group_label(state, len(group))
+            labels.extend(_build_rows(group, now, widths))
         labels.append(t("← Back"))
         header = (f"{icon('football')} {t('Football matches')}  ·  "
                   f"{t('Cameroon time (UTC+1)')}")
 
         idx = select_from_list(
-            labels, t("Select a match"), header=header, clear_on_back=True,
+            labels, t("Select a match"), header=header,
+            group_headers=group_headers, clear_on_back=True,
         )
         if idx < 0 or idx >= len(ordered):
             return

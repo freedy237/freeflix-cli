@@ -159,13 +159,24 @@ def test_match_handler_lists_live_and_auto_quality(monkeypatch):
             return len(streams)         # Auto (just before Back)
         return len(options) - 1         # Back on the next match list
 
-    monkeypatch.setattr(mh, "select_from_list", fake_select)
+    headers = {}
+
+    def fake_select2(options, prompt, **kw):
+        headers.setdefault("g", kw.get("group_headers"))
+        return fake_select(options, prompt, **kw)
+
+    monkeypatch.setattr(mh, "select_from_list", fake_select2)
     played = []
+    monkeypatch.setattr(player_manager, "match_stream_reachable",
+                        lambda *a, **k: (True, ""))
     monkeypatch.setattr(player_manager, "play_direct_stream",
                         lambda *a, **k: played.append(a) or True)
 
     mh.handle_match()
-    assert "LIVE" in calls[0][0]
+    # Grouping: the status lives in the section header, the row stays aligned.
+    assert headers["g"], "expected status section headers"
+    first_header = next(iter(headers["g"].values()))
+    assert t("LIVE now") in first_header
     assert calls[1][-1] == t("← Back")
     assert "Auto" in calls[1][-2]
     assert played and "hd.m3u8" in played[0][0]
@@ -301,8 +312,8 @@ def test_channel_aliases_and_other_channels():
     from freeflix_cli.handlers import match as mh
     assert mh._channel_label("beIN SPORTS 1") == "B1"
     assert mh._channel_label("beIN SPORTS 4") == "B4"
-    assert mh._channel_label("beIN SPORTS 5") == "beIN SPORTS 5"
-    assert mh._channel_label("Canal+ Sport") == "Canal+ Sport"
+    assert mh._channel_label("beIN SPORTS 5") == "B5"
+    assert mh._channel_label("Canal+ Sport") == "CS"
 
 
 def test_future_4k_quality_estimate():
@@ -321,3 +332,96 @@ def test_other_teams_are_dynamic(monkeypatch, tmp_path):
     out = ym.localize_events([ev], "fr")[0]
     assert out.home == "Al Ahly" and out.away == "Zamalek"
     assert out.championship == "الدوري المصري"
+
+
+def test_channel_labels_cover_new_channels():
+    from freeflix_cli.handlers import match as mh
+    assert mh._channel_label("beIN SPORTS 6") == "B6"
+    assert mh._channel_label("beIN SPORTS 8") == "B8"
+    assert mh._channel_label("Dubai Sports 1") == "DS1"
+    assert mh._channel_label("Canal+ Sport 2") == "CS2"
+    assert mh._channel_label("Sky Sports F1") == "SSF"
+    assert mh._channel_label("ESPN") == "E"
+    assert mh._channel_label("") == ""
+
+
+def test_every_channel_name_yields_a_short_badge():
+    """Whatever the source sends, the label stays short (≤ 6 chars)."""
+    from freeflix_cli.handlers import match as mh
+    samples = [
+        "beIN SPORTS 1", "beIN SPORTS 7", "beIN SPORTS 10",
+        "Dubai Sports", "Dubai Sports 3", "Dubai Racing 2",
+        "Canal+ Sport", "Canal+ Sport 2", "Sky Sports F1", "ESPN",
+        "RMC Sport 1", "TF1", "Al Jazeera Sport 3", "BBC One HD",
+        "Eurosport 1", "Fox Sports 2", "Sport TV 5", "Ziggo Sport",
+    ]
+    for name in samples:
+        label = mh._channel_label(name)
+        assert label and len(label) <= 6, (name, label)
+        assert label != name or len(name) <= 6, (name, label)
+
+
+def test_club_dictionary_overrides_bad_machine_translation(monkeypatch, tmp_path):
+    """Curated club data wins over literal MT ("ليل" must never become "nuit")."""
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_translate_one",
+                        lambda text, lang, timeout=5: "nuit" if text == "ليل" else text)
+    ev = ym.MatchEvent("1", "Ligue 1", "beIN 1", 1, 2, "ليل", "رين")
+    out = ym.localize_events([ev], "fr")[0]
+    assert out.home.lower() != "nuit"
+    assert "Lille" in out.home
+
+
+def test_generic_translation_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_translate_one",
+                        lambda text, lang, timeout=5: "night")
+    assert ym._translate_cached("لعبة", "fr", {}) == "لعبة"
+
+
+def test_channel_logo_lookup_is_bundled():
+    from freeflix_cli.scraping.yacine_match import channel_logo
+    assert channel_logo("beIN SPORTS 1").startswith("http")
+    assert channel_logo("Dubai Sports 1").startswith("http")
+
+
+def test_match_stream_reachable_reports_dns_failure(monkeypatch):
+    from freeflix_cli import player_manager as pm
+    import socket
+
+    def boom(*a, **k):
+        raise socket.gaierror("no such host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", boom)
+    ok, why = pm.match_stream_reachable(
+        "https://dead.cdn.invalid/live/x.m3u8", {})
+    assert ok is False and why
+
+
+def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
+    import http.server
+    import threading
+    from freeflix_cli import player_manager as pm
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = b"#EXTM3U\n#EXTINF:6,\nseg.ts\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        ok, why = pm.match_stream_reachable(
+            f"http://127.0.0.1:{port}/live/index.m3u8", {})
+        assert ok is True and why == ""
+    finally:
+        srv.shutdown()
+        srv.server_close()
