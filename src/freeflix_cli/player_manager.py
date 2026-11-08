@@ -2816,14 +2816,83 @@ def match_stream_reachable(stream_url: str, headers: dict,
             socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
     except Exception:
         return False, t("Channel server unreachable (DNS).")
+    # Probe with ffmpeg DIRECTLY (same path as playback): the CDN pins some
+    # feeds to the client that opened the playlist, so going through our
+    # local proxy reported "offline" for streams that actually play.
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        hdr = "".join(
+            f"{k}: {str(v).replace(chr(13), ' ').replace(chr(10), ' ')}\r\n"
+            for k, v in (headers or {}).items() if v)
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-headers", hdr,
+               "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
+               "-rw_timeout", str(max(4, timeout) * 1000000),
+               "-analyzeduration", "3000000", "-probesize", "1000000",
+               # Live playlists never end: bound the read so the probe cannot
+               # hang on a continuous stream (-t BEFORE -i is an input cap).
+               "-t", "4", "-i", stream_url,
+               "-t", "1", "-f", "null", "-"]
+        # IMPORTANT: a live playlist may play forever, so "no exit" is a
+        # best-case result, not a failure. Read stderr while it runs and stop
+        # as soon as the verdict is known.
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, text=True,
+                                    errors="replace")
+        except Exception:
+            proc = None
+        if proc is not None:
+            deadline = time.time() + max(8, timeout + 4)
+            lines: list[str] = []
+            verdict = None
+            try:
+                import select as _select
+                while time.time() < deadline:
+                    ready, _, _ = _select.select([proc.stderr], [], [], 0.2)
+                    if not ready:
+                        continue
+                    line = proc.stderr.readline()
+                    if not line:
+                        break
+                    lines.append(line.strip())
+                    blob = " ".join(lines).lower()
+                    if "403 forbidden" in blob:
+                        verdict = ("refused", t("Channel server refused the stream."))
+                        break
+                    if any(k in blob for k in ("detected", "video:", "audio:",
+                                               "frame=", "stream #")):
+                        verdict = ("ok", "")
+                        break
+                    if "invalid data" in blob or "404" in blob:
+                        verdict = ("empty", t("The stream has no data (offline)."))
+                        break
+            finally:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            if verdict:
+                if verdict[0] == "ok":
+                    return True, ""
+                return False, verdict[1]
+            # No verdict in time: the stream keeps flowing (live) → playable.
+            if proc.returncode in (0, None) or proc.returncode == -15:
+                return True, ""
+            return False, t("The stream has no data (offline).")
+
     try:
         from .yacine_live_proxy import start_live_proxy
         proxy, local = start_live_proxy(stream_url, headers or {})
         try:
             import urllib.request
             with urllib.request.urlopen(local, timeout=timeout) as r:
-                body = r.read(200)
-            if b"#EXTM3U" not in body and b"#EXT-X" not in body:
+                body = r.read()
+            text = body.decode("utf-8", "replace")
+            if "#EXTM3U" not in text and "#EXT-X" not in text:
                 return False, t("Channel server refused the stream.")
             return True, ""
         finally:
@@ -2860,10 +2929,11 @@ def play_direct_stream(stream_url: str, headers: dict, title: str,
         if not exe:
             print_error(t("mpv is not installed or not in PATH."))
             return False
+        # Direct ffmpeg pipe first: the CDN answers 404 when the playlist is
+        # relayed through the local proxy, but serves ffmpeg directly.
         if shutil.which("ffmpeg") and _play_ffmpeg_pipe(
                 exe, stream_url, headers, title):
             return True
-        # No ffmpeg (or pipe failed): fall back to the local HLS proxy.
         proxy, local_url = start_live_proxy(stream_url, headers)
         try:
             return _play_dash_mpv(exe, local_url, {}, title, live=True)

@@ -81,6 +81,52 @@ def _sort_events(events: list[ym.MatchEvent], now_ts: int) -> list[ym.MatchEvent
     return sorted(events, key=lambda e: (order.get(e.status(now_ts), 3), e.start))
 
 
+def _dedupe(events: list[ym.MatchEvent], now_ts: int) -> list[ym.MatchEvent]:
+    """One row per fixture: the catalogue repeats some matches across
+    channels and time slots (a live "Twente - Ajax" while an older
+    "Twente - Ajax" of the same channel is already finished).
+
+    The most useful entry wins: live > upcoming > finished, then the nearest
+    kick-off to now. Every channel showing the fixture is kept in a side map
+    so the row can still show where else to watch it.
+    """
+    rank = {"live": 0, "upcoming": 1, "ended": 2}
+    best: dict[tuple, ym.MatchEvent] = {}
+    for ev in events:
+        key = (
+            re.sub(r"\s+", " ", (ev.home or "").strip().lower()),
+            re.sub(r"\s+", " ", (ev.away or "").strip().lower()),
+        )
+        if not key[0] or not key[1]:
+            continue
+        cur = best.get(key)
+        if cur is None:
+            best[key] = ev
+            continue
+        new_rank = (rank.get(ev.status(now_ts), 3), abs(ev.start - now_ts))
+        cur_rank = (rank.get(cur.status(now_ts), 3), abs(cur.start - now_ts))
+        if new_rank < cur_rank:
+            best[key] = ev
+    return list(best.values())
+
+
+def _channels_for(events: list[ym.MatchEvent]) -> dict[tuple, list[str]]:
+    """All channels broadcasting a given fixture pair (deduplicated)."""
+    out: dict[tuple, list[str]] = {}
+    for ev in events:
+        key = (
+            re.sub(r"\s+", " ", (ev.home or "").strip().lower()),
+            re.sub(r"\s+", " ", (ev.away or "").strip().lower()),
+        )
+        if not ev.channel:
+            continue
+        bucket = out.setdefault(key, [])
+        label = _channel_label(ev.channel)
+        if label and label not in bucket:
+            bucket.append(label)
+    return out
+
+
 _GROUP_ICONS = {"live": "fire", "upcoming": "clock", "ended": "check"}
 
 
@@ -184,20 +230,37 @@ def _quality_label(stream: dict) -> str:
             f"~{gb:.2f} {t('GB/h')}")
 
 
-def _play(event: ym.MatchEvent, stream: dict, player_name: str = "") -> None:
+def _play(event: ym.MatchEvent, stream: dict, player_name: str = "",
+          alternatives: list = None) -> None:
+    """Play `stream`, falling back to another source if it is dead.
+
+    A live fixture now ships several sources (HD, SD, Low, Multi…). The main
+    quality can be refused by the CDN while "Multi" works, so never give up
+    on the first failure: walk the remaining sources and pick the first one
+    that actually answers.
+    """
     from ..player_manager import match_stream_reachable, play_direct_stream
 
     title = f"YacineTV · {event.home}  VS  {event.away}"
-    print_info(f"{t('Selected quality:')} {stream.get('name', '?')}")
-    ok, why = match_stream_reachable(stream["url"], stream.get("headers") or {})
-    if not ok:
-        print_warning(f"{t('Cannot play this match:')} {why}")
-        print_info(t("This channel is often blocked or taken down; try another match."))
-        return
-    ok = play_direct_stream(stream["url"], stream.get("headers") or {}, title,
-                            player_name=player_name or None)
-    if not ok:
-        print_warning(t("Could not start the match stream."))
+    queue = [stream] + [s for s in (alternatives or [])
+                        if s is not stream and s.get("url") != stream.get("url")]
+    for i, cand in enumerate(queue):
+        name = cand.get("name", "?")
+        if i == 0:
+            print_info(f"{t('Selected quality:')} {name}")
+        else:
+            print_info(f"{t('Trying another source:')} {name}")
+        ok, why = match_stream_reachable(cand["url"], cand.get("headers") or {})
+        if not ok:
+            if i == 0:
+                print_warning(f"{t('Cannot play this match:')} {why}")
+            continue
+        ok = play_direct_stream(cand["url"], cand.get("headers") or {}, title,
+                                player_name=player_name or None)
+        if ok:
+            return
+    print_warning(t("Could not start the match stream."))
+    print_info(t("This channel is often blocked or taken down; try another match."))
 
 
 def _available_players() -> list[str]:
@@ -266,7 +329,7 @@ def handle_match() -> None:
 
         now = datetime.now(tz=_CAM)
         now_ts = int(now.timestamp())
-        ordered = _sort_events(events, now_ts)
+        ordered = _sort_events(_dedupe(events, now_ts), now_ts)
         player_name = _current_player()
         # Group by status with section headers so the rows line up in
         # columns; "finished" stays collapsed at the bottom.
@@ -326,11 +389,11 @@ def handle_match() -> None:
                            f"{t('GB/h')}")
                 chosen = _choose_player(player_name, allow_cancel=True)
                 if chosen:
-                    _play(event, stream, chosen)
+                    _play(event, stream, chosen, streams)
             else:
                 return
             continue
 
         chosen = _choose_player(player_name, allow_cancel=True)
         if chosen:
-            _play(event, streams[choice], chosen)
+            _play(event, streams[choice], chosen, streams)

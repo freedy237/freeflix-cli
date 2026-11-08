@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.4.1
+
+- **Match : une seule ligne par affiche**. Le catalogue répétait un même
+  match sur plusieurs créneaux (un « Twente - Ajax » en direct alors qu'un
+  autre du même jour était déjà terminé). Une entrée live/à venir/terminée
+  par match, la plus utile gagne.
+- **Bascule automatique de source** : un match en direct expose désormais
+  HD, SD, Low et des flux **Multi**. Si la qualité choisie est refusée par
+  le CDN, FreeFlix essaie les autres sources au lieu de s'arrêter.
+- **Contrôle avant lecture fiable** : le préflight passe par **ffmpeg en
+  direct** (comme la lecture) et lit sa sortie en continu. Le proxy local
+  déclenchait des 404 anti-hotlink et un live qui joue « sans fin » était
+  pris pour une panne — les deux sont corrigés. Les erreurs sont
+  distinguées : `403` (serveur qui refuse) vs `404/invalid data` (flux sans
+  données).
+- **Multi en tête** : les flux « Multi » passent avant HD/SD/Low (source la
+  plus fiable en direct) ; tri stable, ordre du catalogue conservé à
+  qualité égale.
+- Proxy HLS : rafraîchissement automatique de la playlist quand un segment
+  devient introuvable.
+- 618 tests au vert, ruff OK.
+
 ## 2.4.0
 
 - **Match regroupé par statut** : sections `En direct (n)`, `À venir (n)`,

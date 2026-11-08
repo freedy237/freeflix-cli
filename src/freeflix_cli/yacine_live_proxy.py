@@ -66,6 +66,33 @@ class _LiveProxy:
             raise RuntimeError(f"upstream HTTP {code}")
         return conn, resp
 
+    def _refresh_playlist_items(self) -> None:
+        """Re-fetch the upstream playlist and re-map the MOST RECENT segments.
+
+        Some CDNs answer 404 for a segment that was valid when the playlist
+        was fetched. The live playlist keeps moving, so the newest segments
+        almost always work: drop the old mappings and rebuild them from a
+        fresh fetch before giving up on a 404.
+        """
+        try:
+            conn, resp = self._request(self.playlist_url, self.headers)
+            try:
+                text = resp.read().decode("utf-8", "replace")
+            finally:
+                conn.close()
+        except Exception:
+            return
+        segs = [ln.strip() for ln in text.splitlines()
+                if ln.strip() and not ln.startswith("#")]
+        if not segs:
+            return
+        base = self.playlist_url
+        for old, (_url, kind) in list(self.items.items()):
+            if kind == "segment":
+                self.items.pop(old, None)
+        for ln in segs[-6:]:
+            self._register(urllib.parse.urljoin(base, ln), "segment")
+
     def _register(self, url: str, kind: str) -> str:
         self._counter += 1
         key = f"{self._counter}.{'m3u8' if kind == 'playlist' else 'ts'}"
@@ -148,7 +175,16 @@ class _LiveProxy:
                         self.end_headers()
                         self.wfile.write(data)
                         return
-                    conn, resp = outer._request(url, outer.headers)
+                    try:
+                        conn, resp = outer._request(url, outer.headers)
+                    except Exception:
+                        # Stale segment id: rebuild from the fresh playlist.
+                        outer._refresh_playlist_items()
+                        newest = [u for u, k in reversed(list(outer.items.values()))
+                                  if k == "segment"]
+                        if not newest or newest[0] == url:
+                            raise
+                        conn, resp = outer._request(newest[0], outer.headers)
                     try:
                         self.send_response(200)
                         # Upstream labels segments as application/pdf; VLC's

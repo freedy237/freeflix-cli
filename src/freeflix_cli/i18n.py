@@ -1026,9 +1026,12 @@ _FR = {
     'LIVE now': 'En direct',
     'Channel server unreachable (DNS).':
         'Serveur de la chaîne injoignable (DNS).',
+    'The stream has no data (offline).':
+        'Le flux ne diffuse aucune donnée (hors ligne).',
     'Channel server refused the stream.':
         'Le serveur de la chaîne refuse le flux.',
     'Cannot play this match:': 'Impossible de lire ce match :',
+    'Trying another source:': 'Essai d’une autre source :',
     'This channel is often blocked or taken down; try another match.':
         'Cette chaîne est souvent bloquée ou retirée ; essaie un autre match.',
     'Mbps': 'Mbps',

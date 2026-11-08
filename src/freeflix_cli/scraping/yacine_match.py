@@ -246,10 +246,14 @@ def fetch_events(timeout: int = 10) -> tuple[list[MatchEvent], bool]:
 
 def _quality_rank(name: str) -> int:
     n = (name or "").lower()
-    if any(k in n for k in ("4k", "2160", "uhd")):
-        return 4
-    if any(k in n for k in ("1440", "2k")):
+    # "Multi" sources are official multi-camera feeds: usually the most
+    # reliable live source when the per-quality CDN is throttled.
+    if "multi" in n:
         return 3
+    if any(k in n for k in ("4k", "2160", "uhd")):
+        return 5
+    if any(k in n for k in ("1440", "2k")):
+        return 4
     if any(k in n for k in ("hd", "fhd", "1080", "full")):
         return 3
     if any(k in n for k in ("sd", "720", "medium")):
@@ -293,7 +297,12 @@ def fetch_streams(event_id: str, timeout: int = 10) -> list[dict]:
             streams = [s for s in (_stream_from_dict(r) for r in (raw or []))
                        if s and not s.get("drm")]
             if streams:
-                streams.sort(key=lambda s: _quality_rank(s["name"]), reverse=True)
+                # Stable sort: rank first, then keep the catalogue order.
+                # "Multi" feeds come first (most reliable live source),
+                # HD/SD/Low after them.
+                order = {id(s): i for i, s in enumerate(streams)}
+                streams.sort(
+                    key=lambda s: (-_quality_rank(s["name"]), order[id(s)]))
                 return streams
         except Exception as exc:  # noqa: BLE001
             last_err = exc

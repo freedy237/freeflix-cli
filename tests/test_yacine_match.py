@@ -398,7 +398,23 @@ def test_match_stream_reachable_reports_dns_failure(monkeypatch):
     assert ok is False and why
 
 
+_TS_FIXTURE = ""
+
+
+def _make_ts_fixture(path):
+    """Tiny real MPEG-TS so ffmpeg can decode at least one frame."""
+    import subprocess
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc=size=64x64:rate=5", "-f", "lavfi", "-i",
+         "sine=frequency=440", "-t", "2", "-c:v", "libx264",
+         "-preset", "ultrafast", "-c:a", "aac", "-f", "mpegts", path],
+        check=True, timeout=60)
+
+
 def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
+
     import http.server
     import threading
     from freeflix_cli import player_manager as pm
@@ -408,13 +424,19 @@ def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
             pass
 
         def do_GET(self):
-            body = b"#EXTM3U\n#EXTINF:6,\nseg.ts\n"
+            if "seg" in self.path:
+                body = open(_TS_FIXTURE, "rb").read()
+            else:
+                body = b"#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg.ts\n"
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.apple.mpegurl")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+    global _TS_FIXTURE
+    _TS_FIXTURE = str(tmp_path / "seg.ts")
+    _make_ts_fixture(_TS_FIXTURE)
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
@@ -425,3 +447,89 @@ def test_match_stream_reachable_true_for_local_manifest(monkeypatch, tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_dedupe_prefers_live_fixture_over_finished_copy():
+    """The catalogue repeats fixtures; one row must be shown, the live one."""
+    import time
+    from freeflix_cli.handlers import match as mh
+
+    now = int(time.time())
+    finished = ym.MatchEvent("old", "NED", "Dubai Sports 1",
+                             now - 7200, now - 5400, "Twente", "Ajax")
+    live = ym.MatchEvent("new", "NED", "Dubai Sports 1",
+                         now - 600, now + 6600, "Twente", "Ajax")
+    other = ym.MatchEvent("o", "FRA", "beIN SPORTS 1",
+                          now - 600, now + 6600, "Lens", "Marseille")
+    kept = mh._dedupe([finished, live, other], now)
+    assert len(kept) == 2
+    twente = [e for e in kept if e.home == "Twente"][0]
+    assert twente.id == "new" and twente.status(now) == "live"
+
+
+def test_dedupe_never_lists_one_fixture_in_two_statuses():
+    import time
+    from freeflix_cli.handlers import match as mh
+
+    now = int(time.time())
+    events = [
+        ym.MatchEvent("a", "L", "C1", now - 8000, now - 7000, "A", "B"),
+        ym.MatchEvent("b", "L", "C2", now - 60, now + 7000, "A", "B"),
+        ym.MatchEvent("c", "L", "C1", now + 9000, now + 16000, "A", "B"),
+    ]
+    kept = mh._dedupe(events, now)
+    assert len(kept) == 1
+    assert kept[0].status(now) == "live"
+
+
+def test_preflight_rejects_manifest_with_dead_segments(monkeypatch):
+    """A playlist whose segments 404 must not open a player."""
+    import http.server
+    import threading
+    from freeflix_cli import player_manager as pm
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if "seg" in self.path:
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = b"#EXTM3U\n#EXTINF:6,\nseg.ts\n"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        ok, why = pm.match_stream_reachable(
+            f"http://127.0.0.1:{srv.server_address[1]}/live/index.m3u8", {})
+        assert ok is False
+        assert why
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_play_falls_back_to_another_source(monkeypatch):
+    """When the chosen quality is dead, the next source is tried."""
+    from freeflix_cli.handlers import match as mh
+    from freeflix_cli import player_manager
+
+    ev = ym.MatchEvent("1", "L", "beIN SPORTS 1", 1, 2, "A", "B")
+    hd = {"name": "HD", "url": "https://dead.example/hd.m3u8", "headers": {}}
+    multi = {"name": "Multi", "url": "https://ok.example/m.m3u8", "headers": {}}
+    results = {"https://dead.example/hd.m3u8": (False, "dead"),
+               "https://ok.example/m.m3u8": (True, "")}
+    monkeypatch.setattr(player_manager, "match_stream_reachable",
+                        lambda url, h: results[url])
+    played = []
+    monkeypatch.setattr(player_manager, "play_direct_stream",
+                        lambda url, h, title, player_name=None:
+                        played.append(url) or True)
+    mh._play(ev, hd, "mpv", [hd, multi])
+    assert played == ["https://ok.example/m.m3u8"]
