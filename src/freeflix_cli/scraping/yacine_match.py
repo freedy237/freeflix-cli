@@ -219,29 +219,53 @@ def load_cached_events() -> list[MatchEvent]:
             if ev is not None]
 
 
+class EmptyCatalogue(RuntimeError):
+    """The API answered ``200`` but its match feed contains zero fixtures."""
+
+    def __init__(self, host: str = "") -> None:
+        self.host = host
+        super().__init__("empty catalogue")
+
+
+class ApiUnavailable(RuntimeError):
+    """No host could be reached; the message lists each failure."""
+
+
 def fetch_events(timeout: int = 10) -> tuple[list[MatchEvent], bool]:
     """Return ``(events, from_cache)``.
 
     Always tries the network first; falls back to the last disk snapshot when
-    the API/host is unreachable.
+    the API/host is unreachable.  An empty feed from a reachable host is
+    reported as :class:`EmptyCatalogue` even if the fallback hosts then fail,
+    so the user sees the real cause instead of a misleading network error.
     """
-    last_err = None
+    errors: list[str] = []
+    empty_host: str | None = None
     for host in _hosts_to_try():
         try:
             data = _request_json(host, "/api/events", timeout=timeout)
-            events = _parse_events(data)
-            try:
-                (_cache_dir() / _HOST_CACHE).write_text(host, encoding="utf-8")
-            except OSError:
-                pass
-            _save_events(events)
-            return events, False
         except Exception as exc:  # noqa: BLE001 - one host failing is normal
-            last_err = exc
+            errors.append(f"{host}: {exc}")
+            continue
+        events = _parse_events(data)
+        if not events:
+            # The host is up and speaks the protocol, it simply publishes no
+            # fixture right now (between match days or a backend hiccup).
+            empty_host = empty_host or host
+            continue
+        try:
+            (_cache_dir() / _HOST_CACHE).write_text(host, encoding="utf-8")
+        except OSError:
+            pass
+        _save_events(events)
+        return events, False
+
     cached = load_cached_events()
     if cached:
         return cached, True
-    raise RuntimeError(f"YacineTV API unavailable: {last_err}")
+    if empty_host:
+        raise EmptyCatalogue(empty_host)
+    raise ApiUnavailable("; ".join(errors) or "no host reachable")
 
 
 def _quality_rank(name: str) -> int:

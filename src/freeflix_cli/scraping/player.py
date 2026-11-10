@@ -906,6 +906,11 @@ def get_hls_link_dood(url: str, headers: dict, player_host: str = None) -> str |
 _OFFLINE_HOST_MARKERS = (
     "filemoon", "byse", "minochinos", "netu", "upn", "vidmoly",
     "coflix.upn", "mixdrop", "streamtape", "dood.li", "d0000d", "d000d",
+    # 2026-11 audit : veev.to no longer answers (TLS hang on every region we
+    # tested) and vidhsareup.io lost its DNS. Both were still offered because
+    # the extractor *type* exists; hide the dead hosts, not the family
+    # (poophq / kinoger still share the veev extractor).
+    "veev.to", "vidhsareup",
 )
 
 

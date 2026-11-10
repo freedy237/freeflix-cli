@@ -346,9 +346,21 @@ def _verify_archive(arc_path: Path, info: dict, label: str) -> bool:
             return False
         got = h.hexdigest()
         if got.lower() != expected.lower():
-            print_warning(
-                f"{label}: {t('checksum MISMATCH — refusing to install a possibly tampered binary.')}\n    {t('expected')} {expected}\n    {t('got')}      {got}"
-            )
+            if info.get("repo"):
+                # Our own config files are fetched from `main`: a mismatch
+                # almost always means the file moved on since this release,
+                # not that the network was tampered with. Tell the user what
+                # actually fixes it instead of scaring them.
+                print_warning(
+                    f"{label}: {t('checksum mismatch — this config changed upstream after the FreeFlix release.')}\n"
+                    f"    {t('Upgrade FreeFlix (uv tool upgrade freeflix-cli -U), then retry.')}\n"
+                    f"    {t('expected')} {expected}\n"
+                    f"    {t('got')}      {got}"
+                )
+            else:
+                print_warning(
+                    f"{label}: {t('checksum MISMATCH — refusing to install a possibly tampered binary.')}\n    {t('expected')} {expected}\n    {t('got')}      {got}"
+                )
             return False
     return True
 
@@ -717,16 +729,19 @@ def _download(url: str, dest: Path) -> bool:
 # plancher de taille la protège, comme les builds ffmpeg nightly.
 _FILE_PINS: dict[str, dict] = {
     "mpv.conf": {
-        "sha256": "e92b8fc46d10fa4a0d51f1bee2e7faee5708e4b95ae8b515712924792a19f28a",
+        "sha256": "ed06928242aaae9ec2b888becb5516e0ed7ea2c2c962d4507e4ed75cc837675c",
         "min_bytes": 2000,
+        "repo": True,
     },
     "input.conf": {
         "sha256": "3cb7d4db0481232cfe6c74101e7c2f97bcfb6ba2ff20a1f1f51717a0d2560bf5",
         "min_bytes": 800,
+        "repo": True,
     },
     "freeflix_position.lua": {
         "sha256": "bc05fa41266ddf643c110205d526969903ddf20cff095ef8eedeca4641bb4101",
         "min_bytes": 800,
+        "repo": True,
     },
     "Anime4K_Clamp_Highlights.glsl": {
         "sha256": "a2a9bf7fbc1d75d09660ca2e701e4d7fb0cf5457b94da47e1825032fa2b3671a",
@@ -793,7 +808,12 @@ def _safe_extract_zip(zf, dest_dir: str) -> None:
 
 
 def install_config_files() -> bool:
-    """Pull mpv.conf, input.conf and the lua hook from the repo."""
+    """Pull mpv.conf, input.conf and the lua hook from the repo.
+
+    A file that already exists on disk is never overwritten: the user may have
+    tuned it (hwdec, cache, HDR…), and a first-run retry before `setup_done`
+    used to resurrect the stock config over their edits.
+    """
     cfg = get_mpv_config_dir()
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "scripts").mkdir(parents=True, exist_ok=True)
@@ -805,6 +825,9 @@ def install_config_files() -> bool:
         (f"{REPO_RAW}/config/freeflix_position.lua",     cfg / "scripts" / "freeflix_position.lua"),
     ]
     for url, dest in files:
+        if dest.is_file() and dest.stat().st_size > 0:
+            print_info(f"  • {dest} {t('already installed — kept')}")
+            continue
         if _download_verified(url, dest):
             print_success(f"  ✓ {dest}")
         else:
@@ -827,6 +850,11 @@ def install_anime4k_shaders() -> bool:
         (f"{ANIME4K_RAW}/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl", sh_dir / "Anime4K_Upscale_CNN_x2_VL.glsl"),
     ]
     for url, dest in shaders:
+        # Shaders are versioned upstream by hash: keep a valid copy on disk so
+        # a flaky network never wipes a working install.
+        if dest.is_file() and dest.stat().st_size >= _FILE_PINS[dest.name]["min_bytes"]:
+            print_info(f"  • {dest.name} {t('already installed — kept')}")
+            continue
         if _download_verified(url, dest):
             print_success(f"  ✓ {dest.name}")
         else:
@@ -929,10 +957,38 @@ def _show_linux_commands(missing_ess: list[str]):
 
 
 # Per-OS install command for the media players FreeFlix can launch.
+# On Windows, prefer a real mpv.exe CLI (shinchiro / official CI builds);
+# mpv.net only ships mpvnet.exe (a GUI wrapper) and is the last resort.
 _PLAYER_PACKAGES = {
-    "mpv": {"linux": "mpv", "macos": "mpv", "winget": "mpv.net"},
-    "vlc": {"linux": "vlc", "macos": "vlc", "winget": "VideoLAN.VLC"},
+    "mpv": {
+        "linux": "mpv",
+        "macos": "mpv",
+        "winget": ["shinchiro.mpv", "mpv-player.mpv-CI.MSVC", "mpv.net"],
+    },
+    "vlc": {"linux": "vlc", "macos": "vlc", "winget": ["VideoLAN.VLC"]},
 }
+
+
+def _winget_ids(spec: dict) -> list:
+    ids = spec.get("winget") or []
+    return [ids] if isinstance(ids, str) else list(ids)
+
+
+def _refresh_winget_path() -> None:
+    """Put winget's portable-shim folder on PATH for this process.
+
+    winget writes shims to %LOCALAPPDATA%\\Microsoft\\WinGet\\Links but an
+    already-running process keeps its old PATH, so a freshly installed
+    player looks missing until the next terminal.
+    """
+    if sys.platform != "win32":
+        return
+    links = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links")
+    if not os.path.isdir(links):
+        return
+    current = os.environ.get("PATH", "")
+    if links.lower() not in current.lower():
+        os.environ["PATH"] = links + os.pathsep + current
 
 
 def install_media_player(name: str) -> bool:
@@ -948,20 +1004,21 @@ def install_media_player(name: str) -> bool:
         return False
 
     os_name = detect_os()
+    cmds = []
     if os_name == "linux":
         cmd = _linux_pkg_cmd(spec["linux"])
+        cmds = [cmd] if cmd else []
     elif os_name == "macos":
-        cmd = ["brew", "install", spec["macos"]] if shutil.which("brew") else None
+        cmds = [["brew", "install", spec["macos"]]] if shutil.which("brew") else []
     elif os_name == "windows":
-        cmd = (
-            ["winget", "install", "--silent", "--accept-source-agreements",
-             "--accept-package-agreements", "--id", spec["winget"]]
-            if shutil.which("winget") else None
-        )
-    else:
-        cmd = None
-
-    if not cmd:
+        if shutil.which("winget"):
+            cmds = [
+                ["winget", "install", "--silent",
+                 "--accept-source-agreements", "--accept-package-agreements",
+                 "--id", pkg]
+                for pkg in _winget_ids(spec)
+            ]
+    if not cmds:
         print_warning(
             f"{t('No package manager found to install')} {name}. "
             + t("Install it manually, then try again.")
@@ -970,7 +1027,7 @@ def install_media_player(name: str) -> bool:
 
     try:
         if not ask_yes_no(
-            f"{t('Install')} {name} {t('now?')} ({' '.join(cmd)})",
+            f"{t('Install')} {name} {t('now?')} ({' '.join(cmds[0])})",
             default=True,
         ):
             return False
@@ -978,22 +1035,31 @@ def install_media_player(name: str) -> bool:
         return False
 
     print_info(f"{t('Installing')} {name}…")
-    try:
-        subprocess.run(cmd, check=False, timeout=1800)
-    except Exception as e:
-        print_warning(f"{name} {t('install failed')} ({type(e).__name__}: {e})")
-        return False
 
-    # Windows winget often needs a fresh shell for PATH ; mpv.net is mpvnet.exe.
-    ok = bool(shutil.which(name) or (name == "mpv" and shutil.which("mpvnet")))
-    if ok:
+    def _found() -> bool:
+        _refresh_winget_path()
+        from .player_manager import get_mpv_path, get_vlc_path
+        return bool(get_mpv_path() if name == "mpv" else get_vlc_path())
+
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, check=False, timeout=1800)
+        except Exception as e:
+            print_warning(
+                f"{name} {t('install failed')} ({type(e).__name__}: {e})")
+            continue
+        if _found():
+            print_success(f"  ✓ {name} {t('installed')}")
+            return True
+
+    if _found():
         print_success(f"  ✓ {name} {t('installed')}")
-    else:
-        print_warning(
-            f"  ! {name} "
-            + t("installed but not yet on PATH — open a NEW terminal and relaunch freeflix.")
-        )
-    return ok
+        return True
+    print_warning(
+        f"  ! {name} "
+        + t("installed but not yet on PATH — open a NEW terminal and relaunch freeflix.")
+    )
+    return False
 
 
 def install_chafa() -> bool:

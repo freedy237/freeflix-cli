@@ -195,52 +195,127 @@ class AnimeExtractor:
         except Exception:
             return []
 
-    def search_anizone(self, title, episode=1):
-        """Extraction from Anizone (Updated Search and DOM selection)."""
-        base_url = self.anizone_base
+    @staticmethod
+    def _js_json(raw: str):
+        """Decode a JSON document embedded in a JS single-quoted string.
+
+        AniZone ships its payload as ``JSON.parse('{\u0022src\u0022:…}')``:
+        the JSON's own quotes are `\u0022` escapes, so a first JSON-string
+        decode turns it back into plain JSON, then a second parse yields the
+        object. Kept pure so it is unit-testable without the network.
+        """
         try:
-            # 1. Search. anizone migrated to a Livewire app : the search
-            #    is /anime?search=… and result links are now ABSOLUTE with
-            #    short opaque slugs (…/anime/bmwdgxhk), not title slugs.
+            text = json.loads('"' + raw + '"')
+            return json.loads(text)
+        except Exception:
+            return None
+
+    @classmethod
+    def _anizone_items(cls, html: str):
+        """Anime cards from the search page's Alpine ``items: JSON.parse(…)``."""
+        m = re.search(r"items:\s*JSON\.parse\('(.*?)'\)\s*,", html or "", re.S)
+        if not m:
+            return []
+        data = cls._js_json(m.group(1))
+        return data if isinstance(data, list) else []
+
+    @classmethod
+    def _anizone_stream(cls, html: str):
+        """(m3u8, subtitles) from the episode page's vidstack player blob."""
+        m = re.search(
+            r"vidstackPlayer\(JSON\.parse\('(.*?)'\)\)", html or "", re.S
+        )
+        if not m:
+            return None, []
+        data = cls._js_json(m.group(1))
+        if not isinstance(data, dict) or not data.get("src"):
+            return None, []
+        subs = []
+        for sub in data.get("subtitles") or []:
+            if not isinstance(sub, dict) or not sub.get("file"):
+                continue
+            subs.append({
+                "lang": sub.get("language") or sub.get("title") or "",
+                "url": sub["file"],
+            })
+        return data["src"], subs
+
+    @staticmethod
+    def _anizone_best_match(items, title: str):
+        """Pick the card whose title best matches the user's query."""
+        want = (title or "").strip().lower()
+        if not want:
+            return items[0] if items else None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            names = [item.get("main_title") or ""]
+            titles = item.get("title_list")
+            if isinstance(titles, dict):
+                names.extend(str(v) for v in titles.values())
+            for name in names:
+                n = str(name).strip().lower()
+                if n == want:
+                    return item
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            names = [item.get("main_title") or ""]
+            titles = item.get("title_list")
+            if isinstance(titles, dict):
+                names.extend(str(v) for v in titles.values())
+            if any(want in str(n).strip().lower()
+                   or str(n).strip().lower() in want for n in names if n):
+                return item
+        return items[0] if items else None
+
+    def search_anizone(self, title, episode=1):
+        """Extraction from AniZone (2026 Livewire + vidstack layout).
+
+        The site no longer exposes ``/anime/<slug>`` anchors nor a
+        ``<media-player src=…>`` tag: search results live in an Alpine
+        ``items: JSON.parse('…')`` payload (opaque slugs + full titles), and
+        the episode page embeds a direct HLS in
+        ``vidstackPlayer(JSON.parse('…'))``. Parse both, title-match instead
+        of blindly taking the first card, and hand the stream explicit
+        headers.
+        """
+        base_url = self.anizone_base
+        headers = {
+            "Referer": base_url + "/",
+            "Origin": base_url,
+        }
+        try:
             from urllib.parse import quote as _quote
+
             r = _get(
                 f"{base_url}/anime?search={_quote(title)}",
-                headers=self.headers,
-                timeout=10,
+                headers=headers,
+                timeout=15,
             )
-
-            slugs = re.findall(
-                r'href="(?:' + re.escape(base_url) + r')?/anime/([A-Za-z0-9_-]+)"',
-                r.text,
-            )
-            # de-dupe, keep order
-            slugs = list(dict.fromkeys(slugs))
-            # Slugs are opaque now, so we can't title-match — the first
-            # result is anizone's best relevance match.
-            best_slug = slugs[0] if slugs else None
-
-            if not best_slug:
+            items = self._anizone_items(r.text or "")
+            best = self._anizone_best_match(items, title)
+            if not isinstance(best, dict) or not best.get("slug"):
                 return []
 
-            # 2. Episode page
-            ep_url = f"{base_url}/anime/{best_slug}/{episode}"
-            r = _get(ep_url, headers=self.headers, timeout=10)
+            ep_url = f"{base_url}/anime/{best['slug']}/{episode}"
+            r = _get(ep_url, headers=headers, timeout=15)
+            src, subs = self._anizone_stream(r.text or "")
+            if not src:
+                return []
 
-            # Find media-player src (M3U8)
-            player_match = re.search(r'<media-player[^>]+src="([^"]+)"', r.text)
-
-            if player_match:
-                return [
-                    {
-                        "source": "Anizone",
-                        "quality": "1080p",
-                        "url": player_match.group(1),
-                        "type": "M3U8",
-                    }
-                ]
+            stream = {
+                "source": "AniZone",
+                "quality": "1080p",
+                "url": src,
+                "type": "M3U8",
+                "headers": {"Referer": base_url + "/"},
+            }
+            if subs:
+                stream["subtitles"] = subs
+            return [stream]
         except Exception:
-            pass
-        return []
+            return []
 
     def search_animetsu(self, title, anilist_id, episode=1):
         """Extraction from Animetsu (Updated Gojo V2 API)."""

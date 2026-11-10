@@ -317,8 +317,32 @@ def handle_match() -> None:
                 events, cached = ym.fetch_events()
                 events = ym.localize_events(
                     events, tracker.get_language() or "en")
+        except ym.EmptyCatalogue as e:
+            # The provider answered 200 with a valid, decrypted payload whose
+            # "data" array is empty: nothing is published server-side.  Saying
+            # "check your connection" here would be wrong and confusing.
+            print_warning(t("YacineTV is online but lists no match right now."))
+            print_info(t("The provider's match feed returned 0 fixtures "
+                         "(server-side, not your connection)."))
+            print_info(t("Live TV channels are still available in the main menu."))
+            if e.host:
+                print_info(f"{t('Source:')} {e.host}")
+            print_info(t("HTTP 200 · 0 events"))
+            print_info(t("Retry later: the feed usually fills up on match days."))
+            from ..cli_utils import pause
+            try:
+                pause()
+            except Exception:
+                pass
+            return
         except Exception as e:
             print_error(f"{t('Matches unavailable:')} {e}")
+            print_info(t("Check your connection, then try again."))
+            from ..cli_utils import pause
+            try:
+                pause()
+            except Exception:
+                pass
             return
 
         if cached:

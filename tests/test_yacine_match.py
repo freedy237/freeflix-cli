@@ -540,3 +540,81 @@ def test_play_falls_back_to_another_source(monkeypatch):
                         played.append(url) or True)
     mh._play(ev, hd, "mpv", [hd, multi])
     assert played == ["https://ok.example/m.m3u8"]
+
+
+def test_empty_catalogue_raises_instead_of_blank_list(monkeypatch, tmp_path):
+    """An API that answers [] must not wipe the cache or show nothing."""
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_hosts_to_try", lambda: ["api"])
+    monkeypatch.setattr(ym, "_request_json", lambda *a, **k: {"data": []})
+    try:
+        ym.fetch_events()
+    except ym.EmptyCatalogue as exc:
+        assert "empty catalogue" in str(exc) and exc.host == "api"
+    else:
+        raise AssertionError("empty catalogue must raise")
+
+
+def test_empty_catalogue_survives_dead_fallback_host(monkeypatch, tmp_path):
+    """The real cause (0 fixtures) must not be masked by a dead backup host.
+
+    Regression: the handler used to print "HTTP 436" from def.yacinelive.com
+    even though the primary host had answered 200 with an empty feed.
+    """
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_hosts_to_try", lambda: ["primary", "backup"])
+
+    def fake_request(host, path, timeout=10):
+        if host == "primary":
+            return {"data": []}
+        raise RuntimeError("HTTP 436")
+
+    monkeypatch.setattr(ym, "_request_json", fake_request)
+    try:
+        ym.fetch_events()
+    except ym.EmptyCatalogue as exc:
+        assert exc.host == "primary"
+    else:
+        raise AssertionError("empty catalogue must win over network errors")
+
+
+def test_all_hosts_unreachable_reports_api_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_hosts_to_try", lambda: ["a", "b"])
+
+    def boom(host, path, timeout=10):
+        raise RuntimeError("HTTP 503")
+
+    monkeypatch.setattr(ym, "_request_json", boom)
+    try:
+        ym.fetch_events()
+    except ym.ApiUnavailable as exc:
+        assert "a: HTTP 503" in str(exc) and "b: HTTP 503" in str(exc)
+    else:
+        raise AssertionError("network failure must raise ApiUnavailable")
+
+
+def test_empty_catalogue_falls_back_to_previous_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_hosts_to_try", lambda: ["api"])
+    ym._save_events([ym.MatchEvent("1", "L", "C", 1, 2, "A", "B")])
+    monkeypatch.setattr(ym, "_request_json", lambda *a, **k: {"data": []})
+    events, cached = ym.fetch_events()
+    assert cached is True and events and events[0].id == "1"
+
+
+def test_handler_reports_empty_feed_as_provider_side(monkeypatch, capsys):
+    """The UI must say 'provider has 0 fixtures', not 'check your connection'."""
+    from freeflix_cli.handlers import match as mh
+    from freeflix_cli.i18n import t
+
+    def boom():
+        raise ym.EmptyCatalogue("def001.ycnapi.com")
+
+    monkeypatch.setattr(mh.ym, "fetch_events", boom)
+    monkeypatch.setattr(mh, "select_from_list", lambda *a, **k: 1)  # Back
+    mh.handle_match()
+    out = capsys.readouterr().out
+    assert "def001.ycnapi.com" in out
+    assert "server-side" in out or "côté serveur" in out
+    assert t("Check your connection, then try again.") not in out

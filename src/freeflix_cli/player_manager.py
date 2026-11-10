@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import glob
 import shutil
 import platform
 import os
@@ -996,30 +997,65 @@ def get_vlc_path():
 
 def get_mpv_path():
     """
-    Find the mpv executable. On Windows the package most people install
-    is mpv.net, whose binary is `mpvnet.exe` (not `mpv.exe`), so a plain
-    shutil.which("mpv") misses it. Resolve PATH names then known install
-    locations.
+    Find the mpv executable.
+
+    Windows notes:
+      * ``shinchiro.mpv`` / ``mpv-player.mpv-CI.MSVC`` install a real
+        ``mpv.exe`` CLI; use those first.
+      * ``mpv.net`` only ships ``mpvnet.exe`` (a GUI wrapper) and is kept as
+        a last resort, because some mpv CLI flags (stdin playback, IPC,
+        ``--config-dir``) are not guaranteed to behave the same there.
 
     Returns the executable path, or None if not found.
     """
-    # PATH : try mpv first, then mpv.net's binary name.
-    for name in ("mpv", "mpvnet"):
-        p = shutil.which(name)
-        if p:
-            return p
+    # 1. Real mpv CLI on PATH.
+    p = shutil.which("mpv")
+    if p:
+        return p
 
     if platform.system() == "Windows":
         candidates = [
-            os.path.expandvars(r"%ProgramFiles%\mpv.net\mpvnet.exe"),
-            os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\mpv.net\mpvnet.exe"),
-            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpvnet.exe"),
             os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpv.exe"),
+            os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\mpv\mpv.exe"),
+            os.path.expandvars(r"%USERPROFILE%\scoop\apps\mpv\current\mpv.exe"),
+            os.path.expandvars(r"%ProgramData%\chocolatey\bin\mpv.exe"),
         ]
-        for p in candidates:
-            if os.path.exists(p):
-                return p
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+
+        # Winget portable installs live under a versioned package folder and
+        # are not always linked into Links\ (e.g. when PATH was not refreshed).
+        winget_root = os.path.expandvars(
+            r"%LOCALAPPDATA%\Microsoft\WinGet\Packages")
+        for pattern in (
+            "shinchiro.mpv*",
+            "mpv-player.mpv-CI.MSVC*",
+            "mpv.net*",
+        ):
+            for found in glob.glob(
+                os.path.join(winget_root, pattern, "**", "mpv.exe"),
+                recursive=True,
+            ):
+                return found
+
+    # 2. mpv.net's GUI binary (last resort; still accepts most mpv flags).
+    p = shutil.which("mpvnet")
+    if p:
+        return p
+
+    if platform.system() == "Windows":
+        mpvnet_candidates = [
+            os.path.expandvars(
+                r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpvnet.exe"),
+            os.path.expandvars(r"%ProgramFiles%\mpv.net\mpvnet.exe"),
+            os.path.expandvars(
+                r"%LOCALAPPDATA%\Programs\mpv.net\mpvnet.exe"),
+        ]
+        for c in mpvnet_candidates:
+            if os.path.exists(c):
+                return c
 
     return None
 

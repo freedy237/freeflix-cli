@@ -88,6 +88,67 @@ fois) ; annule avec `Échap Échap`.
 - Police Nerd : l'installateur la pose et configure Windows Terminal ; ferme
   **toutes** les fenêtres pour que la police s'applique.
 
+## Windows : antivirus (faux positif)
+
+Defender (ou un antivirus tiers) peut signaler `scripts/install.ps1` ou
+`freeflix-windows-x86_64.exe` comme :
+
+- `Trojan:Win32/Commando.A!ml` / `Commando.C!ml`
+- `Trojan:Script/Wacatac.*!ml`
+- `Program:Win32/Wacapew.*!ml`
+
+Le suffixe `!ml` = détection **heuristique** (machine learning), pas une
+signature. Un installeur PowerShell non signé qui télécharge `uv`, écrit dans
+le PATH et installe des paquets déclenche régulièrement ces faux positifs ;
+c'est aussi le cas classique des binaires PyInstaller.
+
+**Vérifier avant de faire confiance :**
+
+1. Le script est public et lisible en entier :
+   <https://github.com/freedy237/freeflix-cli/blob/main/scripts/install.ps1>
+2. Compare le SHA-256 du binaire téléchargé avec `SHA256SUMS` de la release :
+   `Get-FileHash .\freeflix-windows-x86_64.exe -Algorithm SHA256`
+3. Envoie le fichier sur <https://www.virustotal.com> : quelques détections
+   heuristiques parmi 70 moteurs = faux positif probable.
+
+**Débloquer :**
+
+```powershell
+# Fichier téléchargé depuis Internet : retire la marque "Mark of the Web"
+Unblock-File .\install.ps1
+Unblock-File .\freeflix-windows-x86_64.exe
+
+# Restaure depuis la quarantaine (Sécurité Windows → Protection contre les
+# virus → Historique des menaces → Autoriser sur l'appareil), puis ajoute une
+# exclusion sur le dossier de l'app si nécessaire :
+Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
+```
+
+Signale le faux positif à Microsoft :
+<https://www.microsoft.com/en-us/wdsi/filesubmission>
+
+## Windows : mpv introuvable ou ne démarre pas
+
+Depuis 2.4.3, l'installateur pose un **vrai mpv CLI** (`shinchiro.mpv`, puis
+`mpv-player.mpv-CI.MSVC` en secours) au lieu de `mpv.net`. `mpv.net` ne fournit
+que `mpvnet.exe`, une interface graphique qui n'accepte pas toujours les
+options utilisées par FreeFlix (lecture sur stdin, IPC, `--config-dir`) —
+d'où les échecs de lecture.
+
+```powershell
+# Vérifier ce que FreeFlix trouve
+freeflix --doctor
+winget install --id shinchiro.mpv -e
+# ou, si le paquet n'existe plus :
+winget search mpv
+```
+
+Après installation, ouvre un **nouveau** terminal (le lien winget est dans
+`%LOCALAPPDATA%\Microsoft\WinGet\Links`). Si seul `mpvnet.exe` est présent,
+FreeFlix l'utilise en dernier recours mais peut refuser certains flux : dans ce
+cas installe VLC (`winget install --id VideoLAN.VLC -e`) et choisis VLC comme
+lecteur des matchs.
+
 ## macOS
 
 - `install-mac.sh` écrit dans `~/.config/freeflix/mpv` (dossier dédié).

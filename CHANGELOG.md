@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.4.3
+
+- **Installation initiale réparée** : le pin SHA-256 de `mpv.conf` n'avait pas
+  suivi la suppression du chargement Anime4K, donc un premier lancement
+  téléchargeait le bon fichier puis le refusait (« somme de contrôle
+  INCORRECTE »). Le pin est corrigé, le message distingue désormais un fichier
+  modifié en amont d'un binaire altéré, et un test CI compare les pins aux
+  fichiers `config/` pour empêcher la dérive.
+- **Un `mpv.conf` déjà présent n'est plus écrasé** par le setup (Linux et
+  macOS) : un réglage personnel (`hwdec=vaapi-copy`, cache, HDR…) survit
+  désormais à un relancement du premier lancement. Seuls les fichiers
+  réellement absents sont téléchargés.
+- **mpv sous Windows : vrai binaire CLI** : l'installateur pose
+  `shinchiro.mpv` (puis `mpv-player.mpv-CI.MSVC`, `mpv.net` en dernier
+  recours) au lieu de `mpv.net` seul. `mpv.net` ne fournit que `mpvnet.exe`,
+  une interface graphique qui n'accepte pas toujours la lecture sur stdin,
+  l'IPC ou `--config-dir` — d'où les échecs de lecture. La découverte de mpv
+  cherche aussi les dossiers winget versionnés, Scoop et Chocolatey, et le
+  dossier `WinGet\Links` est ajouté au PATH après installation.
+- **Faux positif antivirus documenté** : Defender signale parfois
+  l'installateur PowerShell ou le binaire PyInstaller comme
+  `Trojan:Win32/Commando.*!ml` / `Wacatac.*!ml` (heuristique `!ml`, pas une
+  signature). Le README remplace le `iwr | iex` par un téléchargement +
+  `Unblock-File`, et `docs/TROUBLESHOOTING.md` explique comment vérifier le
+  SHA-256, restaurer le fichier et signaler le faux positif.
+- **Match : erreur YacineTV clarifiée**. Quand l'API répond `200` avec un
+  catalogue vide, FreeFlix l'annonce comme tel (« côté serveur, 0 rencontre »)
+  au lieu d'afficher l'erreur `HTTP 436` du host de secours, qui faisait croire
+  à un problème de connexion. Le cache précédent reste utilisé si disponible.
+- 634 tests au vert, ruff OK.
+
+## 2.4.2
+
+- **Match ne reste plus bloqué sur un écran vide** : si l'API répond `[]`
+  (entre deux journées, ou incident côté serveur), FreeFlix garde le dernier
+  catalogue connu et affiche un message clair (« Le catalogue est vide entre
+  deux journées ; réessaie plus tard. ») au lieu d'une liste vide.
+- En cas d'erreur réseau, message explicite + pause pour pouvoir lire la
+  raison, puis retour au menu.
+- 625 tests au vert, ruff OK.
+
 ## 2.4.1
 
 - **Match : une seule ligne par affiche**. Le catalogue répétait un même

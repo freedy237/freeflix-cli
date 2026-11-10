@@ -111,11 +111,20 @@ No git, no package manager, no sudo needed. Just Python (or PowerShell on Window
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.py | python3
 
-# Windows (PowerShell)
-powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"
+# Windows (PowerShell) — download, inspect, then run
+irm https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 -OutFile install.ps1
+Unblock-File .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 This installs `uv` if missing, then `freeflix-cli`.
+
+> **Antivirus on Windows:** Defender's ML engine sometimes flags the installer
+> or the standalone `.exe` as `Trojan:Win32/Commando.*!ml` or
+> `.../Wacatac.*!ml`. The `!ml` suffix means a heuristic guess, not a virus
+> signature — it fires on unsigned installers that download and run things.
+> Verify the SHA-256 published with the release, then restore/add an exclusion.
+> Details: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#windows--antivirus-faux-positif).
 
 ### From PyPI (if you already have the system deps)
 

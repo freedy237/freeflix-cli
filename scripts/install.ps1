@@ -1,8 +1,11 @@
 #Requires -Version 5.1
 # FreeFlix CLI - Windows bootstrap
 #
-# Usage:
-#   powershell -c "iwr -useb https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 | iex"
+# Usage (download, inspect, then run - avoid piping into iex, which triggers
+# Defender's ML heuristics on unsigned installers):
+#   irm https://raw.githubusercontent.com/freedy237/freeflix-cli/main/scripts/install.ps1 -OutFile install.ps1
+#   Unblock-File .\install.ps1
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1
 #
 # Installs uv + Python (if missing), then freeflix-cli and yt-dlp via uv.
 # No manual pre-requisites needed beyond a working internet connection.
@@ -118,19 +121,36 @@ if ($LASTEXITCODE -ne 0) {
 # Linux install.sh ships mpv/vlc/ffmpeg/aria2/chafa ; Windows gets the same
 # set here so playback, posters and downloads behave identically.
 # Each install is independent: one failure never aborts the rest.
+#
+# mpv: prefer a REAL mpv.exe CLI build. mpv.net only ships mpvnet.exe (GUI
+# wrapper) and is kept as a last resort because stdin playback / IPC flags
+# used by FreeFlix are not guaranteed to work there.
 if (Get-Command "winget" -ErrorAction SilentlyContinue) {
     $mediaPkgs = @(
-        @{ Id = "mpv.net";          Name = "mpv (player)" },
-        @{ Id = "VideoLAN.VLC";     Name = "VLC (alt player)" },
-        @{ Id = "Gyan.FFmpeg";      Name = "ffmpeg" },
-        @{ Id = "aria2.aria2";      Name = "aria2c" },
-        @{ Id = "hpjansson.Chafa";  Name = "chafa (posters)" }
+        @{ Ids = @("shinchiro.mpv", "mpv-player.mpv-CI.MSVC", "mpv.net");
+           Name = "mpv (player)" },
+        @{ Ids = @("VideoLAN.VLC");     Name = "VLC (alt player)" },
+        @{ Ids = @("Gyan.FFmpeg");      Name = "ffmpeg" },
+        @{ Ids = @("aria2.aria2");      Name = "aria2c" },
+        @{ Ids = @("hpjansson.Chafa");  Name = "chafa (posters)" }
     )
     foreach ($p in $mediaPkgs) {
         Log "Installing $($p.Name) ..."
-        winget install --silent --accept-source-agreements --accept-package-agreements --id $p.Id 2>$null
-        if ($LASTEXITCODE -eq 0) { Ok "$($p.Name) installed" }
+        $done = $false
+        foreach ($id in $p.Ids) {
+            winget install --silent --accept-source-agreements --accept-package-agreements --id $id 2>$null
+            if ($LASTEXITCODE -eq 0) { $done = $true; break }
+        }
+        if ($done) { Ok "$($p.Name) installed" }
         else { Log "$($p.Name) skipped (already present or unavailable)" }
+    }
+    # winget portable packages expose shims here; add it for this session and
+    # for future ones (the user PATH update below handles the rest).
+    $wingetLinks = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+    if (Test-Path $wingetLinks) {
+        if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $wingetLinks })) {
+            $env:PATH = "$wingetLinks;$env:PATH"
+        }
     }
 } else {
     Log "winget not found - install mpv / VLC / ffmpeg manually if needed"
@@ -154,4 +174,7 @@ if ($userPath -and $userPath -like "*$localBin*") {
 Write-Host ""
 Ok "Installation complete!"
 Log "Open a NEW terminal tab and run:  freeflix"
+Log "Antivirus note: a 'Commando.*!ml' / 'Wacatac.*!ml' alert on this script"
+Log "or on freeflix.exe is a known Defender ML false positive - see"
+Log "docs/TROUBLESHOOTING.md (Windows / antivirus)."
 Write-Host ""

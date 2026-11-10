@@ -145,6 +145,10 @@ DEFAULT_PLAYERS = {
     # d0000d.com / d000d.com : DoodStream mirrors (redirect to playmogo.com).
     "d0000d": {"type": "dood", "ext": "mp4"},
     "d000d": {"type": "dood", "ext": "mp4"},
+    # do0od.com : DoodStream mirror too (302 → playmogo.com). Its zero (0)
+    # made the substring matcher miss it, so the host was hidden even when
+    # the file was alive.
+    "do0od": {"type": "dood", "ext": "mp4", "referrer": "https://playmogo.com"},
 
 }
 

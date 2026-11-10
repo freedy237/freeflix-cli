@@ -769,12 +769,17 @@ _FR = {
     'Windows Terminal font set to the Nerd Font — reopen the terminal to see the icons.': 'Police de Windows Terminal réglée sur la Nerd Font — rouvre le terminal pour voir les icônes.',
     'all servers failed': 'tous les serveurs ont échoué',
     'already installed': 'déjà installé',
+    'already installed — kept': 'déjà installé — conservé (tes réglages ne sont pas écrasés)',
     'aria2c is not installed (required for torrent downloads).': "aria2c n'est pas installé (requis pour les téléchargements torrent).",
     'auto (best available)': 'auto (meilleure dispo)',
     'auto (best pixel protocol, else blocks)': 'auto (meilleur protocole pixel, sinon blocs)',
     'auto (detect nvidia-smi)': 'auto (détecte nvidia-smi)',
     'blocks (Unicode blocks everywhere)': 'blocs (blocs Unicode partout)',
     'checksum MISMATCH — refusing to install a possibly tampered binary.': 'somme de contrôle INCORRECTE — installation refusée (binaire peut-être altéré).',
+    'checksum mismatch — this config changed upstream after the FreeFlix release.':
+        'somme de contrôle différente — cette config a changé en amont après la sortie de FreeFlix.',
+    'Upgrade FreeFlix (uv tool upgrade freeflix-cli -U), then retry.':
+        'Mets FreeFlix à jour (uv tool upgrade freeflix-cli -U), puis réessaie.',
     'dGPU': 'dGPU',
     'dGPU detected': 'dGPU détecté',
     'dead': 'mort',
@@ -1034,6 +1039,21 @@ _FR = {
     'Trying another source:': 'Essai d’une autre source :',
     'This channel is often blocked or taken down; try another match.':
         'Cette chaîne est souvent bloquée ou retirée ; essaie un autre match.',
+    'The catalogue is empty between match days; try again later.':
+        'Le catalogue est vide entre deux journées ; réessaie plus tard.',
+    'YacineTV is online but lists no match right now.':
+        'YacineTV est en ligne mais ne liste aucun match pour le moment.',
+    "The provider's match feed returned 0 fixtures (server-side, not your connection).":
+        'Le flux de matchs du fournisseur renvoie 0 rencontre '
+        '(côté serveur, pas ta connexion).',
+    'Live TV channels are still available in the main menu.':
+        'Les chaînes TV en direct restent disponibles dans le menu principal.',
+    'Source:': 'Source :',
+    'HTTP 200 · 0 events': 'HTTP 200 · 0 événement',
+    'Retry later: the feed usually fills up on match days.':
+        'Réessaie plus tard : le flux se remplit généralement les jours de match.',
+    'Check your connection, then try again.':
+        'Vérifie ta connexion, puis réessaie.',
     'Mbps': 'Mbps',
     'GB/h': 'Go/h',
     'Match player:': 'Lecteur des matchs :',

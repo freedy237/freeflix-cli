@@ -78,3 +78,42 @@ def test_changelog_documents_current_version():
 def test_pyinstaller_data_files_exist():
     for rel in ("data/source_portal.jsonc", "data/selectors.jsonc"):
         assert (ROOT / rel).is_file(), rel
+
+
+def test_setup_checksum_pins_match_bundled_configs():
+    """A config edit must update setup_assistant._FILE_PINS in the same release.
+
+    Otherwise first-run setup downloads the new file and refuses it as
+    "tampered" (the 2.4.2 -> 2.4.3 mpv.conf drift broke fresh installs).
+    """
+    import hashlib
+
+    from freeflix_cli import setup_assistant as sa
+
+    for name in ("mpv.conf", "input.conf", "freeflix_position.lua"):
+        digest = hashlib.sha256((ROOT / "config" / name).read_bytes()).hexdigest()
+        assert sa._FILE_PINS[name]["sha256"] == digest, (
+            f"{name} changed: update _FILE_PINS[{name!r}]['sha256'] to {digest}"
+        )
+
+
+def test_setup_never_overwrites_an_existing_config(monkeypatch, tmp_path):
+    """A user-tuned mpv.conf must survive a setup retry (Linux included)."""
+    from freeflix_cli import setup_assistant as sa
+
+    monkeypatch.setattr(sa, "get_mpv_config_dir", lambda: tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "mpv.conf").write_text("hwdec=vaapi-copy\n", encoding="utf-8")
+
+    downloaded = []
+
+    def fake_dl(url, dest, label=None):
+        downloaded.append(dest.name)
+        dest.write_text("stock\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(sa, "_download_verified", fake_dl)
+    assert sa.install_config_files() is True
+    assert (tmp_path / "mpv.conf").read_text(encoding="utf-8") == "hwdec=vaapi-copy\n"
+    assert "mpv.conf" not in downloaded
+    assert "input.conf" in downloaded  # missing files are still pulled

@@ -333,8 +333,23 @@ def _flow_goldenanime_stream(
     user_lang = tracker.get_anime_language() or tracker.get_language() or "en"
     lang_name = get_language_label(user_lang)
 
+    # Some sources (AniZone) ship their own subtitle tracks with the stream.
+    # Use the one matching the content language instead of asking the user to
+    # run an external search that would return the same thing.
+    inline_subs = selection.get("subtitles") or []
+    if inline_subs:
+        want = user_lang[:2].lower()
+        pick = next(
+            (s for s in inline_subs
+             if str(s.get("lang", "")).lower().startswith(want)
+             and s.get("url")),
+            None,
+        )
+        if pick:
+            subtitle_url = pick["url"]
+
     want_subs = 1  # default: No
-    if tracker.get_subtitle_search():
+    if subtitle_url is None and tracker.get_subtitle_search():
         want_subs = select_from_list(
             [t("Yes"), t("No")], f"{t('Search subtitles in')} {lang_name} ?",
             clear_on_back=False, inline=True,

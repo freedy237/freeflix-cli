@@ -13,7 +13,7 @@ import os
 import sys
 
 # Version BAKED INTO THE CODE — bump together with pyproject.toml.
-CODE_VERSION = "2.4.1"
+CODE_VERSION = "2.4.3"
 
 
 def metadata_version() -> str | None:

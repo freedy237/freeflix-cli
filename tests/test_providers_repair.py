@@ -511,3 +511,80 @@ def test_show_poster_does_not_repeat_title():
     out = buf.getvalue()
     assert out.count("Tokyo Ravens") == 1
     assert "2 saisons" in out and "1 saison" in out
+
+
+# ── 2026-11 player audit : AniZone + dead-host hygiene ─────────────────
+
+def _js_payload(obj) -> str:
+    """Encode JSON the way AniZone embeds it in a JS single-quoted string."""
+    import json
+    return json.dumps(obj).replace('"', '\\u0022')
+
+
+def test_anizone_search_items_are_parsed_from_alpine():
+    from freeflix_cli.scraping.goldenanime import AnimeExtractor
+
+    items = [
+        {
+            "slug": "mdkytdqp",
+            "url": "http://anizone.to/anime/mdkytdqp",
+            "main_title": "Sousou no Frieren",
+            "title_list": {"2": "Frieren"},
+        },
+        {
+            "slug": "one123",
+            "url": "http://anizone.to/anime/one123",
+            "main_title": "One Piece",
+            "title_list": {},
+        },
+    ]
+    html = (
+        "<div x-data=\"{ items: JSON.parse('%s'), loading: false }\">"
+        % _js_payload(items)
+    )
+    got = AnimeExtractor._anizone_items(html)
+    assert [x["slug"] for x in got] == ["mdkytdqp", "one123"]
+    assert AnimeExtractor._anizone_best_match(got, "One Piece")["slug"] == "one123"
+    assert AnimeExtractor._anizone_best_match(got, "frieren")["slug"] == "mdkytdqp"
+
+
+def test_anizone_vidstack_stream_and_subtitles_are_parsed():
+    from freeflix_cli.scraping.goldenanime import AnimeExtractor
+
+    blob = {
+        "src": "https://seiryuu.vid-cdn.xyz/abc/master.m3u8",
+        "subtitles": [
+            {"language": "en", "file": "https://seiryuu.vid-cdn.xyz/abc/en.ass"},
+            {"language": "fr", "file": "https://seiryuu.vid-cdn.xyz/abc/fr.ass"},
+        ],
+    }
+    html = "x-data=\"vidstackPlayer(JSON.parse('%s'))\"" % _js_payload(blob)
+    src, subs = AnimeExtractor._anizone_stream(html)
+    assert src == "https://seiryuu.vid-cdn.xyz/abc/master.m3u8"
+    assert subs == [
+        {"lang": "en", "url": "https://seiryuu.vid-cdn.xyz/abc/en.ass"},
+        {"lang": "fr", "url": "https://seiryuu.vid-cdn.xyz/abc/fr.ass"},
+    ]
+
+
+def test_anizone_bad_html_returns_empty():
+    from freeflix_cli.scraping.goldenanime import AnimeExtractor
+
+    assert AnimeExtractor._anizone_items("<html></html>") == []
+    assert AnimeExtractor._anizone_stream("<html></html>") == (None, [])
+
+
+def test_dead_hosts_are_hidden_but_live_family_stays():
+    from freeflix_cli.scraping import player as player_mod
+
+    assert player_mod.is_known_offline("https://veev.to/e/abc") is True
+    assert player_mod.is_known_offline("https://vidhsareup.io/embed-x.html") is True
+    # The extractor family is still alive elsewhere — only the dead hosts hide.
+    assert player_mod.is_known_offline("https://voe.sx/e/abc") is False
+
+
+def test_do0od_is_a_doodstream_mirror():
+    from freeflix_cli.scraping import player as player_mod
+
+    assert player_mod.is_supported("https://do0od.com/e/abc123") is True
+    assert player_mod.players["do0od"]["type"] == "dood"
