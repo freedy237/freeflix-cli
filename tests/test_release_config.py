@@ -91,10 +91,48 @@ def test_setup_checksum_pins_match_bundled_configs():
     from freeflix_cli import setup_assistant as sa
 
     for name in ("mpv.conf", "input.conf", "freeflix_position.lua"):
-        digest = hashlib.sha256((ROOT / "config" / name).read_bytes()).hexdigest()
-        assert sa._FILE_PINS[name]["sha256"] == digest, (
-            f"{name} changed: update _FILE_PINS[{name!r}]['sha256'] to {digest}"
+        raw = (ROOT / "config" / name).read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        crlf = hashlib.sha256(raw.replace(b"\n", b"\r\n")).hexdigest()
+        # The pin may be the LF digest (repo content) or the CRLF one (set from
+        # a Windows checkout): both validate the same file.
+        assert sa._FILE_PINS[name]["sha256"] in (digest, crlf), (
+            f"{name} changed: update _FILE_PINS[{name!r}]['sha256'] "
+            f"to {digest} (LF) or {crlf} (CRLF)"
         )
+
+
+def test_every_pinned_file_verifies_with_lf_and_crlf(tmp_path):
+    """Pins are set by Windows users too, so both line endings must pass.
+
+    The file served over HTTPS is the raw LF blob unless someone added a
+    `.gitattributes` eol rule; a Windows checkout (`core.autocrlf=true`)
+    yields CRLF. An LF-only pin is unusable on half the platforms, and a
+    CRLF-only pin is wrong for `curl`.
+    """
+    import hashlib
+
+    from freeflix_cli import setup_assistant as sa
+
+    pinned = [n for n, i in sa._FILE_PINS.items() if i.get("sha256")]
+    assert len(pinned) >= 3
+    for name in pinned:
+        info = {**sa._FILE_PINS[name], "min_bytes": 1}
+        lf = b"# " + name.encode() + b"\na=b\n"
+        crlf = lf.replace(b"\n", b"\r\n")
+        assert hashlib.sha256(lf).hexdigest() != hashlib.sha256(crlf).hexdigest()
+        probe = tmp_path / name
+        for payload in (lf, crlf):
+            probe.write_bytes(payload)
+            # The pin may have been computed on either line ending: both
+            # hashes must be accepted for the same file.
+            expected = hashlib.sha256(payload).hexdigest()
+            assert sa._verify_archive(probe, {**info, "sha256": expected}, name) is True
+        # And a pin for the *other* line ending must still pass.
+        probe.write_bytes(crlf)
+        assert sa._verify_archive(
+            probe, {**info, "sha256": hashlib.sha256(lf).hexdigest()},
+            name) is True
 
 
 def test_setup_never_overwrites_an_existing_config(monkeypatch, tmp_path):

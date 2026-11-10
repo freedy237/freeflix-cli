@@ -18,6 +18,7 @@ import re
 import sys
 import time
 import shutil
+import hashlib
 import platform
 import subprocess
 import urllib.request
@@ -311,6 +312,25 @@ def _find_in_zip(archive: Path, target: str) -> Path | None:
     return None
 
 
+def _crlf_variants(data: bytes):
+    """Digests of the same text file under the other line ending.
+
+    A text pin is about content, not transport encoding: the repo serves LF,
+    but a Windows checkout/editor produces CRLF. Yield the alternative hash so
+    a single pin validates on every platform. Binary archives are unaffected
+    (no LF-only text line, capped at a few MB).
+    """
+    if b"\x00" in data or len(data) > 4 * 1024 * 1024:
+        return ()
+    if b"\r\n" in data:
+        alt = data.replace(b"\r\n", b"\n")
+    elif b"\n" in data:
+        alt = data.replace(b"\n", b"\r\n")
+    else:
+        return ()
+    return (hashlib.sha256(alt).hexdigest(),)
+
+
 def _verify_archive(arc_path: Path, info: dict, label: str) -> bool:
     """Integrity gate before we ever extract+run a downloaded binary.
 
@@ -336,16 +356,19 @@ def _verify_archive(arc_path: Path, info: dict, label: str) -> bool:
 
     expected = info.get("sha256")
     if expected:
-        import hashlib
-        h = hashlib.sha256()
         try:
-            with open(arc_path, "rb") as f:
-                for block in iter(lambda: f.read(1024 * 1024), b""):
-                    h.update(block)
+            data = arc_path.read_bytes()
         except OSError:
             return False
-        got = h.hexdigest()
-        if got.lower() != expected.lower():
+        got = hashlib.sha256(data).hexdigest()
+        # Text pins (our own configs) are line-ending agnostic: the same file
+        # is served as LF over HTTPS but a Windows editor (or any repo-side
+        # normalisation) may produce CRLF. Accepting both keeps a single pin
+        # valid on every platform — it is a checksum of the *content*, not of
+        # the transport encoding.
+        candidates = {got.lower()}
+        candidates |= {h.lower() for h in _crlf_variants(data)}
+        if expected.lower() not in candidates:
             if info.get("repo"):
                 # Our own config files are fetched from `main`: a mismatch
                 # almost always means the file moved on since this release,

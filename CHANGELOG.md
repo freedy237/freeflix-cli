@@ -7,7 +7,8 @@
   téléchargeait le bon fichier puis le refusait (« somme de contrôle
   INCORRECTE »). Le pin est corrigé, le message distingue désormais un fichier
   modifié en amont d'un binaire altéré, et un test CI compare les pins aux
-  fichiers `config/` pour empêcher la dérive.
+  fichiers `config/` pour empêcher la dérive. Un pin reste valide que le
+  fichier arrive en LF (HTTPS) ou en CRLF (copie Windows).
 - **Un `mpv.conf` déjà présent n'est plus écrasé** par le setup (Linux et
   macOS) : un réglage personnel (`hwdec=vaapi-copy`, cache, HDR…) survit
   désormais à un relancement du premier lancement. Seuls les fichiers
@@ -29,7 +30,7 @@
   catalogue vide, FreeFlix l'annonce comme tel (« côté serveur, 0 rencontre »)
   au lieu d'afficher l'erreur `HTTP 436` du host de secours, qui faisait croire
   à un problème de connexion. Le cache précédent reste utilisé si disponible.
-- 634 tests au vert, ruff OK.
+- 635 tests au vert, ruff OK.
 
 ## 2.4.2
 
