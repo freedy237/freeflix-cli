@@ -92,13 +92,19 @@ def test_setup_checksum_pins_match_bundled_configs():
 
     for name in ("mpv.conf", "input.conf", "freeflix_position.lua"):
         raw = (ROOT / "config" / name).read_bytes()
-        digest = hashlib.sha256(raw).hexdigest()
-        crlf = hashlib.sha256(raw.replace(b"\n", b"\r\n")).hexdigest()
-        # The pin may be the LF digest (repo content) or the CRLF one (set from
-        # a Windows checkout): both validate the same file.
-        assert sa._FILE_PINS[name]["sha256"] in (digest, crlf), (
+        lf = raw.replace(b"\r\n", b"\n")
+        crlf = lf.replace(b"\n", b"\r\n")
+        # The pin may be the LF digest (repo content / the WSGI blob a Linux
+        # user downloads) or the CRLF one (set from a Windows checkout, and
+        # what a CRLF checkout of the repo actually contains): both validate
+        # the same file.
+        assert sa._FILE_PINS[name]["sha256"] in (
+            hashlib.sha256(lf).hexdigest(),
+            hashlib.sha256(crlf).hexdigest(),
+        ), (
             f"{name} changed: update _FILE_PINS[{name!r}]['sha256'] "
-            f"to {digest} (LF) or {crlf} (CRLF)"
+            f"to {hashlib.sha256(lf).hexdigest()} (LF) or "
+            f"{hashlib.sha256(crlf).hexdigest()} (CRLF)"
         )
 
 
