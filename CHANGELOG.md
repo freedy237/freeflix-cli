@@ -2,6 +2,20 @@
 
 ## 2.4.4
 
+- **Anime-Sama : les lecteurs Voe rotatifs s'affichent enfin**. Le site sert
+  son lecteur Voe sous des domaines jetables qui changent tous les jours
+  (`claireguessthousand`, `derricknationtop`, `ashleyhardat`,
+  `shanelocaldog`…). Comme la liste était figée dans le code, ces lignes
+  étaient **masquées comme « non supportées »** alors que l'épisode se lit.
+  La détection reconnaît maintenant la forme de l'URL (`/e/<id>`) puis
+  vérifie en direct (avec cache) que la page parle bien Voe, ce qui couvre
+  les prochains domaines sans nouvelle version.
+- **Contrôle complet des lecteurs Anime-Sama** (7 séries, 2026-11-11) :
+  `ansembed`, `smoothpre` et les miroirs Voe → **lisibles** ;
+  `uqload` réclame désormais de désactiver l'adblocker (bloqué côté site),
+  `sibnet` répond 403 sur toute la plateforme, `sendvid` est supprimé (404),
+  `vk.com` et `oneupload` ne sont pas des lecteurs supportés.
+- 6 tests dédiés (`tests/test_voe_mirrors.py`).
 - **Fin du `avformat_open_input() failed` incompréhensible**. Un lien CDN
   signé peut expirer entre la résolution et la lecture : la playlist répond
   encore `200` avec tous les segments, mais **chaque segment revient en 403**.
@@ -19,7 +33,7 @@
   une lecture. Un flux qui marche n'est pas bloqué par la sonde.
 - 7 tests dédiés (`tests/test_hls_preflight.py`) : expiré, 410, hors ligne,
   flux valide, master playlist, panne réseau, fichier direct.
-- 642 tests au vert, ruff OK.
+- 648 tests au vert, ruff OK.
 
 ## 2.4.3
 

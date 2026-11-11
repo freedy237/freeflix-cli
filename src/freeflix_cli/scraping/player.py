@@ -1616,6 +1616,12 @@ def get_hls_link(url: str, headers: dict = None) -> str | None:
             # user falls back to a host that actually returns the real content.
             return None if _is_decoy_stream(link) else link
 
+    # Rotating Voe mirrors (Anime-Sama): not in `players` on purpose, since
+    # their hostnames change daily. Recognised by shape + a live probe.
+    if is_voe_url(url):
+        link = get_hls_link_voe(url, headers)
+        return None if _is_decoy_stream(link) else link
+
     _set_apc(None)
     return None
 
@@ -1633,6 +1639,10 @@ def is_supported(url: str) -> bool:
     host = _url_host(url)
     if not host:
         return False
+    # Unknown host but the page speaks Voe → it is a rotating Anime-Sama
+    # mirror, so the row must be offered instead of hidden as unsupported.
+    if is_voe_url(url):
+        return True
     if _host_matches(host, "kakaflix"):
         for sub in kakaflix_players.keys():
             if _host_matches(host, sub):
@@ -1644,3 +1654,59 @@ def is_supported(url: str) -> bool:
             return True
 
     return False
+
+
+# ── Rotating Voe mirrors (Anime-Sama) ────────────────────────────────
+# Anime-Sama serves its Voe player under a stream of randomly named
+# throwaway domains (…/e/<id>), each 302ing through one or two more before
+# landing on the page that carries the stream. Hardcoding the list breaks
+# within days: 8 new hosts appeared in a single day during the audit. So the
+# URL *shape* is what we recognise, then the page is confirmed live once
+# (cached) to be sure it really speaks Voe.
+_VOE_UNKNOWN: dict[str, bool] = {}
+_VOE_LOCK = _threading.Lock()
+
+# Hosts already confirmed (keeps the common case network-free).
+_VOE_KNOWN = (
+    "luluvdo", "lulust", "voe", "lulustream",
+    "claireguessthousand", "derricknationtop", "jeremyparticipantanything",
+    "megankiddifference", "teresapoliticallearn", "shannoncoldalready",
+    "susanexpectcare", "ashleyhardat", "shanelocaldog",
+)
+
+
+def _is_voe_known(host: str) -> bool:
+    return any(_host_matches(host, k) for k in _VOE_KNOWN)
+
+
+def voe_family_host(host: str) -> bool:
+    """True when *host* is a Voe-family mirror (known, or probed once)."""
+    if not host:
+        return False
+    if _is_voe_known(host):
+        return True
+    with _VOE_LOCK:
+        if host in _VOE_UNKNOWN:
+            return _VOE_UNKNOWN[host]
+    ok = False
+    try:
+        r = _get(f"https://{host}/", impersonate="chrome", timeout=8)
+        body = (getattr(r, "text", "") or "")[:6000].lower()
+        ok = "voe" in body and r.status_code == 200
+    except Exception:  # noqa: BLE001 - a probe failure must not crash the menu
+        ok = False
+    with _VOE_LOCK:
+        _VOE_UNKNOWN[host] = ok
+    return ok
+
+
+def is_voe_url(url: str) -> bool:
+    """True when *url* looks like a Voe player page (…/e/<id>)."""
+    host = _url_host(url)
+    if not host:
+        return False
+    if _is_voe_known(host):
+        return True
+    # Only spend a network probe on the /e/<id> shape Voe actually uses,
+    # never on an arbitrary host the catalogue might list.
+    return "/e/" in (url or "") and voe_family_host(host)

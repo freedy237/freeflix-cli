@@ -142,6 +142,21 @@ DEFAULT_PLAYERS = {
     "voe": {"type": "voe"},
     # lulustream.com : alias that 302-redirects to luluvdo.com (same player).
     "lulustream": {"type": "voe"},
+    # Anime-Sama serves the SAME Voe player under a rotating set of random
+    # domains (…/e/<id>). Each host 302s through one or two more throwaway
+    # hostnames before landing on the page that carries the stream, so they
+    # must be recognised by hostname or the whole row is hidden as
+    # "unsupported" even though the episode plays. Confirmed working
+    # 2026-11: claireguessthousand, derricknationtop, jeremyparticipant…,
+    # megankiddifference, teresapoliticallearn, shannoncoldalready,
+    # susanexpectcare. Add new ones here as they rotate in.
+    "claireguessthousand": {"type": "voe"},
+    "derricknationtop": {"type": "voe"},
+    "jeremyparticipantanything": {"type": "voe"},
+    "megankiddifference": {"type": "voe"},
+    "teresapoliticallearn": {"type": "voe"},
+    "shannoncoldalready": {"type": "voe"},
+    "susanexpectcare": {"type": "voe"},
     # d0000d.com / d000d.com : DoodStream mirrors (redirect to playmogo.com).
     "d0000d": {"type": "dood", "ext": "mp4"},
     "d000d": {"type": "dood", "ext": "mp4"},
