@@ -2,6 +2,23 @@
 
 ## 2.4.4
 
+- **animes-sama.fr (avec un « s ») réparé sur trois points**. Ce miroir a
+  divergé de `anime-sama.to` et cassait FreeFlix silencieusement :
+  1. la recherche utilise une **troisième mise en page** (`div.card-title`,
+     sans titre `h2`/`h3`) → **0 résultat** pour toute requête ;
+  2. `<langue>/episodes.js` répond **404** : les épisodes sont désormais
+     **inline** dans la page de saison → « Aucun épisode trouvé » ;
+  3. ces tableaux ne contiennent plus d'URL mais des **drapeaux `"1"`/`""`** :
+     le vrai lien est fabriqué à la demande par l'API signée
+     `/api/player/sign` puis `/api/player/resolve`. FreeFlix sait maintenant
+     signer et résoudre ces liens (même session = même cookie CSRF, sinon
+     `419`), donc ces lecteurs jouent au lieu d'être masqués.
+- **Vérifié sur Avatar, le dernier maître de l'air** (saisons 1, 3, 4, film,
+  VF et VOSTFR) : 2 à 3 lecteurs par épisode, chaîne complète
+  sign → resolve → `PLAYABLE`.
+- **`oneupload.to` masqué** : le domaine répond `Connection refused` depuis
+  six pays testés (HK, ID, IR, TR…) et depuis ici — il est mort. C'était le
+  « Lecteur 1 » de nombreuses séries.
 - **Anime-Sama : les lecteurs Voe rotatifs s'affichent enfin**. Le site sert
   son lecteur Voe sous des domaines jetables qui changent tous les jours
   (`claireguessthousand`, `derricknationtop`, `ashleyhardat`,
@@ -33,7 +50,7 @@
   une lecture. Un flux qui marche n'est pas bloqué par la sonde.
 - 7 tests dédiés (`tests/test_hls_preflight.py`) : expiré, 410, hors ligne,
   flux valide, master playlist, panne réseau, fichier direct.
-- 648 tests au vert, ruff OK.
+- 657 tests au vert, ruff OK.
 
 ## 2.4.3
 

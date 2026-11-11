@@ -19,9 +19,12 @@ class SearchResult:
 
 
 class Player:
-    def __init__(self, name: str, url: str):
+    def __init__(self, name: str, url: str, meta: dict = None):
         self.name = name
         self.url = url
+        # Optional per-player data a resolver needs later (e.g. the
+        # animes-sama.fr episode/reader slot for its signed player API).
+        self.meta = meta or {}
 
     def __str__(self):
         return f"Player(name='{self.name}', url='{self.url}')"

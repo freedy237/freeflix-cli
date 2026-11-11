@@ -25,6 +25,36 @@ import re
 import threading
 
 
+# Maps a sentinel player slot back to (season_url, episode number, reader).
+# "/player/<slug>/<season>/<lang>?ep=1&lecteur=2&…"
+_SLOT_RE = re.compile(
+    r"/player/(?P<slug>[^?]+)\?.*\bep=(?P<ep>\d+).*\blecteur=(?P<lecteur>\d+)"
+)
+
+
+def _register_signed_resolver(season_url: str, episodes_by_lang: dict) -> None:
+    """Let the player layer mint animes-sama.fr signed URLs on demand.
+
+    animes-sama.fr publishes only "reader N exists for episode E"; the actual
+    ``/player/…`` link is created by ``/api/player/sign`` and must be signed
+    again for every playback. The resolver receives the headers of the slot
+    being opened, recovers (episode, reader) from them, and asks the site.
+    """
+    from ..scraping import player as _player
+
+    def _resolve(headers: dict) -> str | None:
+        slot = (headers or {}).get("_anime_sama_slot") or {}
+        ep = int(slot.get("ep") or 1)
+        lecteur = int(slot.get("lecteur") or 1)
+        path = anime_sama.resolve_signed_player(season_url, ep, lecteur)
+        if not path:
+            return None
+        base = (anime_sama.website_origin or season_url).rstrip("/")
+        return base + path if path.startswith("/") else path
+
+    _player.set_signed_player_resolver(_resolve)
+
+
 def _update_anilist_progress(series, season, selected_episode):
     # --- AniList Progress Update ---
     anilist_token = tracker.get_anilist_token()
@@ -600,6 +630,11 @@ def _anime_sama_series_flow(series) -> bool:
             print_warning(t("No episodes found."))
             pause()
             continue
+
+        # animes-sama.fr only publishes "this reader exists", never a URL: the
+        # real link is minted by its signed API. Register a resolver so those
+        # rows play instead of being dropped as unsupported.
+        _register_signed_resolver(selected_season_access.url, season.episodes)
 
         while True:  # ── Language ──
             if len(langs) == 1:

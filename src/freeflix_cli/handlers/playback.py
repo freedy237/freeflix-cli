@@ -321,6 +321,14 @@ def play_episode_flow(
         selected_player = supported_players[player_idx]
         tracker.set_last_server(selected_player.name)
 
+        # animes-sama.fr slots are placeholders: hand the resolver the
+        # episode/reader pair so it can mint a fresh signed URL.
+        play_headers = headers
+        _meta = getattr(selected_player, "meta", None) or {}
+        if _meta.get("slot"):
+            play_headers = dict(headers or {})
+            play_headers["_anime_sama_slot"] = _meta["slot"]
+
         # Construct title for player window (de-duplicate season + episode)
         clean_season = clean_season_title(series_title, season_title)
         clean_episode = clean_episode_title(series_title, season_title, episode.title)
@@ -328,7 +336,7 @@ def play_episode_flow(
 
         success = play_video(
             selected_player.url,
-            headers=headers,
+            headers=play_headers,
             title=window_title,
             subtitle_url=subtitle_url,
         )

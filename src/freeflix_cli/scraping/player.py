@@ -15,6 +15,20 @@ import binascii
 
 import threading as _threading
 
+from .utils import ANIME_SAMA_SIGNED_SENTINEL
+
+# Optional callback installed by the Anime-Sama handler: given the player
+# headers (which carry the episode slot), return a freshly signed /player/…
+# URL. animes-sama.fr no longer publishes player URLs, so the slot sentinel
+# can only be turned into something playable through the site's own API.
+_signed_resolver = None
+
+
+def set_signed_player_resolver(fn):
+    """Register the animes-sama.fr signed-URL resolver (or None)."""
+    global _signed_resolver
+    _signed_resolver = fn
+
 # Per-thread session : curl_cffi Session is NOT thread-safe, so when the
 # player-analysis runs several extractions in parallel through ONE shared
 # session the responses get mixed up (every player loses its quality). Give
@@ -911,6 +925,10 @@ _OFFLINE_HOST_MARKERS = (
     # the extractor *type* exists; hide the dead hosts, not the family
     # (poophq / kinoger still share the veev extractor).
     "veev.to", "vidhsareup",
+    # 2026-11-11 audit : oneupload.to answers "Connection refused" from six
+    # countries (HK/ID/IR/TR/…) AND from here, on every path — the host is
+    # gone, so Anime-Sama's "Lecteur 1" on many series can never play.
+    "oneupload",
 )
 
 
@@ -1558,6 +1576,27 @@ def get_hls_link(url: str, headers: dict = None) -> str | None:
         HLS/video stream URL if successful, None otherwise
     """
     headers = headers or {}
+    # animes-sama.fr slots: the site mints the real URL on demand. When a
+    # resolver is registered, use it now; otherwise there is nothing to fetch.
+    if url == ANIME_SAMA_SIGNED_SENTINEL:
+        if _signed_resolver is None:
+            _set_apc(None)
+            return None
+        try:
+            real = _signed_resolver(headers)
+        except Exception:  # noqa: BLE001 - a dead sign API is not a crash
+            real = None
+        if not real:
+            _set_apc(None)
+            return None
+        url = real
+        headers = dict(headers or {})
+        headers.pop("_anime_sama_slot", None)
+        # The resolver already returned the final media URL (a /player/media
+        # HLS). There is no embed to scrape: hand it straight to the player.
+        if "/player/media" in url:
+            _set_apc(None)
+            return url
     # Matching sur le HOSTNAME aligné aux labels : matcher en substring sur
     # l'URL complète prenait des faux positifs (book.ru → ok.ru,
     # ?ref=sibnet, /veev/ tiers).
@@ -1636,6 +1675,10 @@ def is_supported(url: str) -> bool:
     Returns:
         True if the player is supported, False otherwise
     """
+    if url == ANIME_SAMA_SIGNED_SENTINEL:
+        # animes-sama.fr slots carry no host: supported as long as the
+        # handler registered a resolver that can mint the real URL.
+        return _signed_resolver is not None
     host = _url_host(url)
     if not host:
         return False

@@ -272,6 +272,26 @@ def get_season(url: str) -> SamaSeason:
         episodes[lang_code] = parsed
         valid_lang.append(lang_code)
 
+    # animes-sama.fr no longer publishes <lang>/episodes.js (it answers 404)
+    # and inlines the SAME `var epsN = [...]` arrays in the season page
+    # instead. Without this fallback every episode list was empty on that
+    # mirror — the season opened on "No episodes found".
+    if not episodes:
+        for lang_code in lang_codes:
+            try:
+                r = _get(f"{base}/{lang_code}/", cache_ttl=600)
+            except Exception:
+                continue
+            if getattr(r, "status_code", 0) != 200:
+                continue
+            inline = r.text or ""
+            if "var eps" not in inline:
+                continue
+            parsed = parse_episodes_from_js(inline)
+            if parsed:
+                episodes[lang_code] = parsed
+                valid_lang.append(lang_code)
+
     # Stable display order (pool completion order is not deterministic).
     valid_lang.sort(key=lang_codes.index)
 
@@ -284,6 +304,89 @@ def get_season(url: str) -> SamaSeason:
     name = re.sub(r"(?<=[^\W\d_])(\d+)", r" \1", name)
 
     return SamaSeason(name, url, valid_lang, episodes)
+
+
+def resolve_signed_player(season_url: str, episode_number: int,
+                          lecteur: int = 1) -> str | None:
+    """Mint a fresh player URL for animes-sama.fr's signed API.
+
+    That mirror stopped publishing player URLs: the season page only says
+    whether each reader exists, and the real link is obtained in two steps —
+    an authenticated POST to ``/api/player/sign`` (which returns a single-use
+    ``/player/...`` page), then ``/api/player/resolve`` for the media URL.
+    Public access is enough: the CSRF token is embedded in the season page.
+
+    Returns the /player/... path (to be prefixed with the origin) or None.
+    """
+    import json as _json
+
+    base_season = season_url.rstrip("/")
+    # Fetch the page and sign with the SAME session: the CSRF token is bound
+    # to the cookie jar that issued it, so mixing sessions answers 419.
+    sess = cffi_requests.Session(impersonate="chrome")
+    try:
+        sess.curl_options.update(DNS_OPTIONS)
+    except Exception:
+        pass
+    try:
+        page = sess.get(base_season, timeout=20)
+        page.raise_for_status()
+        m = re.search(r'csrf:\s*"([a-f0-9]{32,})"', page.text)
+        if not m:
+            return None
+        csrf = m.group(1)
+
+        # /api/player/sign/<slug>/<season>/<lang> = everything after /catalogue/
+        m2 = re.search(r"/catalogue/(.+)$", base_season)
+        if not m2:
+            return None
+        rel = m2.group(1).rstrip("/")
+        r = sess.post(
+            f"{website_origin}/api/player/sign/{rel}",
+            headers={
+                "Content-Type": "application/json",
+                "X-CSRF-Token": csrf,
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": base_season,
+                "Origin": website_origin,
+            },
+            data=_json.dumps({"ep": int(episode_number),
+                              "lecteur": int(lecteur)}),
+            timeout=20,
+        )
+        payload = _json.loads(r.text)
+        if not payload.get("ok") or not payload.get("url"):
+            return None
+        player_path = str(payload["url"])
+
+        # Step 2: the /player/… page carries a one-shot resolve token that
+        # yields the actual media URL (a /player/media?t=… stream).
+        pl = sess.get(f"{website_origin}{player_path}", timeout=20,
+                      headers={"Referer": base_season})
+        tok = re.search(r'data-resolve-token="([^"]+)"', pl.text or "")
+        if not tok:
+            # No resolve token: the /player/ page itself is the embed
+            # (older mirror layout) — hand it back unchanged.
+            return player_path
+        rr = sess.post(
+            f"{website_origin}/api/player/resolve",
+            json={"token": tok.group(1)},
+            headers={"X-Requested-With": "XMLHttpRequest",
+                     "Origin": website_origin, "Referer": base_season},
+            timeout=20,
+        )
+        data = _json.loads(rr.text or "{}")
+        media = data.get("play_url") or ""
+        if not media:
+            return player_path
+        return media if media.startswith("http") else f"{website_origin}{media}"
+    except Exception:
+        return None
+    finally:
+        try:
+            sess.close()
+        except Exception:
+            pass
 
 
 # season_container_class = "flex flex-wrap overflow-y-hidden justify-start bg-slate-900 bg-opacity-70 rounded mt-2 h-auto"

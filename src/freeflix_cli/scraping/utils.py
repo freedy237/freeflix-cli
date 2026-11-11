@@ -5,10 +5,24 @@ import re
 import urllib.parse
 from .objects import Player, Episode
 
+# Marks a reader slot whose real URL is minted on demand by animes-sama.fr's
+# signed /api/player/sign endpoint (the site no longer exposes player URLs).
+ANIME_SAMA_SIGNED_SENTINEL = "anime-sama:signed"
+
 
 def parse_episodes_from_js(js_code: str) -> List[Episode]:
     """
     Parse a JavaScript code into a list of episodes.
+
+    Two formats exist, because the Anime-Sama mirrors no longer agree:
+
+    * ``var eps1 = ["https://player/…", …]`` — the URL sits in the array.
+      This is what the older mirrors (anime-sama.to / .pw) publish.
+    * ``var eps1 = ["1","1","1","",…]`` — animes-sama.fr only publishes
+      whether each reader EXISTS ('1') or not (''). The real player URL is
+      minted per request by the site's signed ``/api/player/sign`` endpoint,
+      so those slots carry ``ANIME_SAMA_SIGNED_SENTINEL`` and the caller asks
+      the site for a URL instead of navigating to one.
     """
     matches = re.findall(r"var\s+eps(\d+)\s*=\s*\[(.*?)\];", js_code, re.DOTALL)
 
@@ -16,7 +30,14 @@ def parse_episodes_from_js(js_code: str) -> List[Episode]:
     for lecteur_num, content in matches:
         urls = re.findall(r"'(https?://.*?)'", content)
         urls += [u for u in re.findall(r'"(https?://.*?)"', content) if u not in urls]
-        lecteurs[int(lecteur_num)] = urls
+        if not urls:
+            # Availability-flag format: one entry per episode slot.
+            flags = re.findall(r'"([^"]*)"', content)
+            lecteurs[int(lecteur_num)] = [
+                ANIME_SAMA_SIGNED_SENTINEL if f.strip() else None for f in flags
+            ]
+        else:
+            lecteurs[int(lecteur_num)] = urls
 
     lecteurs = dict(sorted(lecteurs.items()))
 
@@ -29,10 +50,14 @@ def parse_episodes_from_js(js_code: str) -> List[Episode]:
     episodes = []
     for i in range(max_episodes):
         players = []
-        for name, urls in zip(lecteur_names, lecteurs.values()):
+        for j, (lecteur_num, urls) in enumerate(lecteurs.items()):
             url = urls[i] if i < len(urls) else None
             if url:
-                players.append(Player(name, url))
+                meta = {}
+                if url == ANIME_SAMA_SIGNED_SENTINEL:
+                    # 1-based reader index + episode, for /api/player/sign.
+                    meta = {"slot": {"ep": i + 1, "lecteur": lecteur_num}}
+                players.append(Player(lecteur_names[j], url, meta))
         # A placeholder slot with no player at all is NOT an episode. Some
         # shows pad one player array with extra slots, which used to inflate
         # the episode count in the menu.

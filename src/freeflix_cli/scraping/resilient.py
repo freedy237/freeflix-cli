@@ -30,13 +30,18 @@ import threading
 DEFAULT_SELECTORS: dict[str, dict[str, list[str]]] = {
     "anime-sama": {
         "search_container": ["#list_catalog"],
-        # Two layouts coexist: the 2026-10 "as-carte" cards and the older
-        # "card-content" ones (kept as fallback so a partial rollout on
-        # either side never empties the search).
-        "search_card": ["div.as-carte", "div.card-content"],
-        "search_title": ["h3.as-carte-titre", "h2"],
+        # Three layouts coexist in the wild, because the mirrors do NOT
+        # upgrade together:
+        #   * 2026-10 "as-carte" cards      → h3.as-carte-titre
+        #   * older "card-content" cards    → h2
+        #   * animes-sama.fr "catalog-card" → div.card-title (no heading)
+        # Supporting all three keeps the search working whichever mirror the
+        # portal resolver lands on; with only the first two, animes-sama.fr
+        # returned 0 results for every query.
+        "search_card": ["div.as-carte", "div.catalog-card", "div.card-content"],
+        "search_title": ["h3.as-carte-titre", "div.card-title", "h2"],
         "search_link": ["a.as-carte-lien", "a"],
-        "search_img": ["img"],
+        "search_img": ["img.card-image", "img"],
         "search_genre": ["p.info-value"],
         "search_info": ["p.info-value"],
         "series_title": ["h4#titreOeuvre", "h1"],
