@@ -42,7 +42,7 @@ def _register_signed_resolver(season_url: str, episodes_by_lang: dict) -> None:
     """
     from ..scraping import player as _player
 
-    def _resolve(headers: dict) -> str | None:
+    def _resolve(headers: dict) -> "str | None":
         slot = (headers or {}).get("_anime_sama_slot") or {}
         ep = int(slot.get("ep") or 1)
         lecteur = int(slot.get("lecteur") or 1)
