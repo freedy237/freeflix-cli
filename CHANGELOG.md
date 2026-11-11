@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.4
+
+- **Fin du `avformat_open_input() failed` incompréhensible**. Un lien CDN
+  signé peut expirer entre la résolution et la lecture : la playlist répond
+  encore `200` avec tous les segments, mais **chaque segment revient en 403**.
+  mpv s'arrêtait sur cette erreur ffmpeg brute, VLC affichait une fenêtre
+  noire — impossible de distinguer « lien expiré » de « installation cassée ».
+  Un préflight HLS vérifie maintenant la playlist **et le premier segment**
+  avant d'ouvrir le lecteur :
+  « Ce lien de lecture a expiré (le CDN refuse les segments). »
+  + « Rouvre l'épisode ou choisis une autre source pour obtenir un lien neuf. »
+- **Relance automatique de mpv** : si le lecteur se ferme en moins de 3 s
+  (échec du démultiplexeur), FreeFlix re-sonde le flux et retente une fois au
+  lieu d'abandonner.
+- Le préflight est volontairement **non bloquant** : une erreur réseau, une
+  playlist multipiste, un direct sans segment ou un `.mp4` ne refusent jamais
+  une lecture. Un flux qui marche n'est pas bloqué par la sonde.
+- 7 tests dédiés (`tests/test_hls_preflight.py`) : expiré, 410, hors ligne,
+  flux valide, master playlist, panne réseau, fichier direct.
+- 642 tests au vert, ruff OK.
+
 ## 2.4.3
 
 - **Installation initiale réparée** : le pin SHA-256 de `mpv.conf` n'avait pas

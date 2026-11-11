@@ -2831,6 +2831,70 @@ def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
                     pass
 
 
+def probe_hls_playable(stream_url: str, headers: dict = None,
+                       timeout: int = 8):
+    """Check that an HLS stream is *actually* playable, not just listed.
+
+    Some CDNs answer the playlist with 200 and refuse every segment with 403
+    (an expired signed token, or a rights takedown). mpv then dies with a
+    cryptic ``[lavf] avformat_open_input() failed`` and VLC shows a black
+    window, so the user cannot tell "link expired" from "broken install".
+
+    Returns ``(ok, reason_key)`` where ``reason_key`` is one of ``""``,
+    ``"expired"`` (manifest loads, segments refused) or ``"offline"``.
+    Best-effort: any unexpected network noise resolves to ``True`` so a
+    working stream is never blocked by a probe hiccup.
+    """
+    import urllib.parse as _up
+
+    if ".m3u8" not in (stream_url or "").lower():
+        return True, ""
+    hdrs = {k: v for k, v in (headers or {}).items() if v}
+    hdrs.setdefault("User-Agent", DEFAULT_USER_AGENT)
+    try:
+        resp = shared_session().get(stream_url, headers=hdrs,
+                                    timeout=timeout, allow_redirects=True)
+    except Exception:  # noqa: BLE001 - network noise must not block playback
+        return True, ""
+    if getattr(resp, "status_code", 200) not in (200, 206):
+        return True, ""  # the player path has its own, better error for this
+    try:
+        text = resp.text
+    except Exception:
+        return True, ""
+    if "#EXTM3U" not in text[:4096]:
+        return True, ""  # direct media mislabelled as HLS: not our business
+    base = stream_url
+    if "#EXT-X-STREAM-INF" in text:
+        # Master playlist: the first variant is the cheapest reliable test.
+        variants = [ln.strip() for ln in text.splitlines()
+                    if ln.strip() and not ln.startswith("#")]
+        if variants:
+            base = _up.urljoin(stream_url, variants[0])
+            try:
+                resp = shared_session().get(base, headers=hdrs,
+                                           timeout=timeout)
+                text = resp.text
+            except Exception:  # noqa: BLE001
+                return True, ""
+    segments = [ln.strip() for ln in text.splitlines()
+                if ln.strip() and not ln.startswith("#")]
+    if not segments:
+        return True, ""  # empty live playlist: nothing to verify yet
+    first = _up.urljoin(base, segments[0])
+    try:
+        seg = shared_session().get(first, headers=hdrs, timeout=timeout,
+                                   allow_redirects=True)
+        code = getattr(seg, "status_code", 200)
+    except Exception:  # noqa: BLE001
+        return True, ""
+    if code in (401, 403, 410):
+        return False, "expired"
+    if code >= 400:
+        return False, "offline"
+    return True, ""
+
+
 def match_stream_reachable(stream_url: str, headers: dict,
                            timeout: int = 8) -> tuple[bool, str]:
     """Preflight a live Match stream: is the CDN manifest reachable at all?
@@ -3553,6 +3617,23 @@ def play_video(
         mode = player_config.get("mode", "proxy")  # Default to proxy
 
         if mode == "proxy":
+            # Preflight BEFORE opening the player. A signed CDN link that
+            # expired between resolution and playback answers the playlist
+            # with 200 and every segment with 403; mpv then reports only
+            # "[lavf] avformat_open_input() failed" and VLC shows a black
+            # window. Ask once, and say what actually happened.
+            probe_headers = dict(headers or {})
+            if referer:
+                probe_headers.setdefault("Referer", referer)
+            playable, why = probe_hls_playable(stream_url, probe_headers)
+            if not playable:
+                if why == "expired":
+                    print_error(t("This stream link has expired (CDN refused the segments)."))
+                    print_info(t("Reopen the episode or pick another source to get a fresh link."))
+                else:
+                    print_error(t("The stream is offline (no playable data)."))
+                return False
+
             print_info(
                 f"{t('Launching')} [bold cyan]{player_name}[/bold cyan] {t('via Proxy')} ({player_executable})..."
             )
@@ -3638,6 +3719,7 @@ def play_video(
                 if ipc_monitor:
                     _chain_title_updater(ipc_monitor, title)
                     ipc_monitor.start()
+                started = time.time()
                 try:
                     _run_with_data_meter(cmd, env=run_env, quiet=(player_name == "vlc"))
                 finally:
@@ -3647,6 +3729,21 @@ def play_video(
                     _set_term_title("FreeFlix CLI")
                 if player_name == "mpv":
                     _save_mpv_position(pos_file, pos_key)
+                # mpv exits within a couple of seconds when the demuxer could
+                # not open the stream (expired manifest, CDN hiccup). A real
+                # playback, even a short one, always lasts longer than this.
+                if player_name == "mpv" and time.time() - started < 3.0:
+                    playable, why = probe_hls_playable(stream_url, probe_headers,
+                                                       timeout=6)
+                    if not playable:
+                        if why == "expired":
+                            print_error(t("This stream link has expired (CDN refused the segments)."))
+                            print_info(t("Reopen the episode or pick another source to get a fresh link."))
+                        else:
+                            print_error(t("The stream is offline (no playable data)."))
+                        return False
+                    print_info(t("mpv closed immediately — retrying once."))
+                    _run_with_data_meter(cmd, env=run_env, quiet=False)
                 print_success(t("Playback completed successfully!"))
                 return True
             except Exception as e:

@@ -1049,6 +1049,14 @@ _FR = {
     'Live TV channels are still available in the main menu.':
         'Les chaînes TV en direct restent disponibles dans le menu principal.',
     'Source:': 'Source :',
+    'This stream link has expired (CDN refused the segments).':
+        'Ce lien de lecture a expiré (le CDN refuse les segments).',
+    'mpv closed immediately — retrying once.':
+        'mpv s’est fermé aussitôt — nouvel essai.',
+    'Reopen the episode or pick another source to get a fresh link.':
+        'Rouvre l’épisode ou choisis une autre source pour obtenir un lien neuf.',
+    'The stream is offline (no playable data).':
+        'Le flux est hors ligne (aucune donnée lisible).',
     'HTTP 200 · 0 events': 'HTTP 200 · 0 événement',
     'Retry later: the feed usually fills up on match days.':
         'Réessaie plus tard : le flux se remplit généralement les jours de match.',
