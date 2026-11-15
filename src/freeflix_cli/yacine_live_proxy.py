@@ -25,6 +25,10 @@ class _LiveProxy:
         self._counter = 0
         self.httpd: http.server.ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
+        # Set by the request handler on an upstream failure; read by callers /
+        # diagnostics. Must exist even before the first request (attribute
+        # access on a proxy that was only preflighted used to raise).
+        self.last_error: str | None = None
 
     # ── upstream ─────────────────────────────────────────────────────
     @staticmethod
@@ -190,6 +194,14 @@ class _LiveProxy:
                         # Upstream labels segments as application/pdf; VLC's
                         # adaptive demuxer rejects that. They are MPEG-TS.
                         self.send_header("Content-Type", "video/mp2t")
+                        # Forward the upstream framing when it is known: some
+                        # players (stricter on Windows) wait for a length.
+                        try:
+                            cl = resp.getheader("Content-Length")
+                        except Exception:
+                            cl = None
+                        if cl and str(cl).isdigit():
+                            self.send_header("Content-Length", str(cl))
                         self.send_header("Connection", "close")
                         self.end_headers()
                         while True:

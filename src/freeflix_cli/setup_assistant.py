@@ -160,19 +160,112 @@ def get_local_bin_dir() -> Path:
 
 
 # ─── State checks ─────────────────────────────────────────────────────
+# The tuned config is made of three files ; the shader set of five (three
+# required by mpv.conf's default profile, two only used by the CTRL+1
+# "maximum" toggle). Setup is considered complete only when the *files on
+# disk* are present and valid — NOT when a download call happened to return
+# True in this run. That distinction is what made an interrupted setup
+# re-prompt the whole wizard on every single launch.
+_REQUIRED_SHADERS = (
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_S.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+)
+_OPTIONAL_SHADERS = (
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
+)
+_ALL_SHADERS = _REQUIRED_SHADERS + _OPTIONAL_SHADERS
+
+
+def _config_files() -> list:
+    """(url, destination) for the three tuned mpv config files."""
+    cfg = get_mpv_config_dir()
+    return [
+        (f"{REPO_RAW}/config/mpv.conf", cfg / "mpv.conf"),
+        (f"{REPO_RAW}/config/input.conf", cfg / "input.conf"),
+        (
+            f"{REPO_RAW}/config/freeflix_position.lua",
+            cfg / "scripts" / "freeflix_position.lua",
+        ),
+    ]
+
+
+def _shader_files() -> list:
+    """(url, destination) for every Anime4K shader FreeFlix installs."""
+    sh_dir = get_mpv_config_dir() / "shaders"
+    rel = {
+        "Anime4K_Clamp_Highlights.glsl": "Restore/Anime4K_Clamp_Highlights.glsl",
+        "Anime4K_Restore_CNN_S.glsl": "Restore/Anime4K_Restore_CNN_S.glsl",
+        "Anime4K_Restore_CNN_VL.glsl": "Restore/Anime4K_Restore_CNN_VL.glsl",
+        "Anime4K_Upscale_CNN_x2_S.glsl": "Upscale/Anime4K_Upscale_CNN_x2_S.glsl",
+        "Anime4K_Upscale_CNN_x2_VL.glsl": "Upscale/Anime4K_Upscale_CNN_x2_VL.glsl",
+    }
+    return [(f"{ANIME4K_RAW}/{rel[n]}", sh_dir / n) for n in _ALL_SHADERS]
+
+
+def _text_file_ok(path: Path, min_bytes: int = 1) -> bool:
+    """True for an existing, non-empty, non-binary file (never overwritten)."""
+    try:
+        if not path.is_file() or path.stat().st_size < min_bytes:
+            return False
+        head = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    if not head.strip() or b"\x00" in head:
+        return False
+    # A proxy/captive portal error page saved as mpv.conf would break mpv:
+    # treat it as missing so it gets re-downloaded instead of "kept".
+    return not head.lstrip().lower().startswith((b"<!doctype", b"<html"))
+
+
+def _shader_ok(path: Path) -> bool:
+    """Valid local shader: big enough AND actual GLSL (hooks/descriptions).
+
+    Deliberately not checked against the release-time sha256 pin: Anime4K is
+    downloaded from `master`, so upstream updates legitimately change the
+    bytes. A pin mismatch on a perfectly good local copy used to re-download
+    the file (and fail the whole setup) on every launch.
+    """
+    info = _FILE_PINS.get(path.name, {})
+    if not _text_file_ok(path, int(info.get("min_bytes", 512))):
+        return False
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return b"//!DESC" in data or b"//!HOOK" in data
+
+
+def _config_files_present() -> bool:
+    return all(_text_file_ok(dest) for _url, dest in _config_files())
+
+
+def _required_shaders_present() -> bool:
+    sh_dir = get_mpv_config_dir() / "shaders"
+    return all(_shader_ok(sh_dir / n) for n in _REQUIRED_SHADERS)
+
+
 def is_setup_complete() -> bool:
-    """True if mpv.conf + at least one Anime4K shader are installed."""
+    """True if the tuned config + required Anime4K shaders are on disk."""
     # Android delegates playback to mpv-android, so there's no mpv.conf / Anime4K
     # to check. Its dedicated wizard runs once and sets setup_done.
     if _is_android():
         return bool(tracker.data.get("setup_done"))
+    return _config_files_present() and _required_shaders_present()
+
+
+def _setup_was_started() -> bool:
+    """True when a previous (possibly interrupted / offline) setup ran.
+
+    Used to keep retrying *silently* instead of re-opening the full wizard —
+    with its "Proceed?", chafa, Nerd Font and FlareSolverr questions — on
+    every launch after a partial install (the reported false prompts).
+    """
+    if tracker.data.get("setup_attempted"):
+        return True
     cfg = get_mpv_config_dir()
-    if not (cfg / "mpv.conf").exists():
-        return False
-    shaders = cfg / "shaders"
-    if not shaders.exists() or not any(shaders.glob("Anime4K_*.glsl")):
-        return False
-    return True
+    return (cfg / "mpv.conf").exists() or (cfg / "shaders").is_dir()
 
 
 # ─── Self-managed binary directory ────────────────────────────────────
@@ -205,6 +298,67 @@ def _have_managed(bins: tuple[str, ...]) -> bool:
         if (bd / b).is_file():
             return True
     return False
+
+
+# Flatpak app ids for the players FreeFlix can launch (Linux). A Flatpak app
+# has no binary on PATH, and player_manager resolves the managed bin dir —
+# so we expose a tiny launcher there instead of asking to install mpv again.
+_FLATPAK_APPS = {"mpv": "io.mpv.Mpv", "vlc": "org.videolan.VLC"}
+
+
+def _flatpak_app_present(app_id: str) -> bool:
+    roots = (
+        "/var/lib/flatpak/app",
+        os.path.expanduser("~/.local/share/flatpak/app"),
+    )
+    return any(os.path.isdir(os.path.join(r, app_id)) for r in roots)
+
+
+def _flatpak_player_present(bins) -> bool:
+    if not shutil.which("flatpak"):
+        return False
+    return any(
+        _flatpak_app_present(_FLATPAK_APPS[b])
+        for b in bins if b in _FLATPAK_APPS
+    )
+
+
+def _snap_player_present(bins) -> bool:
+    return any(
+        os.path.isfile(os.path.join("/snap/bin", b)) for b in bins
+        if b in ("mpv", "vlc")
+    )
+
+
+def install_flatpak_shims() -> bool:
+    """Expose Flatpak-installed mpv/VLC where FreeFlix looks for them.
+
+    A Flatpak app is not on PATH. The setup gate therefore believed the
+    player was missing and re-offered to install it at every launch. Writing
+    a one-line launcher into FreeFlix's managed bin dir (already resolved by
+    player_manager) makes playback work, without touching system dirs.
+    """
+    if detect_os() != "linux" or not shutil.which("flatpak"):
+        return False
+    wrote = False
+    for name, app_id in _FLATPAK_APPS.items():
+        if shutil.which(name) or _have_managed((name,)):
+            continue
+        if not _flatpak_app_present(app_id):
+            continue
+        try:
+            _ensure_bin_dir()
+            dest = _managed_bin(name)
+            dest.write_text(
+                "#!/bin/sh\n"
+                f"# FreeFlix launcher for the Flatpak app {app_id}.\n"
+                f'exec flatpak run {app_id} "$@"\n'
+            )
+            dest.chmod(0o755)
+            wrote = True
+        except OSError:
+            continue
+    return wrote
 
 
 # ─── Self-managed binary sources (per-OS download URLs) ─────────────
@@ -492,6 +646,11 @@ def _auto_install_managed(os_name: str) -> None:
     # Ensure the bin dir exists early so tools can be placed there
     _ensure_bin_dir()
 
+    # A Flatpak player is already installed: expose it as a managed launcher
+    # so it is never downloaded/reinstalled (and playback can find it).
+    if os_name == "linux":
+        install_flatpak_shims()
+
     if not sources:
         return
 
@@ -568,6 +727,12 @@ def _android_install_pkgs(pkgs: list) -> bool:
 def _have(bins) -> bool:
     if any(shutil.which(b) for b in bins) or _have_managed(bins):
         return True
+    # Linux: a Flatpak/Snap player has no PATH binary. Without this the gate
+    # kept asking to install mpv/VLC at every launch even though it was there.
+    if sys.platform.startswith("linux") and any(
+            b in ("mpvnet", "mpv", "vlc") for b in bins):
+        if _flatpak_player_present(bins) or _snap_player_present(bins):
+            return True
     # Android : the "player" is the external mpv-android app (an APK, never a
     # PATH binary). Consider it satisfied when we can hand off via an intent.
     if any(b in ("mpvnet", "mpv", "vlc") for b in bins) and _is_android():
@@ -618,6 +783,14 @@ def _winget_install(pkg_id: str) -> None:
         pass
 
 
+def _mark_deps_ok(version: str) -> None:
+    """Cache "all essential tools present" and forget a previous decline."""
+    tracker.data["system_deps_ok"] = True
+    tracker.data["system_deps_ok_version"] = version
+    tracker.data.pop("deps_declined_version", None)
+    tracker._save_data()
+
+
 def ensure_runtime_deps(auto_install: bool = True) -> bool:
     """
     Resumable dependency gate, run on every launch until it succeeds ONCE.
@@ -641,12 +814,18 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
         tracker.data.pop("system_deps_ok_version", None)
         tracker._save_data()
 
+    # Cheap idempotent repair that must not wait for a cache miss: an
+    # upgraded release that adds Flatpak support has to expose the shim even
+    # though system_deps_ok is already cached.
+    try:
+        install_flatpak_shims()
+    except Exception:
+        pass
+
     if tracker.data.get("system_deps_ok"):
         return True
     if runtime_ready():
-        tracker.data["system_deps_ok"] = True
-        tracker.data["system_deps_ok_version"] = _version
-        tracker._save_data()
+        _mark_deps_ok(_version)
         return True
 
     os_name = detect_os()
@@ -660,9 +839,7 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
             if need:
                 _android_install_pkgs(sorted(set(need)))
         if runtime_ready():
-            tracker.data["system_deps_ok"] = True
-            tracker.data["system_deps_ok_version"] = _version
-            tracker._save_data()
+            _mark_deps_ok(_version)
         return runtime_ready()
 
     # ── Self-managed binaries (primary) ────────────────────────────
@@ -690,9 +867,7 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
                 time.sleep(0.5)
 
     if runtime_ready():
-        tracker.data["system_deps_ok"] = True
-        tracker.data["system_deps_ok_version"] = _version
-        tracker._save_data()
+        _mark_deps_ok(_version)
         print_success(t("All required tools are installed."))
         return True
 
@@ -708,9 +883,7 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
     elif os_name == "linux":
         # Try to auto-install via the package manager (mpv etc.), then re-check.
         if _linux_install_missing(missing_ess) and runtime_ready():
-            tracker.data["system_deps_ok"] = True
-            tracker.data["system_deps_ok_version"] = _version
-            tracker._save_data()
+            _mark_deps_ok(_version)
             print_success(t("All required tools are installed."))
             return True
         _show_linux_commands(missing_ess)
@@ -802,6 +975,14 @@ def _download_verified(url: str, dest: Path, label: str = None) -> bool:
         with urllib.request.urlopen(url, timeout=30) as r, open(part, "wb") as f:
             shutil.copyfileobj(r, f)
         if not _verify_archive(part, info, label):
+            # Anime4K shaders are fetched from a MOVING branch (`master`): a
+            # new upstream commit legitimately changes the bytes and the
+            # release-time pin then no longer matches. The size floor already
+            # passed inside _verify_archive; accept the payload when it is
+            # structurally valid GLSL instead of failing setup forever.
+            if dest.suffix == ".glsl" and _shader_ok(part):
+                os.replace(part, dest)
+                return True
             try:
                 part.unlink()
             except OSError:
@@ -830,69 +1011,118 @@ def _safe_extract_zip(zf, dest_dir: str) -> None:
         zf.extract(m, dest_dir)
 
 
-def install_config_files() -> bool:
+def install_config_files(quiet: bool = False) -> bool:
     """Pull mpv.conf, input.conf and the lua hook from the repo.
 
     A file that already exists on disk is never overwritten: the user may have
     tuned it (hwdec, cache, HDR…), and a first-run retry before `setup_done`
-    used to resurrect the stock config over their edits.
+    used to resurrect the stock config over their edits. ``quiet`` suppresses
+    the per-file "already installed" chatter for the silent repair pass.
     """
     cfg = get_mpv_config_dir()
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "scripts").mkdir(parents=True, exist_ok=True)
 
     ok = True
-    files = [
-        (f"{REPO_RAW}/config/mpv.conf",                  cfg / "mpv.conf"),
-        (f"{REPO_RAW}/config/input.conf",                cfg / "input.conf"),
-        (f"{REPO_RAW}/config/freeflix_position.lua",     cfg / "scripts" / "freeflix_position.lua"),
-    ]
-    for url, dest in files:
-        if dest.is_file() and dest.stat().st_size > 0:
-            print_info(f"  • {dest} {t('already installed — kept')}")
+    for url, dest in _config_files():
+        if _text_file_ok(dest):
+            if not quiet:
+                print_info(f"  • {dest} {t('already installed — kept')}")
             continue
         if _download_verified(url, dest):
-            print_success(f"  ✓ {dest}")
+            if not quiet:
+                print_success(f"  ✓ {dest}")
         else:
             ok = False
     return ok
 
 
-def install_anime4k_shaders() -> bool:
-    """Download Mode A_S shaders (lighter) from bloc97's repo."""
+def install_anime4k_shaders(quiet: bool = False) -> bool:
+    """Download the Anime4K shaders that are missing or invalid on disk.
+
+    Existing valid files are kept (no re-download). Required shaders gate the
+    return value ; a failure on the optional VL pair (CTRL+1 "max" toggle, not
+    used by the default profile) only warns — it must never block setup.
+    """
     cfg = get_mpv_config_dir()
     sh_dir = cfg / "shaders"
     sh_dir.mkdir(parents=True, exist_ok=True)
 
     ok = True
-    shaders = [
-        (f"{ANIME4K_RAW}/Restore/Anime4K_Clamp_Highlights.glsl",  sh_dir / "Anime4K_Clamp_Highlights.glsl"),
-        (f"{ANIME4K_RAW}/Restore/Anime4K_Restore_CNN_S.glsl",     sh_dir / "Anime4K_Restore_CNN_S.glsl"),
-        (f"{ANIME4K_RAW}/Restore/Anime4K_Restore_CNN_VL.glsl",    sh_dir / "Anime4K_Restore_CNN_VL.glsl"),
-        (f"{ANIME4K_RAW}/Upscale/Anime4K_Upscale_CNN_x2_S.glsl",  sh_dir / "Anime4K_Upscale_CNN_x2_S.glsl"),
-        (f"{ANIME4K_RAW}/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl", sh_dir / "Anime4K_Upscale_CNN_x2_VL.glsl"),
-    ]
-    for url, dest in shaders:
-        # Shaders are versioned upstream by hash: keep a valid copy on disk so
-        # a flaky network never wipes a working install.
-        if dest.is_file() and dest.stat().st_size >= _FILE_PINS[dest.name]["min_bytes"]:
-            print_info(f"  • {dest.name} {t('already installed — kept')}")
+    for url, dest in _shader_files():
+        name = dest.name
+        # Shaders are versioned upstream by content: keep a valid copy on disk
+        # so a flaky network never wipes a working install.
+        if _shader_ok(dest):
+            if not quiet:
+                print_info(f"  • {name} {t('already installed — kept')}")
             continue
-        if _download_verified(url, dest):
-            print_success(f"  ✓ {dest.name}")
-        else:
+        if _download_verified(url, dest, label=name):
+            if not quiet:
+                print_success(f"  ✓ {name}")
+        elif name in _REQUIRED_SHADERS:
             ok = False
+        else:
+            print_warning(f"  ! {name} {t('download failed')}")
     return ok
+
+
+
+def _repair_setup_silently() -> bool:
+    """Finish a previously consented setup without asking anything again.
+
+    Only missing/invalid files are fetched — everything valid on disk is kept
+    untouched (no re-download, no overwrite of user-tuned configs). The success
+    state is derived from the files present AFTER the pass, so a partial
+    network failure never leaves the wizard stuck in "please install" forever.
+    """
+    install_config_files(quiet=True)
+    try:
+        install_anime4k_shaders(quiet=True)
+    except Exception:
+        pass
+    if is_setup_complete():
+        tracker.data["setup_done"] = True
+        for _k in ("setup_attempted", "setup_declined", "setup_failure_version"):
+            tracker.data.pop(_k, None)
+        tracker._save_data()
+        print_info(t("Setup complete. Launching FreeFlix…"))
+        return True
+    # Warn once per installed version, not on every offline launch.
+    ver = _get_installed_version()
+    if tracker.data.get("setup_failure_version") != ver:
+        tracker.data["setup_failure_version"] = ver
+        tracker._save_data()
+        print_warning(t(
+            "Some mpv files could not be downloaded. Setup will retry on the "
+            "next launch (network or GitHub may be blocked right now)."
+        ))
+    return False
+
+
+def _privilege_prefix() -> list:
+    """``sudo`` only when it exists and we are not already root.
+
+    Minimal containers / root shells have no sudo binary; calling it used to
+    fail with a confusing "command not found" instead of installing the tool.
+    """
+    try:
+        if getattr(os, "geteuid", lambda: 1)() == 0:
+            return []
+    except Exception:
+        pass
+    return ["sudo"] if shutil.which("sudo") else []
 
 
 def _linux_pkg_cmd(pkg: str):
     """Return the install command for `pkg` for the detected package manager."""
+    sudo = _privilege_prefix()
     candidates = [
-        ("dnf", ["sudo", "dnf", "install", "-y", pkg]),
-        ("apt-get", ["sudo", "apt-get", "install", "-y", pkg]),
-        ("pacman", ["sudo", "pacman", "-S", "--needed", "--noconfirm", pkg]),
-        ("zypper", ["sudo", "zypper", "install", "-y", pkg]),
-        ("apk", ["sudo", "apk", "add", pkg]),
+        ("dnf", [*sudo, "dnf", "install", "-y", pkg]),
+        ("apt-get", [*sudo, "apt-get", "install", "-y", pkg]),
+        ("pacman", [*sudo, "pacman", "-S", "--needed", "--noconfirm", pkg]),
+        ("zypper", [*sudo, "zypper", "install", "-y", pkg]),
+        ("apk", [*sudo, "apk", "add", pkg]),
     ]
     for binname, cmd in candidates:
         if shutil.which(binname):
@@ -925,12 +1155,19 @@ def _linux_install_missing(missing_ess: list) -> bool:
     if not pkgs:
         return False
 
+    # A decline is remembered per app version: asking the exact same question
+    # on every single launch is what users described as "false prompts".
+    ver = _get_installed_version()
+    if tracker.data.get("deps_declined_version") == ver:
+        return False
+
+    sudo = _privilege_prefix()
     managers = [
-        ("apt-get", ["sudo", "apt-get", "install", "-y", *pkgs]),
-        ("dnf",     ["sudo", "dnf", "install", "-y", *pkgs]),
-        ("pacman",  ["sudo", "pacman", "-S", "--needed", "--noconfirm", *pkgs]),
-        ("zypper",  ["sudo", "zypper", "install", "-y", *pkgs]),
-        ("apk",     ["sudo", "apk", "add", *pkgs]),
+        ("apt-get", [*sudo, "apt-get", "install", "-y", *pkgs]),
+        ("dnf",     [*sudo, "dnf", "install", "-y", *pkgs]),
+        ("pacman",  [*sudo, "pacman", "-S", "--needed", "--noconfirm", *pkgs]),
+        ("zypper",  [*sudo, "zypper", "install", "-y", *pkgs]),
+        ("apk",     [*sudo, "apk", "add", *pkgs]),
     ]
     chosen = next(((b, c) for b, c in managers if shutil.which(b)), None)
     if not chosen:
@@ -944,13 +1181,15 @@ def _linux_install_missing(missing_ess: list) -> bool:
             f"{chosen[0]}?",
             default=True,
         ):
+            tracker.data["deps_declined_version"] = ver
+            tracker._save_data()
             return False
     except (EOFError, KeyboardInterrupt):
         return False
 
     print_info(f"{t('Installing')} {', '.join(pkgs)} ({t('sudo may ask your password')})…")
     try:
-        return subprocess.run(chosen[1], timeout=30).returncode == 0
+        return subprocess.run(chosen[1], timeout=1800).returncode == 0
     except Exception as e:
         print_warning(f"{t('Auto-install failed:')} {e}")
         return False
@@ -1014,17 +1253,37 @@ def _refresh_winget_path() -> None:
         os.environ["PATH"] = links + os.pathsep + current
 
 
+def _player_available(name: str) -> bool:
+    """True when *name* can actually be launched.
+
+    ``_have`` already resolves everything the app can use: PATH, FreeFlix's
+    managed bin dir, and (on Windows) the winget/Program Files locations via
+    player_manager. Sharing it with the on-demand installers means an
+    already-installed player is never reinstalled nor asked about again.
+    """
+    if name == "mpv":
+        return _have(("mpvnet", "mpv"))
+    if name == "vlc":
+        return _have(("vlc",))
+    return bool(shutil.which(name))
+
+
 def install_media_player(name: str) -> bool:
     """
     Install a media player (mpv / vlc) via the OS package manager. Interactive
     (asks first). Returns True if the player ends up available afterwards.
 
     Used both by the first-run wizard and on-demand at playback time when the
-    chosen player turns out to be missing.
+    chosen player turns out to be missing. An already-available player returns
+    True immediately — no download, no question.
     """
     spec = _PLAYER_PACKAGES.get(name)
     if not spec:
         return False
+
+    if _player_available(name):
+        print_success(f"  ✓ {name} {t('already installed')}")
+        return True
 
     os_name = detect_os()
     cmds = []
@@ -1145,6 +1404,57 @@ NERD_FONT_NAME = "CaskaydiaCove Nerd Font"
 NERD_FONT_DIR = "CaskaydiaCoveNF"  # inside the zip
 
 
+def _nerd_font_files_present() -> bool:
+    """Filesystem fallback for Nerd Font detection.
+
+    ``fc-list`` can be absent (minimal containers) or lag behind a fresh
+    ``fc-cache``; without this fallback every launch/upgrade thought the font
+    was missing and re-downloaded the ~30 MB archive for nothing.
+    """
+    os_name = detect_os()
+    if os_name == "windows":
+        dirs = [
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Microsoft", "Windows", "Fonts"),
+            os.path.join(os.environ.get("WINDIR", ""), "Fonts"),
+        ]
+    elif os_name == "macos":
+        dirs = [os.path.expanduser("~/Library/Fonts"), "/Library/Fonts"]
+    else:
+        dirs = [
+            os.path.expanduser("~/.local/share/fonts"),
+            "/usr/share/fonts",
+            "/usr/local/share/fonts",
+        ]
+    for d in dirs:
+        if not d:
+            continue
+        try:
+            for f in os.listdir(d):
+                low = f.lower()
+                if low.endswith((".ttf", ".otf")) and (
+                        "caskaydia" in low or "nerd font" in low
+                        or "nerdfont" in low):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _nerd_font_installed() -> bool:
+    """True when the font is installed OR we already installed it once.
+
+    The tracker flag keeps a dev-machine quirk (fc-list unavailable, font
+    dropped in a non-standard dir) from triggering a re-download on every
+    launch/upgrade; the filesystem check keeps the flag honest.
+    """
+    if detect_nerd_font():
+        return True
+    if _nerd_font_files_present():
+        return True
+    return bool(tracker.data.get("nerd_font_installed"))
+
+
 def detect_nerd_font() -> bool:
     """
     Check whether a Nerd Font (CaskaydiaCove) is already installed.
@@ -1157,9 +1467,11 @@ def detect_nerd_font() -> bool:
                 ["fc-list"], capture_output=True, text=True, timeout=10
             ).stdout
             import re
-            return bool(re.search(r"(?i)CaskaydiaCove|Nerd Font", out))
+            if re.search(r"(?i)CaskaydiaCove|Nerd Font", out):
+                return True
+            return _nerd_font_files_present()
         except Exception:
-            return False
+            return _nerd_font_files_present()
     if os_name == "windows":
         user_fonts = os.path.join(
             os.environ.get("LOCALAPPDATA", ""),
@@ -1279,7 +1591,7 @@ def install_nerd_font() -> bool:
     Download and install CaskaydiaCove Nerd Font if missing.
     Interactive (Y/n). Returns True if font ends up available.
     """
-    if detect_nerd_font():
+    if _nerd_font_installed():
         print_success(f"{NERD_FONT_NAME} {t('already installed')}")
         # Already installed, but the terminal may still not USE it (older
         # installs registered the font without setting Windows Terminal's font).
@@ -1303,7 +1615,10 @@ def install_nerd_font() -> bool:
         zip_path = f"{tmp}.zip"
         print_info(t("Downloading CaskaydiaCove Nerd Font…"))
         try:
-            urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
+            # Atomic .part download + size floor: a dropped connection used to
+            # leave a truncated zip behind that the next run then re-fetched.
+            if not _download(NERD_FONT_URL, Path(zip_path)):
+                raise ValueError("download failed")
             # releases/latest → hash mouvant : plancher de taille seul
             # (une page d'erreur HTML fait quelques Ko, le zip ~30 Mo).
             if os.path.getsize(zip_path) < 5_000_000:
@@ -1314,9 +1629,17 @@ def install_nerd_font() -> bool:
             for f in os.listdir(tmp):
                 if f.endswith(".ttf"):
                     shutil.copy2(os.path.join(tmp, f), os.path.join(dest, f))
-            subprocess.run(["fc-cache", "-f", dest], capture_output=True, timeout=30)
+            # fc-cache is best-effort: a missing binary must not fail the
+            # install AFTER the .ttf files were already copied.
+            try:
+                subprocess.run(["fc-cache", "-f", dest], capture_output=True, timeout=30)
+            except Exception:
+                pass
             shutil.rmtree(tmp, ignore_errors=True)
-            os.unlink(zip_path)
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
         except Exception as e:
             print_warning(f"{t('Nerd Font install failed:')} {e}")
             shutil.rmtree(tmp, ignore_errors=True)
@@ -1351,7 +1674,8 @@ def install_nerd_font() -> bool:
         extract_dir = zip_path.replace(".zip", "")
         print_info(t("Downloading CaskaydiaCove Nerd Font…"))
         try:
-            urllib.request.urlretrieve(NERD_FONT_URL, zip_path)
+            if not _download(NERD_FONT_URL, Path(zip_path)):
+                raise ValueError("download failed")
             if os.path.getsize(zip_path) < 5_000_000:
                 raise ValueError("nerd-font archive too small, refusing install")
             import zipfile
@@ -1367,7 +1691,10 @@ def install_nerd_font() -> bool:
                     name = os.path.basename(ttf).replace(".ttf", "") + " (TrueType)"
                     winreg.SetValueEx(key, name, 0, winreg.REG_SZ, ttf)
             shutil.rmtree(extract_dir, ignore_errors=True)
-            os.unlink(zip_path)
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
         except Exception as e:
             print_warning(f"{t('Nerd Font install failed:')} {e}")
             shutil.rmtree(extract_dir, ignore_errors=True)
@@ -1381,7 +1708,10 @@ def install_nerd_font() -> bool:
         print_warning(f"{t('Unsupported OS')} ({os_name}) — {t('install Nerd Font manually')}")
         return False
 
-    if detect_nerd_font():
+    if detect_nerd_font() or _nerd_font_files_present():
+        # Persist the fact so a later fc-list hiccup cannot re-download ~30 MB.
+        tracker.data["nerd_font_installed"] = True
+        tracker._save_data()
         print_success(f"  ✓ {NERD_FONT_NAME} {t('installed')}")
         if os_name == "windows":
             # Installing the font isn't enough — Windows Terminal must USE it.
@@ -1428,15 +1758,42 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
         offload_block = 'export DRI_PRIME=1\n'
         gpu_label = "AMD"
 
-    target = bindir / "mpv"
-    target.write_text(
+    # Resolve the REAL mpv, skipping our own wrapper dir, so the wrapper never
+    # execs itself (infinite loop) and works when mpv lives outside /usr/bin.
+    real_mpv = ""
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or os.path.realpath(d) == os.path.realpath(bindir):
+            continue
+        cand = Path(d) / "mpv"
+        if cand.is_file():
+            real_mpv = str(cand)
+            break
+    if not real_mpv:
+        print_info(f"  • {t('mpv is not installed or not in PATH.')}")
+        return False
+
+    content = (
         "#!/usr/bin/env bash\n"
         f"# FreeFlix PRIME wrapper — routes mpv to the {gpu_label} dGPU.\n"
         "# Delete this file (rm ~/.local/bin/mpv) to disable.\n"
         "\n"
         + offload_block
-        + "\nexec /usr/bin/mpv \"$@\"\n"
+        + f'\nexec "{real_mpv}" "$@"\n'
     )
+    target = bindir / "mpv"
+    if target.is_file():
+        try:
+            existing = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            existing = ""
+        if "FreeFlix PRIME wrapper" not in existing:
+            # A user (or a distro) already owns ~/.local/bin/mpv — never
+            # overwrite it silently on every launch.
+            print_info(f"  • {target} {t('already installed — kept')}")
+            return True
+        if existing == content:
+            return True
+    target.write_text(content)
     target.chmod(0o755)
 
     # Warn if ~/.local/bin isn't in PATH
@@ -1450,11 +1807,26 @@ def install_prime_wrappers(gpus: Dict[str, bool]) -> bool:
 
 # ─── FlareSolverr : optional Cloudflare auto-solver ───────────────────
 def _flaresolverr_running(url: str = "http://127.0.0.1:8191/") -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=2) as r:
-            return r.status == 200
-    except Exception:
-        return False
+    """True when something answers on the FlareSolverr port.
+
+    Any non-5xx HTTP answer means the service is up: a bare ``GET /`` may 404
+    on some image versions, and treating that as "down" made setup try to
+    re-create the container on every launch (name conflict → scary errors).
+    """
+    import urllib.error
+
+    base = url.rstrip("/")
+    for path in (base + "/health", base + "/", base):
+        try:
+            with urllib.request.urlopen(path, timeout=2) as r:
+                if r.status < 500:
+                    return True
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _container_runtime():
@@ -1577,19 +1949,31 @@ def install_flaresolverr() -> bool:
     # Reuse an existing container, else pull & create it.
     subprocess.run([runtime, "start", "flaresolverr"], capture_output=True)
     if not _flaresolverr_running():
-        print_info(
-            f"{t('Pulling & starting FlareSolverr via')} {runtime} "
-            + f"({t('first run downloads ~Chromium')})…"
-        )
+        # Only create the container when it does not exist yet: re-running
+        # `run --name flaresolverr` printed "name already in use" and looked
+        # like a setup failure on every launch.
+        exists = False
         try:
-            subprocess.run(
-                [runtime, "run", "-d", "--name", "flaresolverr",
-                 "--restart", "unless-stopped", "-p", "8191:8191", FS_IMAGE],
-                check=False,
+            exists = subprocess.run(
+                [runtime, "container", "inspect", "flaresolverr"],
+                capture_output=True, timeout=20,
+            ).returncode == 0
+        except Exception:
+            exists = False
+        if not exists:
+            print_info(
+                f"{t('Pulling & starting FlareSolverr via')} {runtime} "
+                + f"({t('first run downloads ~Chromium')})…"
             )
-        except Exception as e:
-            print_warning(f"{t('Could not start FlareSolverr')} ({type(e).__name__}: {e})")
-            return False
+            try:
+                subprocess.run(
+                    [runtime, "run", "-d", "--name", "flaresolverr",
+                     "--restart", "unless-stopped", "-p", "8191:8191", FS_IMAGE],
+                    check=False,
+                )
+            except Exception as e:
+                print_warning(f"{t('Could not start FlareSolverr')} ({type(e).__name__}: {e})")
+                return False
 
     # Make it survive reboots (Linux + podman).
     _flaresolverr_make_persistent(runtime)
@@ -1625,30 +2009,47 @@ def install_windows_players() -> bool:
         )
         return False
 
+    _refresh_winget_path()
     wanted = [
-        ("mpv.net", "mpv.net (mpv for Windows)", ("mpv", "mpvnet")),
-        ("VideoLAN.VLC", "VLC media player", ("vlc",)),
+        ("mpv", "mpv (for Windows)", _winget_ids(_PLAYER_PACKAGES["mpv"])),
+        ("vlc", "VLC media player", _winget_ids(_PLAYER_PACKAGES["vlc"])),
     ]
-    for pkg_id, label, bins in wanted:
-        if any(shutil.which(b) for b in bins):
+    all_ok = True
+    for name, label, pkg_ids in wanted:
+        # Only install what is really absent: `shutil.which` alone misses
+        # players installed outside PATH, which made every re-run re-download
+        # both players (and print failures) for no reason.
+        if _player_available(name):
             print_success(f"  ✓ {label} {t('already installed')}")
             continue
         print_info(f"{t('Installing')} {label} {t('via winget…')}")
-        try:
-            subprocess.run(
-                ["winget", "install", "--silent",
-                 "--accept-source-agreements", "--accept-package-agreements",
-                 "--id", pkg_id],
-                check=False,
-            )
-        except Exception as e:
-            print_warning(f"  ! {label} {t('install failed')} ({type(e).__name__}: {e})")
+        installed = False
+        for pkg_id in pkg_ids:
+            try:
+                subprocess.run(
+                    ["winget", "install", "--silent",
+                     "--accept-source-agreements", "--accept-package-agreements",
+                     "--id", pkg_id],
+                    check=False, capture_output=True, text=True, timeout=1800,
+                )
+            except Exception as e:
+                print_warning(
+                    f"  ! {label} {t('install failed')} ({type(e).__name__}: {e})")
+                break
+            _refresh_winget_path()
+            if _player_available(name):
+                print_success(f"  ✓ {label} {t('installed')}")
+                installed = True
+                break
+        if not installed:
+            print_warning(f"  ! {label} {t('still not found — install manually')}")
+            all_ok = False
 
     print_info(
         t("If mpv/VLC aren't found immediately, open a NEW terminal so the "
-        "PATH refreshes, then run `freeflix` again.")
+          "PATH refreshes, then run `freeflix` again.")
     )
-    return True
+    return all_ok
 
 
 # ─── Platform-specific guidance ───────────────────────────────────────
@@ -1765,8 +2166,15 @@ def run_setup(force: bool = False) -> bool:
     Main entry point. Interactive wizard (uses input()) ; suppresses
     itself if setup is already complete and `force` is False.
     """
-    if is_setup_complete() and not force:
-        return False
+    if not force:
+        if is_setup_complete():
+            return False
+        # A previous setup attempt has already been consented to (and may have
+        # been interrupted by a network error): finish it silently instead of
+        # re-opening the whole wizard — with its "Proceed?", chafa, Nerd Font
+        # and FlareSolverr questions — on every single launch.
+        if _setup_was_started():
+            return _repair_setup_silently()
 
     if _is_android():
         return _run_android_setup()
@@ -1799,10 +2207,16 @@ def run_setup(force: bool = False) -> bool:
         print_info(t("Aborted."))
         return False
 
+    # Consent recorded BEFORE the work: a crash / Ctrl+C halfway through must
+    # not make the next launch ask the same questions again.
+    tracker.data["setup_attempted"] = True
+    tracker.data.pop("setup_declined", None)
+    tracker._save_data()
+
     print_info(f"\n• {t('Installing mpv configuration…')}")
-    cfg_ok = install_config_files()
+    install_config_files()
     print_info(f"\n• {t('Downloading Anime4K shaders…')}")
-    shaders_ok = install_anime4k_shaders()
+    install_anime4k_shaders()
     print_info(f"\n• {t('Anime posters (chafa)…')}")
     install_chafa()
     # Nerd Font is a required dependency for crisp icons — install it on every
@@ -1822,17 +2236,19 @@ def run_setup(force: bool = False) -> bool:
     elif os_name == "macos":
         print_platform_guidance_macos(gpus)
 
-    # Only mark the setup complete when the mpv files are actually in place:
-    # a failed download used to be recorded as success, so the wizard never
-    # retried and the user silently lost Anime4K.
-    if cfg_ok and shaders_ok:
+    # Success is derived from the files actually ON DISK, not from this run's
+    # return values: a download that fails while the file is already present
+    # and valid (or an optional shader that 404s) must not leave `setup_done`
+    # False forever, re-running the wizard at every launch.
+    if is_setup_complete():
         tracker.data["setup_done"] = True
-        tracker.data.pop("setup_declined", None)
+        for _k in ("setup_attempted", "setup_declined", "setup_failure_version"):
+            tracker.data.pop(_k, None)
         tracker._save_data()
         print_success(f"\n✓ {t('Setup complete. Launching FreeFlix…')}\n")
         return True
     tracker.data["setup_done"] = False
-    tracker.data.pop("setup_declined", None)
+    tracker.data["setup_failure_version"] = _get_installed_version()
     tracker._save_data()
     print_warning(t(
         "Some mpv files could not be downloaded. Setup will retry on the "
@@ -1922,9 +2338,9 @@ def _migrate_install_nerd_font():
     upgrade and default to nerd icons if they never picked a style. Idempotent.
     """
     try:
-        if not detect_nerd_font():
+        if not _nerd_font_installed():
             install_nerd_font()
-        if detect_nerd_font() and "icon_style" not in tracker.data:
+        if _nerd_font_installed() and "icon_style" not in tracker.data:
             tracker.set_icon_style("nerd")
     except Exception:
         pass
@@ -1966,14 +2382,23 @@ def run_pending_migrations(current_version: str) -> None:
     ]
     if pending:
         print_info(f"{t('Finalizing upgrade')} {last} → {current_version}…")
-        for _ver, desc, action in pending:
-            print_info(f"  • {t(desc)}")
-            try:
-                action()
-            except Exception as e:
-                print_warning(f"    ({t('skipped:')} {type(e).__name__})")
-
-    tracker.set_last_setup_version(current_version)
+        try:
+            for _ver, desc, action in pending:
+                print_info(f"  • {t(desc)}")
+                try:
+                    action()
+                except KeyboardInterrupt:
+                    # Do not lose the recorded version: otherwise the same
+                    # migration (and its install prompt) replays at every
+                    # launch until the user lets it finish.
+                    print_info(t("Skipped"))
+                    break
+                except Exception as e:
+                    print_warning(f"    ({t('skipped:')} {type(e).__name__})")
+        finally:
+            tracker.set_last_setup_version(current_version)
+    else:
+        tracker.set_last_setup_version(current_version)
 
 
 def should_prompt_setup() -> bool:

@@ -13,6 +13,8 @@ from .cli_utils import (
     crumb_reset,
     crumb_push,
     console,
+    leave_alt_screen,
+    restore_terminal,
 )
 from .i18n import t
 from .icons import icon
@@ -48,24 +50,16 @@ def _stop_proxy_if_running():
 def _clean_exit(code: int = 0):
     """Leave the terminal exactly as we found it, then exit.
 
-    ``os._exit`` skips atexit, so the mouse tracking and bracketed-paste
-    modes enabled at startup were never disabled: the shell inherited them
-    after a crash or a Ctrl-C. Restore everything explicitly, then raise
-    SystemExit so normal cleanup (proxy, logs) still runs.
+    Terminal restoration is centralised in ``cli_utils.restore_terminal()``:
+    mouse/focus reports OFF, drop the reports already queued in the tty, leave
+    the ALTERNATE SCREEN EXACTLY ONCE, show the cursor, flush. Rich's
+    ``set_alt_screen()`` writes ``?1049l`` on every call, and the extra ones
+    made Konsole redraw the home-menu echo line below the shell prompt (the
+    exit artifact users reported). Then raise SystemExit so normal cleanup
+    (proxy, logs) still runs.
     """
     try:
-        from .cli_utils import _mouse_off
-        _mouse_off()
-    except Exception:
-        pass
-    try:
-        console.show_cursor(True)
-        console.set_alt_screen(False)
-    except Exception:
-        pass
-    try:
-        sys.stdout.write("\x1b[?2004l\x1b[?1000l\x1b[?1006l")
-        sys.stdout.flush()
+        restore_terminal()
     except Exception:
         pass
     _stop_proxy_if_running()
@@ -1289,7 +1283,7 @@ def _settings_menu(version: str):
         actions[s_choice]()
 
 
-def main():
+def _main():
     # ── Diagnostics : always log to a rotating file ; --verbose also to stderr.
     _verbose = "--verbose" in sys.argv or "-v" in sys.argv
     try:
@@ -1652,11 +1646,31 @@ def main():
             continue
 
         # Exit
+        # Leave the alternate screen exactly ONCE, before printing the goodbye:
+        # the menu's Live already restored it, so a second ?1049l is what made
+        # the last menu echo line reappear under the shell prompt (Konsole).
+        leave_alt_screen()
+        print_success(t("Goodbye!"))
+        _clean_exit(0)
+
+
+def main():
+    """Application entry point: always leave a clean terminal behind.
+
+    Renamed body ``_main`` keeps the home loop untouched while this wrapper
+    guarantees that Ctrl-C (a normal way to close a TUI) or EOF restores the
+    terminal and prints the goodbye — previously an uncaught KeyboardInterrupt
+    dumped a Python traceback and left the alternate screen / mouse tracking
+    enabled for the shell (another "weird thing when I close it").
+    """
+    try:
+        return _main()
+    except (KeyboardInterrupt, EOFError):
         try:
-            console.set_alt_screen(False)  # splash handed it over; restore
+            leave_alt_screen()
+            print_success(t("Goodbye!"))
         except Exception:
             pass
-        print_success(t("Goodbye!"))
         _clean_exit(0)
 
 

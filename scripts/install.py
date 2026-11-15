@@ -12,6 +12,7 @@ no pre-requisites beyond Python itself.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import stat
 import shutil
@@ -112,9 +113,9 @@ def _ensure_permanent_path():
                 winreg.KEY_READ | winreg.KEY_SET_VALUE,
             )
             try:
-                user_path, kind = winreg.QueryValueEx(key, "Path")
+                user_path, _kind = winreg.QueryValueEx(key, "Path")
             except FileNotFoundError:
-                user_path, kind = "", winreg.REG_EXPAND_SZ
+                user_path = ""
             parts = [p for p in str(user_path).split(";") if p]
             if not any(str(bin_dir).lower() == p.lower() for p in parts):
                 parts.insert(0, str(bin_dir))
@@ -130,42 +131,35 @@ def _ensure_permanent_path():
             _say(f'Add "{bin_dir}" to PATH manually.')
         return
 
-    # ── Linux / macOS : write shell rc file ─────────────────────────
-    candidates: list[Path] = []
+    # ── Linux / macOS : write the shell rc that is actually READ ──────
+    # Interactive bash reads ~/.bashrc (not ~/.profile), zsh reads ~/.zshrc.
+    # Writing the wrong file is why "freeflix: command not found" survived a
+    # successful install in a new terminal.
     shell = os.environ.get("SHELL", "")
     if "zsh" in shell:
-        candidates.append(Path.home() / ".zshrc")
-    if "bash" in shell:
-        candidates.append(Path.home() / ".bashrc")
-    candidates.append(Path.home() / ".profile")
-
-    export_line = f'export PATH="{bin_dir}:$PATH"'
-
-    for rc in candidates:
-        if rc.exists():
-            content = rc.read_text()
-            if str(bin_dir) in content and "export PATH" in content:
-                _ok(f"{bin_dir} is already in {rc.name}")
-                return
-
-    # No rc has it — append to the first existing rc, or create .profile
-    target: Path | None = None
-    for rc in candidates:
-        if rc.exists():
-            target = rc
-            break
-    if target is None:
+        target = Path.home() / ".zshrc"
+    elif "bash" in shell:
+        target = Path.home() / ".bashrc"
+    else:
         target = Path.home() / ".profile"
 
+    export_line = f'export PATH="{bin_dir}:$PATH"'
     try:
-        if target.exists():
-            content = target.read_text()
-            if not content.endswith("\n"):
-                content += "\n"
-        else:
-            content = ""
+        content = target.read_text(encoding="utf-8", errors="replace") \
+            if target.exists() else ""
+    except Exception:
+        content = ""
+
+    for line in content.splitlines():
+        if str(bin_dir) in line and "export PATH" in line:
+            _ok(f"{bin_dir} is already in {target.name}")
+            return
+
+    try:
+        if content and not content.endswith("\n"):
+            content += "\n"
         content += f"\n# Added by FreeFlix CLI\n{export_line}\n"
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8")
         _ok(f"Added {bin_dir} to PATH in {target.name}")
         print(f"     Run:  source {target.name}")
     except Exception as exc:
@@ -233,37 +227,67 @@ def _install_uv() -> bool:
 # ── FreeFlix install ─────────────────────────────────────────────────────────
 
 
-def _install_tool(name: str) -> bool:
-    """Run ``uv tool install <name>``.
-
-    For freeflix-cli we pin a stable, well-tested CPython (3.12 — the code
-    itself supports 3.9+) so new installs never land on a bleeding-edge
-    release, and we pass --force so re-running the installer always upgrades
-    to the latest version (existing users get every fix)."""
-    cmd = ["uv", "tool", "install", name]
-    if name == "freeflix-cli":
-        cmd += ["--python", "3.12", "--force"]
+def _uv_tools() -> dict:
+    """``uv tool list`` as {name: version} (empty dict when uv fails)."""
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=1800,
+            ["uv", "tool", "list"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
         )
-        out = (result.stdout or "") + (result.stderr or "")
-        if "is already installed" in out:
-            _ok(f"{name} is already installed")
-            return True
-        if result.returncode != 0:
-            _fail(out.strip() or f"uv exited with code {result.returncode}")
-            return False
-        _ok(f"{name} installed")
-        return True
+        tools = {}
+        for line in (result.stdout or "").splitlines():
+            m = re.match(r"^([A-Za-z0-9_.-]+) v?([0-9][^\s]*)$", line.strip())
+            if m:
+                tools[m.group(1)] = m.group(2)
+        return tools
+    except Exception:
+        return {}
+
+
+def _run_uv(cmd: list) -> tuple[int, str]:
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=1800,
+        )
+        return result.returncode, (result.stdout or "") + (result.stderr or "")
     except FileNotFoundError:
-        _fail("uv not found on PATH")
+        return 127, "uv not found on PATH"
+
+
+def _install_tool(name: str) -> bool:
+    """Install *name* once, then upgrade in place instead of reinstalling.
+
+    The old code always passed ``--force``, so every run of the installer
+    re-downloaded the wheel/*tool* even when the installed version was
+    already current (the reported "ça télécharge encore" loop).
+    """
+    installed = _uv_tools().get(name)
+    if installed:
+        # `uv tool upgrade` only fetches a newer release; when up to date it
+        # is a fast no-op. An offline/failed upgrade is not an install error.
+        rc, _out = _run_uv(["uv", "tool", "upgrade", name])
+        if rc == 0:
+            _ok(f"{name} already installed ({installed}) — up to date")
+        else:
+            _ok(f"{name} already installed ({installed})")
+        return True
+
+    cmd = ["uv", "tool", "install", name]
+    if name == "freeflix-cli":
+        # Pin a stable, well-tested CPython (3.12 — the code supports 3.9+)
+        # so a fresh install never lands on a bleeding-edge interpreter.
+        cmd += ["--python", "3.12"]
+    rc, out = _run_uv(cmd)
+    if "is already installed" in out:
+        _ok(f"{name} is already installed")
+        return True
+    if rc != 0:
+        _fail(out.strip() or f"uv exited with code {rc}")
         return False
+    _ok(f"{name} installed")
+    return True
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -274,22 +298,21 @@ HEADER = r"""
   ╰────────────────────────────────╯
 """
 
-VERSION = "1.7.1"
+# Keep in sync with pyproject.toml `[project] version`.
+VERSION = "2.4.4"
 
 
-def _usage(exit_ok: bool = True):
+def _usage():
     print(__doc__.strip())
     print()
     print("Options:")
     print("  -h, --help   Show this help and exit")
     print("  --version    Show version and exit")
-    if not exit_ok:
-        sys.exit(0)
     sys.exit(0)
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("-c")]  # -c from pipe
+    args = sys.argv[1:]
     for a in args:
         if a in ("-h", "--help"):
             _usage()
@@ -326,6 +349,9 @@ def main():
             sys.exit(1)
 
     # ── FreeFlix + yt-dlp ──────────────────────────────────────────
+    # uv tool installs its shims in ~/.local/bin; make them visible in THIS
+    # session too (uv's own installer only edits the shell rc).
+    _ensure_path(_local_bin())
     for tool in ("freeflix-cli", "yt-dlp"):
         if not _install_tool(tool):
             sys.exit(1)
@@ -333,6 +359,9 @@ def main():
     _ok("FreeFlix installed successfully!")
     print()
     _ensure_permanent_path()
+    if not _on_path("freeflix"):
+        _fail("The freeflix launcher is not on PATH yet.")
+        _say(f'Add "{_local_bin()}" to PATH, then open a new terminal.')
     print()
     print("  Run:  freeflix")
 

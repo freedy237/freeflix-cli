@@ -34,6 +34,25 @@ from .cli_utils import (
 
 __all__ = ["select_with_preview"]
 
+# How long the cursor must stay still before the (expensive) SIXEL poster is
+# repainted. A chafa run costs ~100 ms and writes up to ~0.5 MB to the
+# terminal; doing that on EVERY keystroke starved the input loop, so queued
+# arrow presses lagged and looked like cursor jumps while posters loaded.
+# ~2 key-repeat intervals: navigation is never delayed, the image follows as
+# soon as the hand stops.
+_PAINT_SETTLE = 0.10
+
+
+def _poster_paint_due(quiet, painted, target, ready):
+    """True when the idle SIXEL poster repaint should run.
+
+    ``quiet`` is the time since the last key/click, ``painted`` the currently
+    on-screen poster key, ``target`` the key for the selected row and ``ready``
+    whether its image file is on disk. Extracted so the anti-jank policy is
+    unit-tested without a real terminal.
+    """
+    return bool(ready and quiet >= _PAINT_SETTLE and painted != target)
+
 
 def select_with_preview(labels, prompt, previews, default_index=0):
     """
@@ -582,9 +601,26 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                 with Live(render(), console=console, screen=True,
                           auto_refresh=False) as live:
                     live.refresh()
-                    _paint_sixel()   # first paint (once the sixel is ready)
+                    # The first frame wiped the poster region: paint the sixel
+                    # once it is ready (marked as painted so the idle branch
+                    # below does not do the exact same chafa run twice).
+                    if overlay[0] and ov_region:
+                        _k0 = (
+                            ov_region.get("cover"), ov_region.get("cols"),
+                            ov_region.get("rows"), ov_region.get("row"),
+                            ov_region.get("col"),
+                        )
+                        if _paint_sixel():
+                            painted[0] = _k0
                     import time as _ltime
                     last_anim_tick = [0.0]
+                    last_input_at = [0.0]
+                    # Back-off for a FAILED chafa paint (missing/broken chafa,
+                    # transient error): don't retry it 16x/s forever.
+                    paint_retry_at = [0.0]
+                    # Bound the per-iteration input drain so a continuous mouse
+                    # motion flood can never starve the render/loop.
+                    _BATCH_MAX = 64
                     key_map = {
                         readchar.key.UP: "UP", readchar.key.DOWN: "DOWN",
                         readchar.key.ENTER: "ENTER", readchar.key.ESC: "ESC",
@@ -592,11 +628,28 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                     }
                     while chosen["idx"] is None:
                         anim = _is_loading()
-                        key = _read_menu_key(timeout=0.06 if anim else 0.25)
+                        # Poll, then drain everything that is ALREADY queued
+                        # without waiting. While a poster loads/paints the loop
+                        # is slow, so arrow presses pile up in the tty buffer.
+                        # Handling one key per frame made the cursor lag behind
+                        # the hand and (with the old decoder) DROP the queued
+                        # presses. We now apply the whole batch and repaint once.
+                        quiet = _ltime.monotonic() - last_input_at[0]
+                        timeout = 0.06 if (anim or overlay[0] or quiet < 0.5) else 0.25
+                        key = _read_menu_key(timeout=timeout)
+                        batch = [] if key is None else [key]
+                        if key is not None:
+                            for _ in range(_BATCH_MAX):
+                                more = _read_menu_key(timeout=0.0)
+                                if more is None:
+                                    break
+                                batch.append(more)
                         dirty = False
-                        if key == readchar.key.CTRL_C:
-                            raise KeyboardInterrupt("cancelled")
-                        if key not in (None, ""):
+                        for key in batch:
+                            if key == readchar.key.CTRL_C:
+                                raise KeyboardInterrupt("cancelled")
+                            if key == "":
+                                continue
                             if key in key_map:
                                 # Arrow/Enter/Esc/Backspace constants are
                                 # 3-char strings too: map them BEFORE the
@@ -612,35 +665,30 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                                 if query:
                                     _mouse_set(False)
                                 dirty = True
-                                _act = None
+                                continue
                             else:
                                 _act = key
-                            if _act is not None:
-                                res = _handle(_act)
-                                if res:
-                                    act, idx = res
-                                    if act == "hover":
-                                        dirty = True
-                                    else:
-                                        chosen["idx"] = n if act == "back" else idx
-                                        dirty = True
+                            res = _handle(_act)
+                            if res:
+                                act, idx = res
+                                if act == "hover":
+                                    dirty = True
                                 else:
-                                    # Pure hover over a non-selectable area must
-                                    # not force a full frame repaint.
-                                    dirty = not (
-                                        isinstance(key, MouseEvent) and key.motion)
+                                    chosen["idx"] = n if act == "back" else idx
+                                    dirty = True
+                                    break
+                            elif not (isinstance(key, MouseEvent) and key.motion):
+                                # Pure hover over a non-selectable area must not
+                                # force a full frame repaint.
+                                dirty = True
+                        if len(batch) > 0:
+                            last_input_at[0] = _ltime.monotonic()
                         cur = (console.size.width, console.size.height)
                         if cur != last_size:
                             last_size = cur
                             dirty = True
-                        # Repaint policy (input stays snappy while loading) :
-                        # a key/resize repaints IMMEDIATELY ; background
-                        # loading only ticks the spinner at 4 fps. Repainting
-                        # the full frame + a synchronous chafa sixel on every
-                        # 60 ms iteration starved the input loop (arrows felt
-                        # stuck, users over-pressed and jumped rows).
+                        now = _ltime.monotonic()
                         if dirty or anim:
-                            now = _ltime.monotonic()
                             tick_due = (
                                 anim and not dirty
                                 and now - last_anim_tick[0] >= 0.25
@@ -649,23 +697,16 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                                 if tick_due:
                                     last_anim_tick[0] = now
                                 live.update(render(), refresh=True)
-                                # Rich just repainted the (blank) region → paint
-                                # the real pixels back over it, but ONLY when
-                                # the target changed (same cover/size/position
-                                # needs no new chafa process). Only mark it
-                                # painted when a real image was written (else
-                                # the ready-transition below still fires once
-                                # the sixel finishes).
                                 if overlay[0] and ov_region:
-                                    skey = (
-                                        ov_region.get("cover"),
-                                        ov_region.get("cols"),
-                                        ov_region.get("rows"),
-                                        ov_region.get("row"),
-                                        ov_region.get("col"),
-                                    )
-                                    if painted[0] != skey and _paint_sixel():
-                                        painted[0] = skey
+                                    # The frame just wrote over the poster area,
+                                    # so the pixels are gone: repaint ONLY once
+                                    # navigation settles. A synchronous chafa
+                                    # paint (~0.5 MB, >100 ms) on EVERY arrow
+                                    # press is what starved the input loop and
+                                    # made the cursor flicker/jump while posters
+                                    # were loading. The idle branch below paints
+                                    # after the batch, one chafa run instead of N.
+                                    painted[0] = None
                                 else:
                                     # Block preview: note whether the image was
                                     # actually in THIS frame. If chafa is still
@@ -681,18 +722,28 @@ def select_with_preview(labels, prompt, previews, default_index=0):
                         elif visible:
                             # No key/resize/loading tick, but the selected
                             # poster may have JUST finished rendering (chafa is
-                            # slow): swap spinner → image / paint the sixel
-                            # immediately instead of waiting for a keypress.
+                            # slow), or the navigation just settled and left the
+                            # region blank: swap spinner → image / paint the
+                            # sixel immediately instead of waiting for a key.
                             cc = previews[visible[selected]].get("cover", "")
                             _, _, _, pc, pr = _dims()
+                            quiet = _ltime.monotonic() - last_input_at[0]
                             if overlay[0] and ov_region:
                                 k = (cc, pc, pr, ov_region.get("row"),
                                      ov_region.get("col"))
-                                if (cc and painted[0] != k
-                                        and terminal_image.get_download_path(cc) is not None):
+                                # Wait for a real pause before the expensive
+                                # chafa paint, so a key pressed right after a
+                                # single tap isn't delayed by it.
+                                if (cc and _poster_paint_due(
+                                        quiet, painted[0], k,
+                                        terminal_image.get_download_path(cc)
+                                        is not None)
+                                        and _ltime.monotonic() >= paint_retry_at[0]):
                                     live.update(render(), refresh=True)
-                                    _paint_sixel()
-                                    painted[0] = k
+                                    if _paint_sixel():
+                                        painted[0] = k
+                                    else:
+                                        paint_retry_at[0] = _ltime.monotonic() + 2.0
                             elif cc:
                                 k = (cc, pc, pr)
                                 if (painted[0] != k

@@ -9,15 +9,39 @@
 #
 # Installs uv + Python (if missing), then freeflix-cli and yt-dlp via uv.
 # No manual pre-requisites needed beyond a working internet connection.
+#
+# Re-runnable by design: already-installed tools are detected and skipped, so
+# a second run does not re-download and reinstall everything.
 
 $ErrorActionPreference = "Stop"
+# PS 7.3+: a native command writing to stderr must NOT become a terminating
+# error (winget/uv write progress there). On 5.1 the variable is harmless and
+# Invoke-Native below provides the same protection.
+$PSNativeCommandUseErrorActionPreference = $false
 
 function Log($m)  { Write-Host "[*]  $m" -ForegroundColor Blue }
 function Ok($m)   { Write-Host "[OK] $m" -ForegroundColor Green }
+function Warn($m) { Write-Host "[!]  $m" -ForegroundColor Yellow }
 function Err($m)  { Write-Host "[X]  $m" -ForegroundColor Red }
+
+# Run a native command without letting its stderr trip $ErrorActionPreference
+# (Windows PowerShell 5.1 turns native stderr into a terminating error under
+# "Stop" - the cause of the old installer aborting mid-run during winget).
+function Invoke-Native {
+    param([scriptblock]$Action)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $Action 2>&1 | Out-String
+        return @{ Code = $LASTEXITCODE; Output = $output }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
 
 try { chcp 65001 > $null } catch {}
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try { $ProgressPreference = "SilentlyContinue" } catch {}
 # Windows PowerShell 5.1 may still default to TLS 1.0/1.1; GitHub rejects it.
 try {
     [Net.ServicePointManager]::SecurityProtocol =
@@ -38,6 +62,38 @@ Log "FreeFlix CLI - Windows Bootstrap"
 Write-Host ""
 
 $localBin = "$env:USERPROFILE\.local\bin"
+$wingetLinks = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+
+# winget portable packages expose their shims here; put it on PATH for this
+# session so a player installed on a previous run is FOUND instead of being
+# reinstalled (and reported as failing) on every run.
+function Add-WingetLinks {
+    if ((Test-Path $wingetLinks) -and
+        -not (($env:PATH -split ';') -contains $wingetLinks)) {
+        $env:PATH = "$wingetLinks;$env:PATH"
+    }
+}
+function Refresh-PathFromRegistry {
+    try {
+        $machine = [Environment]::GetEnvironmentVariable("PATH", "Machine")
+        $user = [Environment]::GetEnvironmentVariable("PATH", "User")
+        $env:PATH = "$localBin;$wingetLinks;$machine;$user"
+    } catch {}
+}
+Add-WingetLinks
+
+# Already installed? Check PATH (Get-Command) AND well-known install locations.
+function Test-Tool {
+    param([string[]]$Names, [string[]]$Paths = @())
+    Add-WingetLinks
+    foreach ($n in $Names) {
+        if (Get-Command $n -ErrorAction SilentlyContinue) { return $true }
+    }
+    foreach ($p in $Paths) {
+        if ($p -and (Test-Path $p)) { return $true }
+    }
+    return $false
+}
 
 # ===== 1. Install uv (standalone binary) =====
 $uvExe = "$localBin\uv.exe"
@@ -82,80 +138,109 @@ $havePy = (Get-Command "python3" -ErrorAction SilentlyContinue) -or
 
 if (-not $havePy -and (Get-Command "winget" -ErrorAction SilentlyContinue)) {
     Log "Installing Python via winget ..."
-    winget install --silent --accept-source-agreements --accept-package-agreements Python.Python.3.12 2>$null
-    # winget installs Python; refresh PATH so uv can find it
-    $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
-                [Environment]::GetEnvironmentVariable("PATH", "User") + ";" +
+    $r = Invoke-Native { winget install --silent --accept-source-agreements --accept-package-agreements --id Python.Python.3.12 }
+    if ($r.Code -eq 0) { Ok "Python installed" } else { Warn "Python install returned $($r.Code) - uv will fetch its own Python if needed." }
+    # Refresh PATH from the registry (and the default per-user install dirs).
+    Refresh-PathFromRegistry
+    $env:PATH = $env:PATH + ";" +
                 "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\Scripts;" +
                 "$env:USERPROFILE\AppData\Local\Programs\Python\Python312"
     $havePy = (Get-Command "python3" -ErrorAction SilentlyContinue) -or
               (Get-Command "python" -ErrorAction SilentlyContinue)
-    if ($havePy) { Ok "Python installed" }
+    if ($havePy) { Ok "Python ready" } else { Warn "Python not detected yet - uv will download one." }
 }
 
-# ===== 3. Install freeflix-cli + yt-dlp via uv =====
-# Pin a stable, well-tested CPython 3.12 (the code supports 3.9+, but pinning
-# avoids landing on the system's old/bleeding-edge Python - e.g. a system 3.9).
-# --force so re-running the installer always upgrades to the latest. Falls back
-# to whatever Python uv can use if the 3.12 fetch fails (offline / locked-down).
-Log "Installing freeflix-cli ..."
-uv tool install freeflix-cli --force --python 3.12
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "       (retrying without Python pin)..."
-    uv tool install freeflix-cli --force
+# ===== 3. Install/upgrade freeflix-cli + yt-dlp via uv =====
+# No --force: if the tool is already installed we run `uv tool upgrade`
+# instead, which only downloads when a newer release exists. `--force` on
+# every run was re-downloading both tools for nothing.
+$uvList = (Invoke-Native { uv tool list }).Output
+$ffInstalled = $uvList -match '(?m)^freeflix-cli\s'
+if ($ffInstalled) {
+    Log "Upgrading freeflix-cli (only downloads when a newer version exists) ..."
+    $r = Invoke-Native { uv tool upgrade freeflix-cli }
+    if ($r.Code -ne 0) {
+        Warn "Could not upgrade (offline?) - keeping the installed version."
+    }
+    Ok "freeflix-cli ready"
+} else {
+    Log "Installing freeflix-cli ..."
+    # Pin a stable, well-tested CPython 3.12 (the code supports 3.9+, but
+    # pinning avoids landing on the system's old/bleeding-edge Python).
+    $r = Invoke-Native { uv tool install freeflix-cli --python 3.12 }
+    if ($r.Code -ne 0) {
+        Write-Host "       (retrying without Python pin)..."
+        $r = Invoke-Native { uv tool install freeflix-cli }
+    }
+    if ($r.Code -ne 0) {
+        Err "freeflix-cli install failed (exit $($r.Code))"
+        exit 1
+    }
+    Ok "freeflix-cli installed"
 }
-if ($LASTEXITCODE -ne 0) {
-    Err "freeflix-cli install failed (exit $LASTEXITCODE)"
-    exit 1
-}
-Ok "freeflix-cli installed"
 
-Log "Installing yt-dlp ..."
-uv tool install yt-dlp --force
-if ($LASTEXITCODE -ne 0) {
-    Err "yt-dlp install failed (exit $LASTEXITCODE)"
-    exit 1
+if (Test-Tool @("yt-dlp")) {
+    Log "Upgrading yt-dlp (only downloads when a newer version exists) ..."
+    $r = Invoke-Native { uv tool upgrade yt-dlp }
+    if ($r.Code -ne 0) { Warn "Could not upgrade yt-dlp (offline?) - keeping the installed version." }
+    Ok "yt-dlp ready"
+} else {
+    Log "Installing yt-dlp ..."
+    $r = Invoke-Native { uv tool install yt-dlp }
+    if ($r.Code -ne 0) {
+        Err "yt-dlp install failed (exit $($r.Code))"
+        exit 1
+    }
+    Ok "yt-dlp installed"
 }
 
 # ===== 3b. Media tools via winget (best-effort, never fatal) =====
 # Linux install.sh ships mpv/vlc/ffmpeg/aria2/chafa ; Windows gets the same
 # set here so playback, posters and downloads behave identically.
-# Each install is independent: one failure never aborts the rest.
-#
-# mpv: prefer a REAL mpv.exe CLI build. mpv.net only ships mpvnet.exe (GUI
-# wrapper) and is kept as a last resort because stdin playback / IPC flags
-# used by FreeFlix are not guaranteed to work there.
+# Each install is independent: one failure never aborts the rest, and an
+# already-present tool is never reinstalled.
 if (Get-Command "winget" -ErrorAction SilentlyContinue) {
     $mediaPkgs = @(
         @{ Ids = @("shinchiro.mpv", "mpv-player.mpv-CI.MSVC", "mpv.net");
-           Name = "mpv (player)" },
-        @{ Ids = @("VideoLAN.VLC");     Name = "VLC (alt player)" },
-        @{ Ids = @("Gyan.FFmpeg");      Name = "ffmpeg" },
-        @{ Ids = @("aria2.aria2");      Name = "aria2c" },
-        @{ Ids = @("hpjansson.Chafa");  Name = "chafa (posters)" }
+           Name = "mpv (player)";
+           Cmds = @("mpv", "mpvnet");
+           Paths = @("$wingetLinks\mpv.exe", "$env:ProgramFiles\mpv\mpv.exe",
+                     "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
+                     "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpvnet.exe") },
+        @{ Ids = @("VideoLAN.VLC");     Name = "VLC (alt player)";
+           Cmds = @("vlc");
+           Paths = @("$env:ProgramFiles\VideoLAN\VLC\vlc.exe",
+                     "$env:ProgramFiles (x86)\VideoLAN\VLC\vlc.exe") },
+        @{ Ids = @("Gyan.FFmpeg");      Name = "ffmpeg";
+           Cmds = @("ffmpeg"); Paths = @("$wingetLinks\ffmpeg.exe") },
+        @{ Ids = @("aria2.aria2");      Name = "aria2c";
+           Cmds = @("aria2c"); Paths = @("$wingetLinks\aria2c.exe") },
+        @{ Ids = @("hpjansson.Chafa");  Name = "chafa (posters)";
+           Cmds = @("chafa"); Paths = @("$wingetLinks\chafa.exe") }
     )
     foreach ($p in $mediaPkgs) {
+        if (Test-Tool -Names $p.Cmds -Paths $p.Paths) {
+            Ok "$($p.Name) already installed"
+            continue
+        }
         Log "Installing $($p.Name) ..."
         $done = $false
         foreach ($id in $p.Ids) {
-            winget install --silent --accept-source-agreements --accept-package-agreements --id $id 2>$null
-            if ($LASTEXITCODE -eq 0) { $done = $true; break }
+            $r = Invoke-Native { winget install --silent --accept-source-agreements --accept-package-agreements --id $id }
+            Add-WingetLinks
+            if (($r.Code -eq 0) -or (Test-Tool -Names $p.Cmds -Paths $p.Paths)) {
+                $done = $true
+                break
+            }
         }
         if ($done) { Ok "$($p.Name) installed" }
-        else { Log "$($p.Name) skipped (already present or unavailable)" }
+        elseif (Test-Tool -Names $p.Cmds -Paths $p.Paths) { Ok "$($p.Name) already present" }
+        else { Warn "$($p.Name) skipped (not available via winget - install manually if needed)" }
     }
-    # winget portable packages expose shims here; add it for this session and
-    # for future ones (the user PATH update below handles the rest).
-    $wingetLinks = "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
-    if (Test-Path $wingetLinks) {
-        if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $wingetLinks })) {
-            $env:PATH = "$wingetLinks;$env:PATH"
-        }
-    }
+    Refresh-PathFromRegistry
 } else {
     Log "winget not found - install mpv / VLC / ffmpeg manually if needed"
 }
-Ok "yt-dlp installed"
 
 # ===== 4. Add ~\.local\bin to user PATH =====
 $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")

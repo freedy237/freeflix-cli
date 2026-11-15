@@ -1013,6 +1013,12 @@ _FR = {
     'Streams unavailable:': 'Flux indisponibles :',
     'No stream available for this match.':
         'Aucun flux disponible pour ce match.',
+    'Resolving the stream link…': 'Résolution du lien du flux…',
+    'Checking the players…': 'Vérification des lecteurs…',
+    'This player could not be opened by the site.':
+        'Ce lecteur n’a pas pu être ouvert par le site.',
+    'Pick another player, or try again in a moment.':
+        'Choisis un autre lecteur, ou réessaie dans un instant.',
     'Auto (best quality)': 'Auto (meilleure qualité)',
     'Auto quality:': 'Qualité auto :',
     'Selected quality:': 'Qualité sélectionnée :',
@@ -1043,6 +1049,10 @@ _FR = {
         'Le catalogue est vide entre deux journées ; réessaie plus tard.',
     'YacineTV is online but lists no match right now.':
         'YacineTV est en ligne mais ne liste aucun match pour le moment.',
+    'No matches available today.':
+        'Aucun match disponible aujourd’hui.',
+    'Nothing is listed for today; check back tomorrow.':
+        'Rien n’est programmé pour aujourd’hui ; reviens demain.',
     "The provider's match feed returned 0 fixtures (server-side, not your connection).":
         'Le flux de matchs du fournisseur renvoie 0 rencontre '
         '(côté serveur, pas ta connexion).',

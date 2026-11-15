@@ -1364,24 +1364,54 @@ def _run_server(port):
 
 
 def start_proxy_server(port=0):
-    global PROXY_PORT, PROXY_URL
-    if port == 0:
-        port = find_free_port()
-    PROXY_PORT = port
+    """Start the local proxy server and return the port it listens on.
+
+    The listening socket is bound HERE, in the CALLER's thread, and only then
+    handed to a serving thread. The previous code picked a port with a
+    throw-away socket and bound it later inside the worker thread: if that
+    bind lost a race (or Windows refused the port — ephemeral ports can be
+    reserved/excluded there), the thread died but ``PROXY_URL`` had already
+    been published, so mpv/VLC hit a "connection refused" — a Windows-only
+    playback error. Binding first also guarantees the advertised port is the
+    port we really listen on.
+    """
+    global PROXY_PORT, PROXY_URL, _server_instance
+    last_error = None
+    for attempt in range(6):
+        try:
+            server = _ProxyServer((PROXY_HOST, port), _ProxyHandler)
+            break
+        except OSError as exc:
+            # port == 0 lets the OS pick a free port, so a bind error there is
+            # a transient resource problem: retry briefly. An explicitly
+            # requested port must fail loudly instead of being silently moved.
+            last_error = exc
+            if port:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    else:
+        raise last_error
+    _server_instance = server
+    PROXY_PORT = server.server_address[1]
     PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
-    _ready_event.clear()
-    t = threading.Thread(target=_run_server, args=(port,))
+    _ready_event.set()
+    t = threading.Thread(target=server.serve_forever)
     t.daemon = True
     t.start()
-    return port
+    return PROXY_PORT
 
 
 def ensure_started(port=0, wait=5.0):
     """Idempotent proxy start, called lazily on first playback. Blocks until the
-    socket is accepting. Returns the proxy port."""
+    socket is accepting. Returns the proxy port (0 if it could not start)."""
     with _start_lock:
         if PROXY_URL is None or _server_instance is None:
-            start_proxy_server(port)
+            try:
+                start_proxy_server(port)
+            except OSError:
+                # Leave PROXY_URL unset so callers print "Proxy server not
+                # initialized." instead of handing the player a dead URL.
+                return 0
     _ready_event.wait(timeout=wait)
     return PROXY_PORT
 

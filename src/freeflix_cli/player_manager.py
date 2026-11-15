@@ -42,6 +42,28 @@ _LAST_PLAYBACK = {"finished": False}
 _VLC_KEEPALIVE = []  # proxies kept alive when VLC detaches its window
 
 
+def _is_windows() -> bool:
+    """True on Windows. Looked up at CALL time (not cached at import) so tests
+    and embedded uses can simulate the other platform."""
+    return os.name == "nt" or sys.platform in ("win32", "cygwin")
+
+
+def _no_console_window() -> dict:
+    """``subprocess`` kwargs that avoid a spurious console window on Windows.
+
+    FreeFlix may run without an attached console (``pythonw.exe``, a shortcut,
+    the frozen .exe). Every console child (ffmpeg, the probe, …) would then pop
+    a black window over the TUI. ``CREATE_NO_WINDOW`` only hides the console —
+    it does not touch the GUI window of mpv/VLC — and is absent on POSIX, where
+    the helper returns ``{}``. ``getattr`` keeps it safe when tests replace
+    ``subprocess`` with a stub.
+    """
+    if not _is_windows():
+        return {}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flags} if flags else {}
+
+
 def _stop_vlc_keepalive() -> None:
     while _VLC_KEEPALIVE:
         try:
@@ -596,7 +618,7 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
     direct mp4, DASH) : use ffprobe to read the actual resolution + bitrate.
     Returns {"height":h, "mbps":m} or None.
     """
-    ff = shutil.which("ffprobe")
+    ff = _resolve_tool("ffprobe")
     if not ff:
         return None
     # Forward every useful header (Cookie for signed CDNs, X-Playback-*…),
@@ -951,6 +973,34 @@ def get_all_players():
     return [(code, f"{player['display']}") for code, player in PLAYERS.items()]
 
 
+def _managed_tool_path(name: str) -> str | None:
+    """Path of a FreeFlix self-managed binary (``setup_assistant`` bin dir).
+
+    The managed dir is deliberately NOT added to PATH, and on Windows the
+    first-run setup downloads mpv.exe / ffmpeg.exe there. Resolving players
+    and tools through ``shutil.which()`` alone therefore reported them as
+    missing ("mpv is not installed or not in PATH") even though the binary
+    was installed — the Windows playback bug. Windows executables also carry a
+    ``.exe`` suffix that a bare ``_managed_bin("mpv")`` lookup never matches.
+    """
+    try:
+        from .setup_assistant import _managed_bin
+    except Exception:
+        return None
+    names = [name]
+    if _is_windows() and not name.lower().endswith(".exe"):
+        # The managed dir stores the real Windows executable: mpv.exe.
+        names = [name + ".exe", name]
+    for cand_name in names:
+        try:
+            cand = _managed_bin(cand_name)
+            if cand.is_file():
+                return str(cand)
+        except OSError:
+            continue
+    return None
+
+
 def get_vlc_path():
     """
     Find the VLC executable path.
@@ -962,6 +1012,12 @@ def get_vlc_path():
     path = shutil.which("vlc")
     if path:
         return path
+
+    # PATH can be stale/absent (Windows winget shims, pythonw launches…); the
+    # self-managed dir is a first-class install location.
+    managed = _managed_tool_path("vlc")
+    if managed:
+        return managed
 
     if platform.system() == "Windows":
         # Check Registry
@@ -1012,6 +1068,13 @@ def get_mpv_path():
     p = shutil.which("mpv")
     if p:
         return p
+
+    # 1b. FreeFlix's own managed install (Windows first-run downloads mpv.exe
+    # into a dir that is NOT on PATH; without this the app claimed mpv was
+    # missing and no stream could be played).
+    managed = _managed_tool_path("mpv")
+    if managed:
+        return managed
 
     if platform.system() == "Windows":
         candidates = [
@@ -1104,7 +1167,8 @@ def _run_with_data_meter(cmd, env=None, quiet=False):
 
     proxy.reset_bytes_counter()
     out = subprocess.DEVNULL if quiet else None
-    rc = subprocess.run(cmd, env=env, stdout=out, stderr=out).returncode
+    rc = subprocess.run(cmd, env=env, stdout=out, stderr=out,
+                        **_no_console_window()).returncode
     # mpv/vlc may leave terminal focus/mouse reporting enabled — reset it so the
     # next menu doesn't misread a focus event as a stray Esc. Then purge any
     # keys hammered during playback so they don't leak into the next screen.
@@ -1617,14 +1681,7 @@ def _resolve_tool(name: str) -> str | None:
     found = shutil.which(name)
     if found:
         return found
-    try:
-        from .setup_assistant import _managed_bin
-        cand = _managed_bin(name)
-        if cand.is_file():
-            return str(cand)
-    except Exception:
-        pass
-    return None
+    return _managed_tool_path(name)
 
 
 def m3u8_has_variants(text: str) -> bool:
@@ -2684,7 +2741,8 @@ def _play_dash_mpv(player_executable, stream_url, headers, title,
         _chain_title_updater(ipc_monitor, title)
         ipc_monitor.start()
     try:
-        subprocess.run(cmd, check=True, env=_nvidia_env())
+        subprocess.run(cmd, check=True, env=_nvidia_env(),
+                       **_no_console_window())
         if not live:
             _save_mpv_position(pos_file, pos_key)
         print_success(t("Playback completed successfully!"))
@@ -2711,7 +2769,7 @@ def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
     timestamps. mpv only sees a continuous MPEG-TS stream on stdin, so its own
     HLS demuxer can no longer reset/seek the live timeline.
     """
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _resolve_tool("ffmpeg")
     if not ffmpeg:
         return False
     hdr = "".join(
@@ -2719,7 +2777,9 @@ def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
         for k, v in (headers or {}).items() if v
     )
     ff_cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-headers", hdr,
+        # -nostdin: never steal the TUI's keystrokes / the console's stdin.
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-headers", hdr,
         "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
         "-fflags", "+genpts+discardcorrupt",
         "-i", stream_url, "-c", "copy",
@@ -2735,9 +2795,16 @@ def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
     ]
     ff = None
     try:
-        ff = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
-        mpv = subprocess.Popen(mpv_cmd, stdin=ff.stdout, env=_nvidia_env())
+        # stdin=DEVNULL: without it ffmpeg can read the terminal's stdin on
+        # Windows (where a console child shares the console input buffer) and
+        # swallow playback keys. The stdout pipe is inherited by mpv on both
+        # platforms (subprocess duplicates the handle for the child).
+        ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL,
+                              **_no_console_window())
+        mpv = subprocess.Popen(mpv_cmd, stdin=ff.stdout, env=_nvidia_env(),
+                               **_no_console_window())
         ff.stdout.close()
         rc = mpv.wait()
         if rc != 0:
@@ -2768,7 +2835,7 @@ def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
     publishing segments; giving it a continuous TS from ffmpeg removes that
     failure mode entirely.
     """
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _resolve_tool("ffmpeg")
     if not ffmpeg:
         return False
     hdr = "".join(
@@ -2776,7 +2843,8 @@ def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
         for k, v in (headers or {}).items() if v
     )
     ff_cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-headers", hdr,
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-headers", hdr,
         "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
         "-fflags", "+genpts+discardcorrupt",
         "-i", stream_url, "-c", "copy",
@@ -2804,11 +2872,14 @@ def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
     vlc_cmd.append("-")
     ff = None
     try:
-        ff = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
+        ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL,
+                              **_no_console_window())
         vlc = subprocess.Popen(vlc_cmd, stdin=ff.stdout,
                                stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
+                               stderr=subprocess.DEVNULL,
+                               **_no_console_window())
         ff.stdout.close()
         rc = vlc.wait()
         if rc != 0:
@@ -2895,6 +2966,48 @@ def probe_hls_playable(stream_url: str, headers: dict = None,
     return True, ""
 
 
+def _iter_stderr_lines(proc, deadline: float):
+    """Yield ``proc.stderr`` lines until EOF or *deadline* — portably.
+
+    ``select.select()`` accepts pipes only on POSIX; on Windows it raises
+    ``OSError: [WinError 10038] An operation was attempted on something that
+    is not a socket``. That exception escaped the live-stream preflight and
+    made Match playback fail on Windows with an unhandled error. A daemon
+    reader thread feeding a queue behaves the same on both platforms and still
+    honours the deadline (``readline()`` on a Windows pipe blocks forever).
+    """
+    import queue as _queue
+    import threading as _threading_mod
+
+    stderr = getattr(proc, "stderr", None)
+    if stderr is None:
+        return
+    lines: "_queue.Queue" = _queue.Queue()
+
+    def _pump():
+        try:
+            while True:
+                line = stderr.readline()
+                if not line:
+                    break
+                lines.put(line)
+        except Exception:  # noqa: BLE001 - pipe closed under us
+            pass
+        finally:
+            lines.put(None)
+
+    _threading_mod.Thread(target=_pump, name="freeflix-probe-stderr",
+                          daemon=True).start()
+    while time.time() < deadline:
+        try:
+            line = lines.get(timeout=0.2)
+        except _queue.Empty:
+            continue
+        if line is None:
+            return
+        yield line
+
+
 def match_stream_reachable(stream_url: str, headers: dict,
                            timeout: int = 8) -> tuple[bool, str]:
     """Preflight a live Match stream: is the CDN manifest reachable at all?
@@ -2919,12 +3032,13 @@ def match_stream_reachable(stream_url: str, headers: dict,
     # Probe with ffmpeg DIRECTLY (same path as playback): the CDN pins some
     # feeds to the client that opened the playlist, so going through our
     # local proxy reported "offline" for streams that actually play.
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _resolve_tool("ffmpeg")
     if ffmpeg:
         hdr = "".join(
             f"{k}: {str(v).replace(chr(13), ' ').replace(chr(10), ' ')}\r\n"
             for k, v in (headers or {}).items() if v)
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-headers", hdr,
+        cmd = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+               "-headers", hdr,
                "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
                "-rw_timeout", str(max(4, timeout) * 1000000),
                "-analyzeduration", "3000000", "-probesize", "1000000",
@@ -2936,9 +3050,10 @@ def match_stream_reachable(stream_url: str, headers: dict,
         # best-case result, not a failure. Read stderr while it runs and stop
         # as soon as the verdict is known.
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL,
                                     stderr=subprocess.PIPE, text=True,
-                                    errors="replace")
+                                    errors="replace", **_no_console_window())
         except Exception:
             proc = None
         if proc is not None:
@@ -2946,25 +3061,23 @@ def match_stream_reachable(stream_url: str, headers: dict,
             lines: list[str] = []
             verdict = None
             try:
-                import select as _select
-                while time.time() < deadline:
-                    ready, _, _ = _select.select([proc.stderr], [], [], 0.2)
-                    if not ready:
-                        continue
-                    line = proc.stderr.readline()
+                for raw in _iter_stderr_lines(proc, deadline):
+                    line = str(raw).strip()
                     if not line:
-                        break
-                    lines.append(line.strip())
+                        continue
+                    lines.append(line)
                     blob = " ".join(lines).lower()
                     if "403 forbidden" in blob:
-                        verdict = ("refused", t("Channel server refused the stream."))
+                        verdict = ("refused",
+                                   t("Channel server refused the stream."))
                         break
                     if any(k in blob for k in ("detected", "video:", "audio:",
                                                "frame=", "stream #")):
                         verdict = ("ok", "")
                         break
                     if "invalid data" in blob or "404" in blob:
-                        verdict = ("empty", t("The stream has no data (offline)."))
+                        verdict = ("empty",
+                                   t("The stream has no data (offline)."))
                         break
             finally:
                 try:
@@ -2980,7 +3093,11 @@ def match_stream_reachable(stream_url: str, headers: dict,
                     return True, ""
                 return False, verdict[1]
             # No verdict in time: the stream keeps flowing (live) → playable.
+            # TerminateProcess makes returncode 1 on Windows (vs -SIGTERM on
+            # POSIX), so a healthy-but-silent live feed must not look dead.
             if proc.returncode in (0, None) or proc.returncode == -15:
+                return True, ""
+            if _is_windows() and proc.returncode == 1:
                 return True, ""
             return False, t("The stream has no data (offline).")
 
@@ -3042,10 +3159,14 @@ def play_direct_stream(stream_url: str, headers: dict, title: str,
             return False
         # Direct ffmpeg pipe first: the CDN answers 404 when the playlist is
         # relayed through the local proxy, but serves ffmpeg directly.
-        if shutil.which("ffmpeg") and _play_ffmpeg_pipe(
+        if _resolve_tool("ffmpeg") and _play_ffmpeg_pipe(
                 exe, stream_url, headers, title):
             return True
-        proxy, local_url = start_live_proxy(stream_url, headers)
+        try:
+            proxy, local_url = start_live_proxy(stream_url, headers)
+        except Exception as e:  # noqa: BLE001 - surface a clean player error
+            print_error(f"{t('Error running player:')} {e}")
+            return False
         try:
             return _play_dash_mpv(exe, local_url, {}, title, live=True)
         finally:
@@ -3056,11 +3177,19 @@ def play_direct_stream(stream_url: str, headers: dict, title: str,
         if not exe:
             print_error(t("VLC is not installed or not in PATH."))
             return False
-        if shutil.which("ffmpeg") and _play_vlc_pipe(
+        # VLC only reads a TS stream from stdin reliably on POSIX: on Windows
+        # its stdin input is unreliable (the '-' input may never start, so the
+        # window stays black forever instead of exiting). Go straight to the
+        # local HLS proxy there — VLC then talks plain localhost, which works.
+        if not _is_windows() and _resolve_tool("ffmpeg") and _play_vlc_pipe(
                 exe, stream_url, headers, title):
             return True
         # Fallback without ffmpeg: normal VLC + local HLS proxy.
-        proxy, local_url = start_live_proxy(stream_url, headers)
+        try:
+            proxy, local_url = start_live_proxy(stream_url, headers)
+        except Exception as e:  # noqa: BLE001 - surface a clean player error
+            print_error(f"{t('Error running player:')} {e}")
+            return False
         # --no-one-instance is mandatory:
         # otherwise it forwards the URL to an existing instance and exits.
         vlc_log = os.path.join(tempfile.gettempdir(), "freeflix-vlc.log")
@@ -3078,7 +3207,8 @@ def play_direct_stream(stream_url: str, headers: dict, title: str,
         # VLC's libva/DBus warnings would otherwise be printed over the TUI.
         proc = subprocess.Popen(cmd, env=_nvidia_env(),
                                 stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.DEVNULL,
+                                **_no_console_window())
         try:
             rc = proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -3758,6 +3888,10 @@ def play_video(
                     # VLC Command construction (quiet + capped adaptive quality)
                     cmd = [
                         player_executable,
+                        # A configured one-instance VLC would forward the URL
+                        # to an existing window and exit(0), so FreeFlix would
+                        # report success while nothing played.
+                        "--no-one-instance",
                         "--quiet",
                         stream_url,
                         f":http-referrer={referer}",
@@ -3772,44 +3906,83 @@ def play_video(
                         )
                         cmd.append(f"--sub-file={local_subtitle_path}")
                     subprocess.run(cmd, check=True,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL,
+                                   **_no_console_window())
                 else:
                     # MPV Command construction
                     try:
                         origin_domain = referer.split('/')[2] if referer else ""
                     except IndexError:
                         origin_domain = ""
-                    headers_mpv = f"Origin: https://{origin_domain}" if origin_domain else ""
+                    # --http-header-fields is a COMMA-separated list option:
+                    # joining the fields with ';' (as this used to) made mpv
+                    # see ONE malformed header and the CDN answered 403.
+                    header_fields = []
+                    if origin_domain:
+                        header_fields.append(f"Origin: https://{origin_domain}")
                     add_default_sec_headers = False
 
                     if player_config.get("alt-used") is True:
-                        headers_mpv = f"Alt-Used: {domain};" + headers_mpv
+                        # In direct mode `domain` (from the player URL) is not
+                        # computed, so fall back to the stream host instead of
+                        # sending an empty Alt-Used value.
+                        alt_host = domain
+                        if not alt_host:
+                            try:
+                                alt_host = (
+                                    urllib.parse.urlsplit(stream_url).hostname
+                                    or ""
+                                )
+                            except Exception:
+                                alt_host = ""
+                        if alt_host:
+                            header_fields.insert(0, f"Alt-Used: {alt_host}")
 
                     sec_headers = player_config.get("sec_headers")
                     if sec_headers:
                         if isinstance(sec_headers, str):
-                            headers_mpv += ";" + sec_headers
+                            for part in sec_headers.split(";"):
+                                part = part.strip()
+                                if part:
+                                    header_fields.append(part)
                         elif isinstance(sec_headers, bool) and sec_headers is True:
                             add_default_sec_headers = True
                     else:
                         add_default_sec_headers = True
 
                     if add_default_sec_headers:
-                        headers_mpv += ";Sec-Fetch-Dest: iframe;Sec-Fetch-Mode: navigate;Sec-Fetch-Site: same-origin"
+                        header_fields.extend([
+                            "Sec-Fetch-Dest: iframe",
+                            "Sec-Fetch-Mode: navigate",
+                            "Sec-Fetch-Site: same-origin",
+                        ])
 
                     if player_config.get("no-header") is True:
-                        headers_mpv = ""
+                        header_fields = []
+
+                    # A comma inside a value would corrupt mpv's list; drop
+                    # that header only (same policy as the DASH path).
+                    clean_fields = []
+                    for field in header_fields:
+                        field = str(field).replace("\r", " ").replace("\n", " ")
+                        if field.strip() and "," not in field:
+                            clean_fields.append(field)
+                    headers_mpv = ",".join(clean_fields)
 
                     print_info(f"{t('Headers:')} {headers_mpv}")
 
+                    # Args are passed as a LIST, so no shell quoting: wrapping
+                    # values in literal '"' made mpv send quotes inside the
+                    # Referer/UA/header values (rejected by several CDNs).
                     cmd = [
                         player_executable,
                         *_mpv_config_args(),  # FreeFlix-only mpv config
                         *_mpv_resilience_args(),  # big cache to ride out stalls
-                        f'--referrer="{referer}"',
-                        f'--user-agent="{user_agent}"',
-                        f'--http-header-fields="{headers_mpv}"',
-                        f'--title="{title}"',
+                        f"--referrer={referer}",
+                        f"--user-agent={user_agent}",
+                        f"--http-header-fields={headers_mpv}",
+                        f"--title={title}",
                     ]
                     if selected_hls_bitrate:
                         cmd.append(f"--hls-bitrate={selected_hls_bitrate}")
@@ -3824,7 +3997,8 @@ def play_video(
                         _chain_title_updater(ipc_mon_d, title)
                         ipc_mon_d.start()
                     try:
-                        subprocess.run(cmd, check=True, env=_nvidia_env())
+                        subprocess.run(cmd, check=True, env=_nvidia_env(),
+                                       **_no_console_window())
                     finally:
                         if ipc_mon_d:
                             ipc_mon_d.stop()

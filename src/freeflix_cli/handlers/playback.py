@@ -18,8 +18,71 @@ from ..player_manager import (
 )
 from ..tracker import tracker
 from ..scraping import player
+from ..scraping.utils import ANIME_SAMA_SIGNED_SENTINEL
 from ..i18n import t
 from ..icons import icon
+
+
+def _is_signed_slot(p) -> bool:
+    """True for a player row whose URL is minted on demand (Anime-Sama)."""
+    return getattr(p, "url", "") == ANIME_SAMA_SIGNED_SENTINEL
+
+
+def _slot_headers(p, headers) -> dict:
+    """Headers carrying the signed slot, so the resolver can mint the URL."""
+    slot = (getattr(p, "meta", None) or {}).get("slot")
+    if not slot:
+        return dict(headers or {})
+    out = dict(headers or {})
+    out["_anime_sama_slot"] = slot
+    return out
+
+
+def _resolve_signed_player(p, headers):
+    """Mint the real media URL for a signed slot, in place.
+
+    Returns True when *p.url* became a real URL. Resolving here (and not in
+    the shared resolve cache) matters: the cache is keyed by URL, and every
+    slot shares the same placeholder, so caching one reader's link would hand
+    it to all of them.
+    """
+    if not _is_signed_slot(p):
+        return True
+    try:
+        real = player.get_hls_link(p.url, _slot_headers(p, headers))
+    except Exception:
+        real = None
+    if not real:
+        return False
+    p.url = real
+    p.meta = {**(getattr(p, "meta", None) or {}), "direct_media": True}
+    return True
+
+
+def _resolve_slots(players_list, headers):
+    """Resolve every indirect row up front, in parallel.
+
+    A slot only becomes a stream if the site still knows the row AND the
+    extractor finds a manifest. Doing it before the menu means the list only
+    offers readers that actually work — instead of rows that fail on click
+    (uqload's premium page, deleted sendvid ids…). When nothing resolves the
+    originals are returned so the user can retry a transient failure.
+    """
+    pending = [p for p in players_list if _is_signed_slot(p)]
+    if not pending:
+        return players_list, 0
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(4, len(pending))) as pool:
+        results = list(pool.map(
+            lambda p: (p, _resolve_signed_player(p, headers)), pending))
+    resolved = [p for p, ok in results if ok]
+    if not resolved:
+        return players_list, 0
+    keep = {id(p) for p in resolved}
+    ordered = [p for p in players_list
+               if not _is_signed_slot(p) or id(p) in keep]
+    return ordered, len(resolved)
 
 
 def _search_subtitle(series_title, season_title, episode_title):
@@ -201,12 +264,17 @@ def play_episode_flow(
         return False
 
     supported_players = _dedup_players(
-        [p for p in episode.players if player.is_supported(p.url)]
+        [p for p in episode.players
+         if player.is_supported(p.url)
+         # The catalogue itself flags rows it knows are deleted; offering
+         # them only leads to "this player could not be opened".
+         and not (getattr(p, "meta", None) or {}).get("dead")]
     )
     # Hosts known dead upstream never play (placeholder pages / dead CDNs):
     # hide them instead of showing a row that always fails.
     live_players = [p for p in supported_players
-                    if not player.is_known_offline(p.url)]
+                    if _is_signed_slot(p)
+                    or not player.is_known_offline(p.url)]
     if live_players:
         supported_players = live_players
     if not supported_players:
@@ -216,6 +284,18 @@ def play_episode_flow(
     # Default headers if not provided
     if headers is None:
         headers = {}
+
+    # Indirect rows (Anime-Sama "lien:<id>" / signed slots) carry no URL until
+    # the site mints one. Resolve them NOW, in parallel: the menu must only
+    # offer readers that actually produced a stream, and the quality analysis
+    # below needs a real URL to probe.
+    if any(_is_signed_slot(p) for p in supported_players):
+        with spinner(t("Checking the players…")):
+            supported_players, _resolved = _resolve_slots(
+                supported_players, headers)
+        if not supported_players:
+            print_warning(t("No supported players found."))
+            return False
 
     # Optionally analyse every player up front : resolutions + the bitrate
     # needed for stable playback, shown next to each player. Runs in
@@ -285,10 +365,7 @@ def play_episode_flow(
         # Player Selection Menu (with language/quality badges)
         player_options = []
         for p in supported_players:
-            try:
-                host = p.url.split("/")[2].split(".")[-2]
-            except IndexError:
-                host = ""
+            host = _player_host(p)
             player_options.append(_player_label(p.name, host, quality_map.get(p.url, "")))
         player_options.append(t("← Back"))
 
@@ -300,10 +377,13 @@ def play_episode_flow(
 
         # Warm the likely pick's stream in the background while the user reads
         # the menu, so hitting Enter plays (near-)instantly instead of stalling
-        # a few seconds on resolution.
+        # a few seconds on resolution. Signed slots are resolved on selection
+        # instead: their URL doesn't exist yet and the shared cache is keyed by
+        # the placeholder, which every reader would collide on.
         try:
             from ..player_manager import prefetch_stream
-            prefetch_stream(supported_players[default_idx].url, headers)
+            if not _is_signed_slot(supported_players[default_idx]):
+                prefetch_stream(supported_players[default_idx].url, headers)
         except Exception:
             pass
 
@@ -321,13 +401,17 @@ def play_episode_flow(
         selected_player = supported_players[player_idx]
         tracker.set_last_server(selected_player.name)
 
-        # animes-sama.fr slots are placeholders: hand the resolver the
-        # episode/reader pair so it can mint a fresh signed URL.
-        play_headers = headers
-        _meta = getattr(selected_player, "meta", None) or {}
-        if _meta.get("slot"):
-            play_headers = dict(headers or {})
-            play_headers["_anime_sama_slot"] = _meta["slot"]
+        # Signed slot → mint the real media URL now (fresh per playback).
+        direct_media = bool((getattr(selected_player, "meta", None) or {})
+                            .get("direct_media"))
+        if _is_signed_slot(selected_player):
+            with spinner(t("Resolving the stream link…")):
+                resolved = _resolve_signed_player(selected_player, headers)
+            if not resolved:
+                print_error(t("This player could not be opened by the site."))
+                print_info(t("Pick another player, or try again in a moment."))
+                continue
+            direct_media = True
 
         # Construct title for player window (de-duplicate season + episode)
         clean_season = clean_season_title(series_title, season_title)
@@ -336,9 +420,10 @@ def play_episode_flow(
 
         success = play_video(
             selected_player.url,
-            headers=play_headers,
+            headers=headers,
             title=window_title,
             subtitle_url=subtitle_url,
+            is_direct=direct_media,
         )
 
         if success:
@@ -400,9 +485,22 @@ def _dedup_players(players_list):
     out = []
     for p in players_list:
         url = getattr(p, "url", "") or ""
-        if url in seen_urls:
+        meta = getattr(p, "meta", None) or {}
+        # Every indirect (signed / lien:) row shares the same placeholder URL,
+        # so keying on the URL alone collapsed a whole episode to "Lecteur 1".
+        # The slot identity is what makes them distinct.
+        if url == ANIME_SAMA_SIGNED_SENTINEL:
+            slot = meta.get("slot") or {}
+            ident = ("slot", slot.get("ep"), slot.get("lecteur"),
+                     slot.get("lien_id"))
+        else:
+            ident = ("url", url)
+        if ident in seen_urls:
             continue
-        seen_urls.add(url)
+        seen_urls.add(ident)
+        if url == ANIME_SAMA_SIGNED_SENTINEL:
+            out.append(p)          # host dedupe is meaningless without a host
+            continue
         host_key = ((getattr(p, "name", "") or "").strip().lower(), _url_host(url))
         if host_key[1] and host_key in seen_hosts:
             continue
@@ -417,6 +515,16 @@ def _url_host(url: str) -> str:
         return (urlparse(url).hostname or "").lower()
     except Exception:
         return ""
+
+
+def _player_host(p) -> str:
+    """Short host badge for a row (works for indirect rows without a URL)."""
+    host = _url_host(getattr(p, "url", "") or "")
+    if not host:
+        host = str((getattr(p, "meta", None) or {}).get("host") or "").lower()
+    if not host:
+        return ""
+    return host.split(".")[-2] if "." in host else host
 
 
 def _pick_player_for_batch(
@@ -439,6 +547,12 @@ def _pick_player_for_batch(
     )
     if not supported:
         return None
+    # Indirect rows must be materialised before they can be probed.
+    if any(_is_signed_slot(p) for p in supported):
+        with spinner(t("Checking the players…")):
+            supported, _resolved = _resolve_slots(supported, headers)
+        if not supported:
+            return None
 
     # ── Analyse every supported player's qualities (always) ──────
     from concurrent.futures import (
@@ -562,6 +676,13 @@ def _download_one_episode(
     print_info(f"{icon('download')} {label} — {t('starting download')}")
 
     for sp in supported_players:
+        direct_media = bool((getattr(sp, "meta", None) or {})
+                            .get("direct_media"))
+        if _is_signed_slot(sp):
+            # Each episode has its own signed slot: mint it right before use.
+            if not _resolve_signed_player(sp, headers):
+                continue
+            direct_media = True
         ok = play_video(
             sp.url,
             headers=headers,
@@ -571,6 +692,7 @@ def _download_one_episode(
             batch_view=batch_view,
             subfolder=subfolder,
             batch_label=label,
+            is_direct=direct_media,
         )
         if ok:
             tracker.save_progress(

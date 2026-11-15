@@ -16,21 +16,82 @@ back automatically.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
 
 _state = {"items": [], "ready": False, "started": False}
 _lock = threading.Lock()
+_ready = threading.Event()
 
 _MAX_SHOWS = 10  # history entries checked per refresh
 
+# The feed costs ~30 s of network on a cold cache (planning + one season probe
+# per show), so it is persisted: the next launch shows the last result
+# instantly and refreshes in the background. Without it, opening the entry
+# before the fetch landed said "no new releases" until the user wandered into
+# Planning, which merely bought the fetch enough time.
+_CACHE_MAX_AGE = 24 * 3600
+
+
+def _cache_path():
+    try:
+        from platformdirs import user_cache_dir
+        base = user_cache_dir("freeflix-cli", "PaulExplorer")
+    except Exception:
+        return None
+    return os.path.join(base, "recent_releases.json")
+
+
+def _load_cache() -> list:
+    path = _cache_path()
+    if not path:
+        return []
+    try:
+        import time
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+        if time.time() - float(blob.get("ts") or 0) > _CACHE_MAX_AGE:
+            return []
+        items = blob.get("items")
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def _save_cache(items: list) -> None:
+    path = _cache_path()
+    if not path:
+        return
+    try:
+        import time
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"ts": time.time(), "items": items}, fh,
+                      ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
 
 def start_background_fetch():
-    """Kick off the fetch once per process (no-op if already started)."""
+    """Kick off the fetch once per process (no-op if already started).
+
+    Seeds the in-memory list from the last snapshot first, so a second launch
+    shows New releases immediately instead of waiting on the network.
+    """
     with _lock:
         if _state["started"]:
             return
         _state["started"] = True
+        if not _state["items"]:
+            cached = _load_cache()
+            if cached:
+                _state["items"] = cached
+                _state["ready"] = True
+                _ready.set()
     threading.Thread(target=_fetch, name="freeflix-recent", daemon=True).start()
 
 
@@ -40,14 +101,15 @@ def get_items() -> list:
         return list(_state["items"])
 
 
-def wait_ready(timeout: float = 8.0) -> list:
-    """Block (bounded) until the background feed has finished, then return its
-    items. Used only when the user explicitly opens 'New releases' before the
-    silent fetch has landed — the home screen itself never waits."""
-    import time as _t
-    end = _t.time() + max(0.0, timeout)
-    while not _state["ready"] and _t.time() < end:
-        _t.sleep(0.1)
+def wait_ready(timeout: float = 45.0) -> list:
+    """Block (bounded) until the background feed has finished, then return it.
+
+    The budget used to be 8 s while the fetch needs ~30 s cold, which is
+    exactly why the screen said "no new releases" on a fresh launch. A cached
+    snapshot returns immediately.
+    """
+    if not _state["ready"]:
+        _ready.wait(timeout=max(0.0, timeout))
     return get_items()
 
 
@@ -138,6 +200,75 @@ def _episode_title_at(season, number: int) -> str:
     return ""
 
 
+def _candidate_item(cand, planning, seen_keys):
+    """Check ONE show and return its new-release item, or None.
+
+    Pure network work on a copy of the candidate: safe to run in a pool. The
+    old sequential loop took ~9 s per show (nine language probes for the
+    season), so ten shows needed 90 s+, while the UI only waited 8 s — that is
+    why "New releases" looked empty on a fresh launch and only appeared after
+    wandering through Planning (which bought the fetch enough time).
+    """
+    from .scraping import anime_sama
+
+    title = cand["title"]
+    series_url = cand["series_url"]
+    if not series_url:
+        return None
+    try:
+        series = anime_sama.get_series(series_url)
+    except Exception:
+        return None
+    seasons = getattr(series, "seasons", None) or []
+    if not seasons:
+        return None
+
+    latest = seasons[-1]
+    try:
+        season = anime_sama.get_season(_abs_url(latest.url))
+    except Exception:
+        return None
+    if not (getattr(season, "episodes", None) or {}):
+        return None
+    latest_episode, latest_num = _latest_episode(season)
+    if not latest_episode:
+        return None
+
+    # If the current week's planning says the episode is not out yet, step
+    # back to the last really-released one (the source pre-creates the page).
+    week = planning.get(_norm_url(series_url), [])
+    if week and not any(getattr(p, "released", False) for p in week):
+        if latest_num > 0:
+            latest_num -= 1
+            latest_episode = _episode_title_at(season, latest_num) or latest_episode
+        if latest_num <= 0:
+            return None
+
+    watched_season = cand["season"]
+    watched_num = cand["ep_num"]
+
+    new_season = latest.title.strip().lower() != watched_season.lower()
+    new_episode = latest_num > watched_num
+    if not (new_season or new_episode):
+        return None
+
+    key = f"Anime-Sama|{title}|{latest.title}|{latest_episode}"
+    if key in seen_keys:
+        return None
+
+    return {
+        "provider": "Anime-Sama",
+        "title": title,
+        "url": getattr(series, "url", series_url),
+        "poster": getattr(series, "img", "") or cand["logo"] or "",
+        "latest_season": latest.title,
+        "season_url": _abs_url(latest.url),
+        "latest_episode": latest_episode,
+        "episode_number": latest_num,
+        "key": key,
+    }
+
+
 def _fetch():
     items = []
     try:
@@ -158,7 +289,6 @@ def _fetch():
         if has_anime:
             anime_sama.get_website_url()
         seen_keys = tracker.get_seen_releases()
-        planning = _planning_index()
 
         # Candidate shows: history first (most recent), then planning follows
         # that have never been played.
@@ -195,71 +325,25 @@ def _fetch():
                 "source": "follow",
             })
 
-        for cand in candidates[:_MAX_SHOWS]:
-            title = cand["title"]
-            series_url = cand["series_url"]
-            if not series_url:
-                continue
-            try:
-                series = anime_sama.get_series(series_url)
-            except Exception:
-                continue
-            seasons = getattr(series, "seasons", None) or []
-            if not seasons:
-                continue
-
-            latest = seasons[-1]
-            try:
-                season = anime_sama.get_season(_abs_url(latest.url))
-            except Exception:
-                continue
-            season_eps = getattr(season, "episodes", None) or {}
-            if not season_eps:
-                continue
-            latest_episode, latest_num = _latest_episode(season)
-            if not latest_episode:
-                continue
-
-            # If the current week's planning says the episode is not out yet,
-            # step back to the last really-released episode (the source
-            # pre-creates the upcoming episode page).
-            week = planning.get(_norm_url(series_url), [])
-            if week and not any(getattr(p, "released", False) for p in week):
-                if latest_num > 0:
-                    latest_num -= 1
-                    latest_episode = (
-                        _episode_title_at(season, latest_num) or latest_episode
-                    )
-                if latest_num <= 0:
-                    continue
-
-            watched_season = cand["season"]
-            watched_num = cand["ep_num"]
-
-            # New = a whole new season, or a later episode in the same one.
-            new_season = latest.title.strip().lower() != watched_season.lower()
-            new_episode = latest_num > watched_num
-            if not (new_season or new_episode):
-                continue
-
-            key = f"Anime-Sama|{title}|{latest.title}|{latest_episode}"
-            if key in seen_keys:
-                continue
-
-            items.append({
-                "provider": "Anime-Sama",
-                "title": title,
-                "url": getattr(series, "url", series_url),
-                "poster": getattr(series, "img", "") or cand["logo"] or "",
-                "latest_season": latest.title,
-                "season_url": _abs_url(latest.url),
-                "latest_episode": latest_episode,
-                "episode_number": latest_num,
-                "key": key,
-            })
+        candidates = [c for c in candidates[:_MAX_SHOWS] if c["series_url"]]
+        # Planning is a 6-7 s network read on a cold cache: only pay for it
+        # when there is a show to check, and do it in parallel with nothing
+        # else that depends on it.
+        planning = _planning_index() if candidates else {}
+        if candidates:
+            from concurrent.futures import ThreadPoolExecutor
+            workers = min(4, len(candidates))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                found = list(pool.map(
+                    lambda c: _candidate_item(c, planning, seen_keys),
+                    candidates,
+                ))
+            items = [i for i in found if i]
     except Exception:
         pass
     finally:
         with _lock:
             _state["items"] = items
             _state["ready"] = True
+        _ready.set()
+        _save_cache(items)

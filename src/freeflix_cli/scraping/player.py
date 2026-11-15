@@ -311,16 +311,48 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     Returns:
         HLS stream URL
     """
-    # uqload rotates its domain (uqload.is / .vc / .cx…). Use the EMBED's own
-    # host for the Referer instead of a hardcoded one, so a domain change
-    # doesn't break extraction — and the token the CDN signs matches.
+    # uqload rotates its domain (uqload.is / .vc / .cx…), and answers a
+    # 38-byte stub when the request carries ITS OWN host as Referer ("Video
+    # embed restricted for this domain"). A self-referer is exactly what the
+    # old code sent, so the player always looked dead. Keep the embedder's
+    # Referer when the caller supplied one, otherwise send none.
     host = _url_host(url) or "uqload.vc"
     headers = headers or {}
-    response = _get(
-        url.replace("embed-", ""),
-        headers={**headers, "Referer": f"https://{host}/"},
-        impersonate="chrome",
-    )
+    page_headers = {k: v for k, v in headers.items()
+                    if k.lower() != "referer" and v}
+    ref = headers.get("Referer") or headers.get("referer") or ""
+    if ref and host not in ref:
+        page_headers["Referer"] = ref
+    page_url = url.replace("embed-", "")
+
+    def _looks_like_player(t: str) -> bool:
+        return ("master.m3u8" in t or "eval(function(p,a,c,k,e,d)" in t)
+
+    # One-shot request first: the shared scraper session carries Cloudflare /
+    # premium cookies for this host, and uqload then serves a shorter
+    # "premium" page with no player at all (20 KB vs the 38 KB real embed).
+    # A clean session with the embedder's Referer gets the real page.
+    response = None
+    try:
+        response = requests.get(page_url, headers=page_headers or None,
+                                impersonate="chrome", timeout=(8, 25))
+    except Exception:
+        response = None
+    if response is None or not _looks_like_player(
+            getattr(response, "text", "") or ""):
+        # The clean request did not carry a player (premium/anti-bot page):
+        # let the Cloudflare-aware cascade try, and keep whichever answer
+        # actually contains one.
+        try:
+            fallback = _get(page_url, headers=page_headers, impersonate="chrome")
+        except Exception:
+            fallback = None
+        if fallback is not None:
+            if response is None or _looks_like_player(
+                    getattr(fallback, "text", "") or ""):
+                response = fallback
+    if response is None:
+        return None
     response.raise_for_status()
 
     text = response.text
@@ -332,6 +364,18 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     except Exception:
         code = text
     haystack = (code or "") + "\n" + text
+    # `deobfuscate()` covers the base-N word-substitution packs; uqload switched
+    # to a plain Dean Edwards `eval(function(p,a,c,k,e,d)…)` block whose payload
+    # hides `file:"https://strm13.uqload.vc/…/master.m3u8?t=…"`. Without this
+    # second unpacker the row looked unplayable even though the page carries a
+    # perfectly valid signed HLS (this is the reader that kept failing).
+    if "eval(function(p,a,c,k,e,d)" in text and "master.m3u8" not in haystack:
+        try:
+            unpacked = unpack_dean_edwards(text)
+        except Exception:
+            unpacked = ""
+        if unpacked:
+            haystack = unpacked + "\n" + haystack
 
     # Modern layout : a signed fsvid-family HLS `…/.urlset/master.m3u8?t=…`
     # (served with the embed's Origin). Legacy : sources:[{file:"…mp4"}].

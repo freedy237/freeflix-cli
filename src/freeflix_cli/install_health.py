@@ -13,7 +13,7 @@ import os
 import sys
 
 # Version BAKED INTO THE CODE — bump together with pyproject.toml.
-CODE_VERSION = "2.4.4"
+CODE_VERSION = "2.5.0"
 
 
 def metadata_version() -> str | None:
@@ -65,6 +65,25 @@ def find_shims() -> list[str]:
     return found
 
 
+def installer_kind() -> str:
+    """Which manager owns the running copy: uv, pipx, pip, frozen or unknown.
+
+    The clean-reinstall hint must name the *right* manager: telling a pipx
+    user to run ``uv tool uninstall`` (the old hard-coded advice) fails and
+    leaves the split install in place.
+    """
+    if is_frozen():
+        return "frozen"
+    path = module_file().replace("\\", "/").lower()
+    if "/uv/tools/" in path:
+        return "uv"
+    if "/pipx/venvs/" in path:
+        return "pipx"
+    if "site-packages" in path or "dist-packages" in path:
+        return "pip"
+    return "unknown"
+
+
 def install_state() -> dict:
     """Snapshot: frozen, exe, module file, both versions, dupes, mismatch."""
     meta = metadata_version()
@@ -76,22 +95,34 @@ def install_state() -> dict:
         "code_version": CODE_VERSION,
         "mismatch": bool(meta) and meta != CODE_VERSION,
         "shims": find_shims(),
+        "installer": installer_kind(),
     }
     return state
 
 
 def cleanup_hint() -> str:
-    """Per-OS clean-reinstall commands for a split install."""
+    """Per-OS clean-reinstall commands for a split install.
+
+    The commands match the manager that actually owns the running copy, so
+    they work on pipx/pip installs too (a wrong uninstall command was a dead
+    end after an upgrade went wrong).
+    """
+    kind = installer_kind()
+    if kind == "frozen":
+        return (
+            "Download the latest freeflix-windows-x86_64.exe from GitHub "
+            "Releases and replace the old one (close FreeFlix first)."
+        )
+    if kind == "pipx":
+        cmd = "pipx uninstall freeflix-cli && pipx install freeflix-cli"
+    elif kind == "pip":
+        cmd = "pip uninstall -y freeflix-cli && pip install freeflix-cli"
+    else:
+        cmd = "uv tool uninstall freeflix-cli && uv tool install freeflix-cli"
     if os.name == "nt":
         return (
             "Close FreeFlix, then run in PowerShell:\n"
             "  where.exe freeflix\n"
-            "  uv tool uninstall freeflix-cli\n"
-            "  uv tool install freeflix-cli\n"
-            "Or re-download freeflix-windows-x86_64.exe from GitHub Releases."
+            f"  {cmd}"
         )
-    return (
-        "Close FreeFlix, then run:\n"
-        "  uv tool uninstall freeflix-cli\n"
-        "  uv tool install freeflix-cli"
-    )
+    return f"Close FreeFlix, then run:\n  {cmd}"

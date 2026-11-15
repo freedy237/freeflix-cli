@@ -3,6 +3,7 @@ from __future__ import annotations
 from curl_cffi import requests as cffi_requests
 from .objects import SearchResult, SamaSeason, SamaSeries, SeasonAccess, Episode
 from .utils import (
+    ANIME_SAMA_SIGNED_SENTINEL,
     parse_episodes_from_js, parse_html, clean_text, cacheable_body,
     load_origin as resilient_origin, store_origin,
 )
@@ -201,6 +202,69 @@ def search(query: str) -> list[SearchResult]:
 lang_codes = ["vostfr", "vf", "vj", "vcn", "vqc", "vkr", "va", "vf1", "vf2"]
 
 
+def _fetch_inline_pages(base: str, first_lang: str) -> dict:
+    """Season pages that inline the ``var epsN`` arrays, keyed by language.
+
+    Starts with the requested language and then follows the page's own
+    ``languesDispo`` list, so a one-language season costs one request instead
+    of nine. Returns {} on the legacy layouts, where episodes.js still exists.
+    """
+    pages: dict[str, str] = {}
+    pending = [first_lang]
+    declared = None
+    while pending:
+        lang = pending.pop(0)
+        if lang in pages:
+            continue
+        try:
+            r = _get(f"{base}/{lang}/", cache_ttl=600)
+        except Exception:
+            continue
+        if getattr(r, "status_code", 0) != 200:
+            continue
+        html = r.text or ""
+        if "var eps" not in html:
+            continue
+        pages[lang] = html
+        if declared is None:
+            mm = re.search(r"languesDispo\s*=\s*\[([^\]]*)\]", html)
+            if mm:
+                declared = [c for c in re.findall(r'"([^"]+)"', mm.group(1)) if c]
+                pending = [c for c in declared if c not in pages]
+    return pages
+
+
+def _parse_inline_season(html: str, base: str, lang_code: str):
+    """Parse one inlined season page into Episode objects, slots completed."""
+    if not html or "var eps" not in html:
+        return []
+    # 2026-11-12 format: arrays hold "lien:<row id>" and the real embed comes
+    # from /api/lien.php?j=<epsJeton>&l=<id>. epsMeta maps id → host (and
+    # flags deleted rows); the older flag format is resolved by the signed API.
+    host_map = {}
+    m_meta = re.search(r"var\s+epsMeta\s*=\s*(\{.*?\})\s*;", html, re.S)
+    if m_meta:
+        try:
+            import json as _json
+            host_map = _json.loads(m_meta.group(1))
+        except Exception:
+            host_map = {}
+    m_jeton = re.search(r'epsJeton\s*=\s*"([^"]+)"', html)
+    jeton = m_jeton.group(1) if m_jeton else ""
+    parsed = parse_episodes_from_js(html, host_map=host_map)
+    for ep in parsed:
+        for pl in getattr(ep, "players", []) or []:
+            slot = dict((getattr(pl, "meta", None) or {}).get("slot") or {})
+            if not slot:
+                continue
+            slot["mode"] = "lien" if slot.get("lien_id") else "sign"
+            if jeton:
+                slot["jeton"] = jeton
+            slot["season_url"] = f"{base}/{lang_code}"
+            pl.meta = {**(getattr(pl, "meta", None) or {}), "slot": slot}
+    return parsed
+
+
 def get_season(url: str) -> SamaSeason:
     episodes: dict[str, list[Episode]] = {}
     valid_lang = []
@@ -209,6 +273,18 @@ def get_season(url: str) -> SamaSeason:
     # d'entrée était déjà en vf, et corrompait les slugs contenant "vostfr".
     m = re.search(r"/(vostfr|vf|vj|vcn|vqc|vkr|va|vf1|vf2)/?$", url)
     base = url[:m.start()] if m else url.rstrip("/")
+    first_lang = m.group(1) if m else lang_codes[0]
+
+    # Fast path (2026-11): BOTH mirrors now inline the `var epsN` arrays in
+    # the season page and answer 404 for <lang>/episodes.js. Reading one page
+    # instead of probing nine dead URLs takes a cold season from ~11 s to ~2 s,
+    # which is what the New-releases feed waits on.
+    inline_pages = _fetch_inline_pages(base, first_lang)
+    for lang_code, html in inline_pages.items():
+        parsed = _parse_inline_season(html, base, lang_code)
+        if parsed:
+            episodes[lang_code] = parsed
+            valid_lang.append(lang_code)
 
     # The 9 language probes are INDEPENDENT network fetches: run them in a
     # small pool instead of one after another (first visit to a season was
@@ -228,7 +304,10 @@ def get_season(url: str) -> SamaSeason:
             r = cffi_requests.get(
                 nurl,
                 impersonate="chrome",
-                timeout=(6, 20),
+                # episodes.js is a few KB: it either answers at once or not at
+                # all (404/403). A 6 s connect + 20 s read budget spent up to
+                # 12 s per season for files that no longer exist there.
+                timeout=(3, 6),
                 curl_options=DNS_OPTIONS,
                 headers={"Referer": origin + "/", "Origin": origin},
             )
@@ -277,7 +356,13 @@ def get_season(url: str) -> SamaSeason:
     # instead. Without this fallback every episode list was empty on that
     # mirror — the season opened on "No episodes found".
     if not episodes:
-        for lang_code in lang_codes:
+        # Only the languages the page itself declares are worth fetching: the
+        # old loop tried all nine, turning a 1-language season into nine page
+        # downloads (~8 s). The first successful page tells us the real list.
+        pending = list(lang_codes)
+        declared = None
+        while pending:
+            lang_code = pending.pop(0)
             try:
                 r = _get(f"{base}/{lang_code}/", cache_ttl=600)
             except Exception:
@@ -287,10 +372,41 @@ def get_season(url: str) -> SamaSeason:
             inline = r.text or ""
             if "var eps" not in inline:
                 continue
-            parsed = parse_episodes_from_js(inline)
-            if parsed:
-                episodes[lang_code] = parsed
-                valid_lang.append(lang_code)
+            # 12/11/2026 format: arrays hold "lien:<row id>" and the real
+            # embed comes from /api/lien.php?j=<epsJeton>&l=<id>. epsMeta
+            # maps the id to its host (and flags deleted ones).
+            host_map = {}
+            m_meta = re.search(r"var\s+epsMeta\s*=\s*(\{.*?\})\s*;", inline, re.S)
+            if m_meta:
+                try:
+                    import json as _json
+                    host_map = _json.loads(m_meta.group(1))
+                except Exception:
+                    host_map = {}
+            m_jeton = re.search(r'epsJeton\s*=\s*"([^"]+)"', inline)
+            jeton = m_jeton.group(1) if m_jeton else ""
+            parsed = parse_episodes_from_js(inline, host_map=host_map)
+            if not parsed:
+                continue
+            for _ep in parsed:
+                for _pl in getattr(_ep, "players", []) or []:
+                    _slot = dict((getattr(_pl, "meta", None) or {}).get("slot") or {})
+                    if not _slot:
+                        continue
+                    _slot["mode"] = ("lien" if _slot.get("lien_id") else "sign")
+                    if jeton:
+                        _slot["jeton"] = jeton
+                    _slot["season_url"] = base + "/" + lang_code
+                    _pl.meta = {**(getattr(_pl, "meta", None) or {}),
+                                "slot": _slot}
+            episodes[lang_code] = parsed
+            valid_lang.append(lang_code)
+            if declared is None:
+                m_langs = re.search(r"languesDispo\s*=\s*\[([^\]]*)\]", inline)
+                if m_langs:
+                    declared = set(re.findall(r'"([^"]+)"', m_langs.group(1)))
+                    if declared:
+                        pending = [c for c in pending if c in declared]
 
     # Stable display order (pool completion order is not deterministic).
     valid_lang.sort(key=lang_codes.index)
@@ -302,6 +418,22 @@ def get_season(url: str) -> SamaSeason:
 
     # Espace entre lettres et groupes de chiffres : "Saison 10", pas "Saison 1 0".
     name = re.sub(r"(?<=[^\W\d_])(\d+)", r" \1", name)
+
+    # Signed-slot bookkeeping. Both mirrors now publish only availability
+    # flags ("1"/"") and mint the real player URL on demand. Attach the season
+    # to each slot HERE, so every later path — series flow, history resume,
+    # planning, AniList — can resolve it without a handler having registered a
+    # per-season closure first (that binding was the reason playback ended on
+    # the placeholder "anime-sama:signed" and failed).
+    for _lang_eps in episodes.values():
+        for _ep in _lang_eps:
+            for _pl in getattr(_ep, "players", []) or []:
+                if getattr(_pl, "url", "") == ANIME_SAMA_SIGNED_SENTINEL:
+                    _slot = dict((getattr(_pl, "meta", None) or {}).get("slot") or {})
+                    _slot["season_url"] = url
+                    _pl.meta = {**(getattr(_pl, "meta", None) or {}),
+                                "slot": _slot}
+    _ensure_signed_resolver()
 
     return SamaSeason(name, url, valid_lang, episodes)
 
@@ -387,6 +519,99 @@ def resolve_signed_player(season_url: str, episode_number: int,
             sess.close()
         except Exception:
             pass
+
+
+def resolve_lien_id(season_url: str, lien_id: str, jeton: str = ""):
+    """Resolve a ``lien:<id>`` row to the real embed URL.
+
+    Since 2026-11-12 the season page no longer carries player URLs at all: the
+    arrays hold a row id, and ``/api/lien.php?j=<epsJeton>&l=<id>`` returns
+    ``{"u": "<embed url>"}``. The page token expires after ~24 h, so a stale
+    token is refreshed by re-reading the season page once.
+    """
+    import json as _json
+    import urllib.parse as _up
+
+    page_url = season_url.rstrip("/") + "/"
+    base = (website_origin or season_url).rstrip("/")
+
+    def _call(token: str):
+        try:
+            r = scraper.get(
+                f"{base}/api/lien.php?j={_up.quote(token)}"
+                f"&l={_up.quote(str(lien_id))}",
+                headers={
+                    "Referer": page_url,
+                    "Origin": base,
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Accept": "application/json",
+                    # The endpoint rejects anything it considers cross-site:
+                    # browser impersonation sends "Sec-Fetch-Site: none" for a
+                    # direct navigation, which it answers 403 {"erreur":
+                    # "origine"} even with a valid page token. Declaring the
+                    # real same-origin fetch makes it accept the call.
+                    "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Dest": "empty",
+                },
+                impersonate="chrome", timeout=20,
+            )
+            data = _json.loads(r.text or "{}")
+            return data.get("u") or None, data.get("erreur")
+        except Exception:
+            return None, None
+
+    if jeton:
+        found, err = _call(str(jeton))
+        if found:
+            return found
+        if err != "expire":
+            # "absent" = the row is gone; anything else is not fixable here.
+            return None
+    # No token yet, or the page one expired: read a fresh one.
+    try:
+        page = _get(page_url, cache_ttl=0)
+    except Exception:
+        return None
+    m = re.search(r'epsJeton\s*=\s*"([^"]+)"', page.text or "")
+    if not m:
+        return None
+    found, _err = _call(m.group(1))
+    return found
+
+
+def _resolve_signed_slot(headers: dict):
+    """Player-layer callback: turn a signed slot into a real URL.
+
+    The slot travels in the player headers, so the resolution is stateless and
+    works from any caller (series flow, resume, planning, downloads) without a
+    per-season global. Two site generations coexist:
+
+    * ``lien_id`` → ``/api/lien.php`` returns the embed page (then the normal
+      extractor takes over);
+    * plain availability flag → ``/api/player/sign`` + ``/api/player/resolve``
+      returns the final media URL.
+    """
+    slot = (headers or {}).get("_anime_sama_slot") or {}
+    season_url = slot.get("season_url")
+    if not season_url:
+        return None
+    if slot.get("lien_id"):
+        return resolve_lien_id(str(season_url), str(slot["lien_id"]),
+                               str(slot.get("jeton") or ""))
+    try:
+        ep = int(slot.get("ep") or 1)
+        lecteur = int(slot.get("lecteur") or 1)
+    except (TypeError, ValueError):
+        return None
+    return resolve_signed_player(str(season_url), ep, lecteur)
+
+
+def _ensure_signed_resolver() -> None:
+    """Install the signed-slot resolver once (cheap, no network)."""
+    from . import player as _player
+    if getattr(_player, "_signed_resolver", None) is not _resolve_signed_slot:
+        _player.set_signed_player_resolver(_resolve_signed_slot)
 
 
 # season_container_class = "flex flex-wrap overflow-y-hidden justify-start bg-slate-900 bg-opacity-70 rounded mt-2 h-auto"

@@ -319,16 +319,13 @@ def handle_match() -> None:
                     events, tracker.get_language() or "en")
         except ym.EmptyCatalogue as e:
             # The provider answered 200 with a valid, decrypted payload whose
-            # "data" array is empty: nothing is published server-side.  Saying
-            # "check your connection" here would be wrong and confusing.
-            print_warning(t("YacineTV is online but lists no match right now."))
-            print_info(t("The provider's match feed returned 0 fixtures "
-                         "(server-side, not your connection)."))
-            print_info(t("Live TV channels are still available in the main menu."))
+            # "data" array is empty: nothing is published server-side. Keep it
+            # short and to the point — the previous wall of diagnostics looked
+            # like an error when there is simply no fixture today.
+            print_warning(t("No matches available today."))
+            print_info(t("Nothing is listed for today; check back tomorrow."))
             if e.host:
                 print_info(f"{t('Source:')} {e.host}")
-            print_info(t("HTTP 200 · 0 events"))
-            print_info(t("Retry later: the feed usually fills up on match days."))
             from ..cli_utils import pause
             try:
                 pause()

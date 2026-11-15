@@ -604,7 +604,7 @@ def test_empty_catalogue_falls_back_to_previous_snapshot(monkeypatch, tmp_path):
 
 
 def test_handler_reports_empty_feed_as_provider_side(monkeypatch, capsys):
-    """The UI must say 'provider has 0 fixtures', not 'check your connection'."""
+    """An empty day says "no matches available today", not a network error."""
     from freeflix_cli.handlers import match as mh
     from freeflix_cli.i18n import t
 
@@ -612,9 +612,10 @@ def test_handler_reports_empty_feed_as_provider_side(monkeypatch, capsys):
         raise ym.EmptyCatalogue("def001.ycnapi.com")
 
     monkeypatch.setattr(mh.ym, "fetch_events", boom)
-    monkeypatch.setattr(mh, "select_from_list", lambda *a, **k: 1)  # Back
     mh.handle_match()
     out = capsys.readouterr().out
     assert "def001.ycnapi.com" in out
-    assert "server-side" in out or "côté serveur" in out
+    assert t("No matches available today.") in out
     assert t("Check your connection, then try again.") not in out
+    # The provider-side wall of diagnostics is gone: the message stays short.
+    assert "HTTP 200" not in out

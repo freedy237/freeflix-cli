@@ -52,57 +52,127 @@ _VERSION_FLAGS = {
 }
 
 
+def _managed_bin_dir() -> Path:
+    """FreeFlix's self-managed binary dir (same one setup_assistant uses)."""
+    from platformdirs import user_data_dir
+
+    return Path(user_data_dir("freeflix-cli", "PaulExplorer")) / "bin"
+
+
+def _probe_binary(path: str, name: str) -> tuple[str, str]:
+    """Run ``<path> --version`` and return (status, first output line)."""
+    try:
+        flag = _VERSION_FLAGS.get(Path(name).name.lower(), "--version")
+        out = subprocess.run([path, flag], capture_output=True, text=True, timeout=10)
+        ver = (out.stdout or out.stderr or "").splitlines()[0].strip()
+        # An existing shim can still be broken (stale uv/pip env).
+        return ("OK" if out.returncode == 0 and ver else "BROKEN", ver)
+    except Exception:
+        return ("BROKEN", "—")
+
+
+# FreeFlix minimums : below these, playback/Anime4K/posters degrade (or fail
+# outright). --doctor compares the parsed version so "installed but ancient"
+# is reported as OLD instead of a misleading OK.
+_MIN_VERSIONS = {
+    "mpv": (0, 37),
+    "ffmpeg": (5, 0),
+    "yt-dlp": (2023, 1, 1),
+    "aria2c": (1, 36),
+    "chafa": (1, 10),
+    "vlc": (3, 0),
+}
+
+
+def _parse_version(text: str) -> tuple:
+    m = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", text or "")
+    if not m:
+        return ()
+    return tuple(int(g) for g in m.groups() if g is not None)
+
+
+def _version_status(name: str, ver: str) -> str | None:
+    """'OLD' when the reported version is below the FreeFlix minimum."""
+    minimum = _MIN_VERSIONS.get(Path(name).name.lower())
+    got = _parse_version(ver)
+    if not minimum or not got:
+        return None
+    return "OLD" if got < minimum else None
+
+
 def _check_binary(label: str, *names: str) -> tuple[str, str, str]:
+    """PATH first, then FreeFlix's managed dir — what the app actually uses.
+
+    Reporting MISSING for a tool that is installed in the managed bin dir was
+    misleading: the app resolves those binaries and playback works fine.
+    """
     for n in names:
         path = shutil.which(n)
         if path:
-            try:
-                flag = _VERSION_FLAGS.get(Path(n).name.lower(), "--version")
-                out = subprocess.run(
-                    [n, flag], capture_output=True, text=True, timeout=10
-                )
-                ver = (out.stdout or out.stderr or "").splitlines()[0].strip()
-                # An existing shim can still be broken (stale uv/pip env).
-                status = "OK" if out.returncode == 0 and ver else "BROKEN"
-            except Exception:
-                ver, status = "—", "BROKEN"
+            status, ver = _probe_binary(path, n)
             return (status, ver, path)
+    try:
+        from .setup_assistant import _managed_bin
+        for n in names:
+            cand = _managed_bin(n)
+            for c in (cand, Path(str(cand) + ".exe")):
+                if c.is_file():
+                    status, ver = _probe_binary(str(c), n)
+                    return (status, ver + " (managed)", str(c))
+    except Exception:
+        pass
     return ("MISSING", "—", "—")
 
 
 def _check_managed_bin(label: str, name: str) -> tuple[str, str, str]:
-    from platformdirs import user_data_dir
+    """Status of the managed copy, with the SYSTEM binary as a fallback.
 
-    bdir = Path(user_data_dir("freeflix-cli", "PaulExplorer")) / "bin"
+    "MISSING" is only reported when neither the managed copy nor a system
+    install exists — otherwise it read as "ffmpeg missing" on a working box.
+    """
+    bdir = _managed_bin_dir()
     exe = f"{name}.exe" if _os() == "windows" else name
     path = bdir / exe
     if path.is_file():
-        return ("OK", _fmt_size(path), str(path))
+        status, ver = _probe_binary(str(path), name)
+        return (status, ver or _fmt_size(path), str(path))
+    system = shutil.which(name)
+    if system:
+        return ("SYSTEM", "—", system)
     return ("MISSING", "—", "—")
 
 
+_MPV_CONFIG_FILES = (
+    "mpv.conf",
+    "input.conf",
+    "scripts/freeflix_position.lua",
+)
+_MPV_SHADERS = (
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_S.glsl",
+    "Anime4K_Upscale_CNN_x2_S.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
+)
+
+
 def _check_mpv_config() -> list[dict]:
+    """Every file the setup installs — not a subset.
+
+    The old list skipped the two VL shaders, so the report claimed the config
+    was fine while CTRL+1 ("max" Anime4K) silently had nothing to load.
+    """
     results = []
     cfg_dir = _mpv_config_dir()
-    expected = [
-        ("mpv.conf", cfg_dir / "mpv.conf"),
-        ("input.conf", cfg_dir / "input.conf"),
-        ("freeflix_position.lua", cfg_dir / "scripts" / "freeflix_position.lua"),
-        (
-            "Anime4K_Clamp_Highlights.glsl",
-            cfg_dir / "shaders" / "Anime4K_Clamp_Highlights.glsl",
-        ),
-        (
-            "Anime4K_Restore_CNN_S.glsl",
-            cfg_dir / "shaders" / "Anime4K_Restore_CNN_S.glsl",
-        ),
-        (
-            "Anime4K_Upscale_CNN_x2_S.glsl",
-            cfg_dir / "shaders" / "Anime4K_Upscale_CNN_x2_S.glsl",
-        ),
-    ]
+    expected = [(Path(n).name, cfg_dir / n) for n in _MPV_CONFIG_FILES]
+    expected += [(n, cfg_dir / "shaders" / n) for n in _MPV_SHADERS]
     for name, path in expected:
-        status = "OK" if path.is_file() else "MISSING"
+        if path.is_file() and path.stat().st_size > 0:
+            status = "OK"
+        elif path.is_file():
+            status = "EMPTY"
+        else:
+            status = "MISSING"
         size = _fmt_size(path) if path.is_file() else "—"
         results.append(
             {"name": name, "status": status, "size": size, "path": str(path)}
@@ -137,18 +207,22 @@ def _check_connectivity(host: str, port: int = 443, timeout: int = 5) -> str:
 def _check_flaresolverr(url: str | None = None) -> str:
     if not url:
         return "DISABLED"
+    import urllib.error
     import urllib.request
 
-    try:
-        req = urllib.request.Request(f"{url.rstrip('/')}/health", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return (
-                f"HEALTHY ({r.status})"
-                if r.status == 200
-                else f"UNHEALTHY ({r.status})"
-            )
-    except Exception as exc:
-        return f"ERROR ({type(exc).__name__})"
+    base = url.rstrip("/")
+    for path in (base + "/health", base + "/"):
+        try:
+            req = urllib.request.Request(path, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return f"HEALTHY ({r.status})" if r.status < 500 else f"UNHEALTHY ({r.status})"
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                return f"HEALTHY ({exc.code})"
+        except Exception:
+            continue
+    # Optional service: "not running" is normal, not an error to scare the user.
+    return "NOT RUNNING (optional)"
 
 
 def _detect_distro() -> str:
@@ -217,11 +291,14 @@ def run(upload: bool = False) -> str:
         _st = _ih.install_state()
         _ok = "OK" if not _st["mismatch"] else "MIXED"
         L(f"  Mode    : {'frozen .exe' if _st['frozen'] else 'python tool'}")
+        L(f"  Manager : {_st.get('installer') or 'unknown'}")
         L(f"  Module  : {_st['module_file'] or '(unknown)'}")
         L(f"  Code    : {_st['code_version']}")
         L(f"  Metadata: {_st['metadata_version'] or '(none)'}  [{_ok}]")
         if _st["mismatch"]:
             L("  !! Metadata and code disagree — clean reinstall advised.")
+            for _line in _ih.cleanup_hint().splitlines():
+                L(f"     {_line}")
         _shims = _st["shims"]
         L(f"  Launchers on PATH ({len(_shims)}):")
         for _s in _shims[:6]:
@@ -246,7 +323,12 @@ def run(upload: bool = False) -> str:
     ]
     for label, name in bins:
         status, info, path = _check_binary(label, name)
+        old = _version_status(name, info) if status == "OK" else None
+        if old:
+            status = old
         L(f"  {label:12s}  {status:<8s}  {info:<30s}  {path}")
+    L()
+    L("  (OLD = below the version FreeFlix needs for Anime4K/posters)")
 
     # Also check managed bin dir
     managed_pairs = [

@@ -1,5 +1,70 @@
 # Changelog
 
+## 2.5.0
+
+- **Anime-Sama : les lecteurs jouent enfin (nouveau format 12/11/2026)**. Les
+  tableaux d'épisodes ne contiennent plus d'URL mais `"lien:<id>"` ; le vrai
+  lien vient de `/api/lien.php?j=<jeton>&l=<id>`, qui répond
+  **`403 {"erreur":"origine"}`** dès que la requête paraît cross-site (le
+  fingerprint navigateur envoie `Sec-Fetch-Site: none`). C'était la cause du
+  `anime-sama::signed` affiché puis de « Impossible de résoudre l'URL du
+  flux ». FreeFlix signe maintenant en `same-origin`, avec rafraîchissement du
+  jeton expiré.
+- **Tous les lecteurs visibles sont réellement lisibles** : les lignes
+  indirectes sont résolues **en parallèle avant le menu** (et non plus une par
+  une au clic), donc les lecteurs morts (uqload bloqué par sa page « premium »,
+  ids sendvid supprimés) disparaissent au lieu de faire échouer la lecture.
+  L'analyse de qualité (résolutions + bitrate) tourne ensuite normalement sur
+  ces URL réelles : `1080p ~4.9 · 480p ~0.5 Mbps`, `720p ~1.1 Mbps` mesurés.
+- **Déduplication corrigée** : toutes les lignes indirectes partagent la même
+  URL factice, ce qui réduisait un épisode à un seul « Lecteur 1 ». L'identité
+  du slot (épisode/lecteur/id) est maintenant la clé.
+- **Saisons 9× plus rapides** : un seul téléchargement de page (les langues
+  déclarées par le site) au lieu de sonder neuf `episodes.js` en 404.
+- **« Nouveautés » visible dès l'ouverture** : le flux coûtait ~30 s de réseau
+  alors que l'écran n'attendait que 8 s — d'où la liste vide jusqu'à un détour
+  par le Planning. Il est désormais persisté sur disque (affichage immédiat au
+  lancement), rafraîchi en parallèle (4 séries à la fois) et l'attente est
+  portée à 45 s.
+- **Match : message court** quand la journée est vide —
+  « Aucun match disponible aujourd'hui. » au lieu d'un mur de diagnostics.
+- **Navigation fluide dans la recherche et le planning** : les touches d'une
+  même rafale (auto-repeat, frappes pendant le rendu d'une affiche) étaient
+  **silencieusement jetées** — pire, une touche Entrée coincée dans le même
+  lot était avalée et l'écran semblait bloqué. Décodage un-événement-par-lot
+  avec rejeu du reste, et l'affiche sixel n'est plus repeinte (~128 ms, 0,5 Mo
+  par appui) qu'une fois la navigation stabilisée. Mesures : 10 flèches
+  rapides = 10/10 appliquées (avant 1/10), survol souris 120 rapports = retour
+  en 10 ms (avant > 30 s).
+- **Sortie propre** : Rich écrivait `?1049l` trois fois, et Konsole rejouait
+  son écran sauvegardé à chaque fois — d'où la ligne « Que veux-tu faire ?
+  Quitter » ré-affichée sous le prompt du shell. Une seule sortie d'écran
+  alterné, purge des rapports souris en vol, et Ctrl-C affiche « Au revoir ! »
+  au lieu d'un traceback.
+- **Windows : lecture réparée**. Le mpv/ffmpeg téléchargé par le setup était
+  installé dans un dossier hors PATH que la résolution ignorait (et
+  `_resolve_tool` cherchait `ffmpeg` sans `.exe`) → « mpv is not installed »
+  alors qu'il était là. Aussi : `select()` sur un pipe (crash
+  `WinError 10038` du préflight Match) remplacé par un lecteur portable,
+  `-nostdin` + `CREATE_NO_WINDOW` sur les pipes ffmpeg, port du proxy publié
+  avant le bind réel (course → « connection refused »), en-têtes du mode
+  direct mpv joints par des virgules, VLC Windows routé par le proxy HLS.
+- **Installation idempotente** : les « fausses demandes » à chaque lancement
+  venaient d'un setup dont le succès dépendait du run courant (un shader
+  manquant remettait `setup_done=False` pour toujours). Le succès est dérivé
+  des fichiers réellement sur disque, une réparation silencieuse ne
+  télécharge que le manquant et ne pose plus de question, les shaders sont
+  validés par leur contenu (plus de re-téléchargement quand Anime4K change en
+  amont), la Nerd Font n'est plus retéléchargée, le wrapper PRIME et
+  FlareSolverr ne sont plus réécrits/recréés. Scripts : pré-vérification des
+  paquets (2ᵉ run : 0 install, 0 téléchargement, config utilisateur
+  conservée), `uv tool upgrade` au lieu de `--force`, mode non-TTY sans
+  abandon, PowerShell 5.1 sans `NativeCommandError`, PATH du bon shell.
+- **`--doctor` honnête** : un binaire système n'est plus annoncé « managed
+  MISSING », FlareSolverr non lancé = « NOT RUNNING (optional) », versions
+  minimales comparées, commande de réinstallation adaptée à uv/pipx/pip.
+- 752 tests au vert, ruff et shellcheck OK.
+
 ## 2.4.4
 
 - **animes-sama.fr (avec un « s ») réparé sur trois points**. Ce miroir a

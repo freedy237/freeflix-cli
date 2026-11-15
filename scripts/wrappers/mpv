@@ -1,9 +1,34 @@
 #!/usr/bin/env bash
 # mpv wrapper : route le rendu sur le GPU Nvidia (PRIME offload) si
 # la machine en a un. Effet automatique : `mpv` tape ici via PATH avant
-# /usr/bin/mpv. Pour bypass : `command mpv ...` ou `/usr/bin/mpv ...`.
+# le vrai binaire. Pour bypass : `command mpv ...` ou le chemin absolu.
 #
 # Pour désactiver le wrapper : `rm ~/.local/bin/mpv`
+#
+# Le vrai mpv est résolu dans le PATH en SAUTANT ce dossier : coder en dur
+# /usr/bin/mpv cassait la lecture dès que mpv vit ailleurs (Nix, /usr/local,
+# snap, flatpak…), le wrapper masquant alors le seul binaire utilisable.
+
+# Dossier de ce wrapper (résolu), pour ne pas s'appeler lui-même.
+wrapper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+real_mpv=""
+IFS=':'
+for d in $PATH; do
+    [[ -n "$d" ]] || continue
+    resolved="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    [[ "$resolved" == "$wrapper_dir" ]] && continue
+    if [[ -x "$d/mpv" ]]; then
+        real_mpv="$d/mpv"
+        break
+    fi
+done
+unset IFS
+
+if [[ -z "$real_mpv" ]]; then
+    echo "FreeFlix PRIME wrapper: no real mpv found outside $wrapper_dir" >&2
+    echo "Remove this wrapper (rm \"$wrapper_dir/mpv\") or install mpv." >&2
+    exit 127
+fi
 
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q GPU; then
     export __NV_PRIME_RENDER_OFFLOAD=1
@@ -11,4 +36,4 @@ if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q 
     export __VK_LAYER_NV_optimus=NVIDIA_only
 fi
 
-exec /usr/bin/mpv "$@"
+exec "$real_mpv" "$@"

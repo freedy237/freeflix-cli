@@ -415,6 +415,13 @@ def drain_stdin():
     → FreeFlix "closes by itself the moment you enter". Draining first fixes it.
     Best-effort ; never raises.
     """
+    # The carry buffers hold bytes that were already decoded from the tty (a
+    # key/drag that landed just as the previous screen closed). tcflush below
+    # only drops bytes still in the KERNEL queue, so purge these first — no
+    # matter the tty state (headless/test runs too).
+    global _esc_carry
+    _esc_carry = False
+    _take_raw_carry()
     try:
         import sys
         if not sys.stdin.isatty():
@@ -659,6 +666,75 @@ def _mouse_off() -> None:
     global _mouse_active
     _mouse_active = False
     _mouse_write(_MOUSE_OFF)
+
+
+def leave_alt_screen() -> bool:
+    """Leave the alternate screen ONLY if we are actually in it.
+
+    Rich 14's ``Console.set_alt_screen()`` writes ``?1049h``/``?1049l`` on
+    EVERY call (it does not check the current state). The exit path used to
+    send ``?1049l`` up to three times (Live.stop, the home menu's Exit branch,
+    ``_clean_exit``). A terminal such as Konsole re-applies its saved primary
+    screen + cursor on each ``?1049l``: the menu's final echo line was redrawn
+    BELOW the shell prompt — the reported "❯ Que veux-tu faire ? Quitter"
+    artifact. Exactly one leave is correct.
+
+    Returns True when the leave sequence was actually written.
+    """
+    try:
+        if not console.is_alt_screen:
+            return False
+        console.set_alt_screen(False)
+        try:
+            console.file.flush()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def restore_terminal() -> None:
+    """Put the terminal back exactly as the shell expects it, on exit.
+
+    Called by every exit path (Quitter, Ctrl-C, EOF). Order matters:
+      1. stop mouse/focus reporting so the terminal stops generating reports;
+      2. drop whatever is already queued in the tty — leftover SGR mouse
+         reports would otherwise be echoed by the shell as literal text in
+         the prompt line (e.g. "35;87;5M");
+      3. leave the alternate screen ONCE (see ``leave_alt_screen``);
+      4. show the cursor and flush every pending byte.
+
+    Best-effort, never raises: this runs while the process is already going
+    down, and a failure here must never turn a clean exit into a traceback.
+    """
+    try:
+        _mouse_off()
+    except Exception:
+        pass
+    # Let in-flight motion reports reach us before flushing them.
+    try:
+        time.sleep(0.015)
+    except Exception:
+        pass
+    try:
+        drain_stdin()
+    except Exception:
+        pass
+    try:
+        leave_alt_screen()
+    except Exception:
+        pass
+    try:
+        console.show_cursor(True)
+    except Exception:
+        pass
+    try:
+        import sys
+        sys.stdout.write("\x1b[?2004l\x1b[?1000l\x1b[?1006l")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def _mouse_set(enabled: bool) -> None:
@@ -1146,6 +1222,74 @@ def _take_esc_carry() -> bool:
     return False
 
 
+# POSIX arrow escape sequences (CSI and SS3 forms) are always 3 bytes.
+_ARROWS_B = {
+    b"\x1b[A": readchar.key.UP, b"\x1bOA": readchar.key.UP,
+    b"\x1b[B": readchar.key.DOWN, b"\x1bOB": readchar.key.DOWN,
+    b"\x1b[C": readchar.key.RIGHT, b"\x1bOC": readchar.key.RIGHT,
+    b"\x1b[D": readchar.key.LEFT, b"\x1bOD": readchar.key.LEFT,
+}
+
+
+def _decode_menu_seq(seq: bytes):
+    """Decode the FIRST input event of a raw POSIX read chunk.
+
+    A key burst (a held arrow, or presses piling up while a poster renders)
+    arrives as ONE ``os.read()`` chunk holding several escape sequences
+    (``\\x1b[B\\x1b[B\\x1b[B``). The old code matched the WHOLE chunk against a
+    3-byte arrow table and returned "" for anything longer, so every key but
+    the first was silently DROPPED — exactly why the cursor looked stuck or
+    jumped in the search/planning screens while images were loading, but not
+    in the main menu. We now decode one event and stash the remaining bytes in
+    ``_raw_carry`` for the next call, so a burst is replayed press by press.
+
+    Returns a readchar key constant, a MouseEvent, "" for an ignored event
+    (focus/reply/unknown), or None for an empty chunk.
+    """
+    if not seq:
+        return None
+    if seq.startswith(b"\x1b[<"):
+        event, tail = _parse_mouse_chunk(seq)
+        if event is not None:
+            if tail:
+                _stash_raw_carry(tail)
+            return event
+        return ""  # incomplete report: never type its fragment as text
+    if seq.startswith(_PASTE_START):
+        return ""  # complete blobs are handled by the caller; drop fragments
+    if seq.startswith(b"\x1b]"):
+        # Terminal reply (OSC color query, title…) : swallow it whole, then
+        # keep whatever real event followed it in the same chunk.
+        done, rest = _split_reply(seq)
+        if done:
+            _stash_raw_carry(rest)
+        return ""
+    for marker in (b"\x1b[I", b"\x1b[O"):  # focus in/out → ignore
+        if seq.startswith(marker):
+            _stash_raw_carry(seq[len(marker):])
+            return ""
+    arrow = _ARROWS_B.get(seq[:3])
+    if arrow is not None:
+        _stash_raw_carry(seq[3:])
+        return arrow
+    if seq == b"\x1b":
+        return readchar.key.ESC
+    if seq.startswith(b"\x1b\x1b"):
+        # Fast double-Esc: the first one is a real Esc, replay the second.
+        _stash_raw_carry(seq[1:])
+        return readchar.key.ESC
+    reply = _CSI_REPLY.match(seq)
+    if reply:
+        _stash_raw_carry(seq[reply.end():])
+        return ""
+    # Unknown escape (modified arrow, exotic CSI…): drop it, but keep any
+    # proper event that starts after it so a queued key is never swallowed.
+    nxt = seq.find(b"\x1b", 1)
+    if nxt > 0:
+        _stash_raw_carry(seq[nxt:])
+    return ""
+
+
 def _read_menu_key_raw(timeout: float = None):
     """
     Read one keypress for the arrow menus, returning readchar key constants.
@@ -1283,145 +1427,142 @@ def _read_menu_key_raw(timeout: float = None):
             old = termios.tcgetattr(fd)
             tty.setcbreak(fd)
         pending = _take_raw_carry()
-        prefetched = b""
-        if pending:
-            if pending.startswith(b"\x1b[<"):
-                seq = pending
-                # A split report can be delayed when the UI is busy (chafa
-                # render, network); wait long enough to finish it instead of
-                # dropping the prefix and typing its tail.
-                end = time.monotonic() + 0.6
-                while _MOUSE_RE_B.search(seq) is None and time.monotonic() < end:
-                    r, _, _ = _sel.select([fd], [], [], 0.02)
-                    if r:
-                        chunk = os.read(fd, 64)
-                        if not chunk:
-                            break
-                        seq += chunk
-                event, tail = _parse_mouse_chunk(seq)
-                if event is not None:
-                    if tail:
-                        _stash_raw_carry(tail)
-                    return event
-                # Still incomplete after 600 ms: drop it rather than typing
-                # the fragment into a text field.
-            else:
-                # Typed text that followed a mouse report in the same read.
-                prefetched = pending
-        if prefetched:
-            ch = prefetched[:1]
-            rest = prefetched[1:]
-            if rest:
-                _stash_raw_carry(rest)
-        else:
+        if pending.startswith(b"\x1b[<"):
+            seq = pending
+            # A split report can be delayed when the UI is busy (chafa
+            # render, network); wait long enough to finish it instead of
+            # dropping the prefix and typing its tail.
+            end = time.monotonic() + 0.6
+            while _MOUSE_RE_B.search(seq) is None and time.monotonic() < end:
+                r, _, _ = _sel.select([fd], [], [], 0.02)
+                if r:
+                    chunk = os.read(fd, 64)
+                    if not chunk:
+                        break
+                    seq += chunk
+            event, tail = _parse_mouse_chunk(seq)
+            if event is not None:
+                if tail:
+                    _stash_raw_carry(tail)
+                return event
+            # Still incomplete after 600 ms: drop it rather than typing the
+            # fragment into a text field.
+            return ""
+        if not pending:
             if timeout is not None:
                 ready, _, _ = _sel.select([fd], [], [], max(0.0, timeout))
                 if not ready:
                     return None
-            ch = os.read(fd, 1)
-        if not ch:
+            pending = os.read(fd, 1)
+        if not pending:
             # stdin closed (terminal gone, piped input exhausted): behave like
             # Esc so each menu unwinds instead of spinning at 100 % CPU on
             # an empty read that no branch handles.
             return readchar.key.ESC
-        if ch == b"\x1b":
-            # Drain the WHOLE escape sequence (arrows, but also focus events
-            # \x1b[I / \x1b[O and mouse reports) before deciding. Only a truly
-            # isolated \x1b — ~200 ms of silence — is a real Esc (a shorter
-            # window misread split sequences under poster-load contention as
-            # a lone Esc → phantom "back"). A bracketed paste is consumed
-            # whole and returned as text (menus ignore it, search inserts it).
-            seq = ch
-            idle = 0
-            paste_text = None
-            spins = 0
-            while True:
-                spins += 1
-                if spins > 500:
-                    return ""  # garbage flood — give up, stay in menu
-                r, _, _ = _sel.select([fd], [], [], 0.008)
-                if r:
-                    idle = 0
-                    chunk = os.read(fd, 64)
-                    if not chunk:
-                        return readchar.key.ESC  # EOF while draining
-                    seq += chunk
-                    if seq.startswith(_PASTE_START):
-                        _text, _rest = _split_paste(seq)
-                        if _text is not None:
-                            paste_text = _text
-                            break
-                        if len(seq) >= _PASTE_MAX:
-                            return ""
-                        continue
-                    if seq.startswith(b"\x1b]"):
-                        # Terminal reply (OSC color query, title…) : swallow
-                        # it whole so its fragments never read as Esc.
-                        _done, seq = _split_reply(seq)
-                        if _done:
-                            if not seq:
-                                continue  # reply only — wait for real input
-                        elif len(seq) >= _PASTE_MAX:
-                            return ""
-                        else:
-                            continue  # partial reply — keep waiting
-                    if seq.startswith(b"\x1b[<"):
-                        event, tail = _parse_mouse_chunk(seq)
-                        if event is not None:
-                            # Use the newest report in the read chunk: the
-                            # cursor follows the physical pointer immediately
-                            # instead of replaying a queue of stale motion.
-                            if tail:
-                                # The chunk may end mid-report: keep the bytes
-                                # of the next event instead of leaking them as
-                                # printable filter text.
-                                _stash_raw_carry(tail)
-                            return event
-                        if len(seq) > 64:
-                            return ""
-                        continue  # partial SGR mouse report
-                    if _CSI_REPLY.match(seq):
-                        # Complete CSI reply (size/color report…) : drop it
-                        # and keep waiting for a real key.
-                        seq = b""
-                        continue
-                    if len(seq) >= 3:  # enough for a CSI/SS3 arrow
+        if pending[:1] != b"\x1b":
+            ch = pending[:1]
+            rest = pending[1:]
+            if rest:
+                # Bytes queued behind this key (typed text after a mouse
+                # report in the same read): replay them on the next call.
+                _stash_raw_carry(rest)
+            if ch in (b"\r", b"\n"):
+                return readchar.key.ENTER
+            if ch == b"\x03":
+                return readchar.key.CTRL_C
+            if ch in (b"\x7f", b"\x08"):
+                return readchar.key.BACKSPACE
+            try:
+                return ch.decode("utf-8", "ignore")
+            except Exception:
+                return ""
+        # ── Escape sequence: consume it, then decode ONLY the first event. ──
+        # A burst can hold several arrows in one read; the rest is stashed in
+        # _raw_carry and replayed by the next call, so no keypress is lost.
+        # Drain the WHOLE escape sequence (arrows, but also focus events
+        # \x1b[I / \x1b[O and mouse reports) before deciding. Only a truly
+        # isolated \x1b — ~200 ms of silence — is a real Esc (a shorter
+        # window misread split sequences under poster-load contention as
+        # a lone Esc → phantom "back"). A bracketed paste is consumed
+        # whole and returned as text (menus ignore it, search inserts it).
+        seq = pending
+        idle = 0
+        paste_text = None
+        spins = 0
+        while True:
+            spins += 1
+            if spins > 500:
+                return ""  # garbage flood — give up, stay in menu
+            # A complete event is already buffered (burst, or a key replayed
+            # from _raw_carry): decode it now instead of waiting the 200 ms
+            # Esc-idle budget — that wait is what made fast presses lag.
+            if seq.startswith(b"\x1b\x1b"):
+                break
+            if len(seq) >= 3 and not _escape_incomplete(seq):
+                break
+            r, _, _ = _sel.select([fd], [], [], 0.008)
+            if r:
+                idle = 0
+                chunk = os.read(fd, 64)
+                if not chunk:
+                    return readchar.key.ESC  # EOF while draining
+                seq += chunk
+                if seq.startswith(_PASTE_START):
+                    _text, _rest = _split_paste(seq)
+                    if _text is not None:
+                        paste_text = _text
                         break
-                else:
-                    idle += 1
-                    if idle >= 25:
-                        break
-            if paste_text is not None:
-                try:
-                    return paste_text.decode("utf-8", "ignore")
-                except Exception:
-                    return ""
-            if seq == b"\x1b":
-                return readchar.key.ESC          # lone Esc → go back
-            # Fast double-Esc in one read (`\x1b\x1b…`) : replay the second
-            # press on the next call instead of swallowing the pair.
-            if seq[:2] == b"\x1b\x1b":
-                _stash_esc_carry()
-                return readchar.key.ESC
-            # Explicitly ignore focus events (\x1b[I / \x1b[O) and other non-arrow CSI
-            if seq in (b"\x1b[I", b"\x1b[O"):
-                return ""          # focus in/out → ignore, don't trigger Esc
-            _known = {
-                b"\x1b[A": readchar.key.UP,   b"\x1bOA": readchar.key.UP,
-                b"\x1b[B": readchar.key.DOWN,  b"\x1bOB": readchar.key.DOWN,
-                b"\x1b[C": readchar.key.RIGHT, b"\x1b[D": readchar.key.LEFT,
-            }
-            return _known.get(seq, "")          # other CSI/mouse → ignore
-        if ch in (b"\r", b"\n"):
-            return readchar.key.ENTER
-        if ch == b"\x03":
-            return readchar.key.CTRL_C
-        if ch in (b"\x7f", b"\x08"):
-            return readchar.key.BACKSPACE
-        try:
-            return ch.decode("utf-8", "ignore")
-        except Exception:
-            return ""
+                    if len(seq) >= _PASTE_MAX:
+                        return ""
+                    continue
+                if seq.startswith(b"\x1b]"):
+                    # Terminal reply (OSC color query, title…) : swallow
+                    # it whole so its fragments never read as Esc.
+                    _done, seq = _split_reply(seq)
+                    if _done:
+                        if not seq:
+                            continue  # reply only — wait for real input
+                    elif len(seq) >= _PASTE_MAX:
+                        return ""
+                    else:
+                        continue  # partial reply — keep waiting
+                if seq.startswith(b"\x1b[<"):
+                    event, tail = _parse_mouse_chunk(seq)
+                    if event is not None:
+                        # Use the newest report in the read chunk: the
+                        # cursor follows the physical pointer immediately
+                        # instead of replaying a queue of stale motion.
+                        if tail:
+                            # The chunk may end mid-report: keep the bytes
+                            # of the next event instead of leaking them as
+                            # printable filter text.
+                            _stash_raw_carry(tail)
+                        return event
+                    if len(seq) > 64:
+                        return ""
+                    continue  # partial SGR mouse report
+                if _CSI_REPLY.match(seq):
+                    # Complete CSI reply (size/color report…) : drop it
+                    # and keep waiting for a real key.
+                    seq = b""
+                    continue
+                if len(seq) >= 3:  # enough for a CSI/SS3 arrow
+                    break
+            else:
+                idle += 1
+                if idle >= 25:
+                    break
+        if paste_text is not None:
+            try:
+                return paste_text.decode("utf-8", "ignore")
+            except Exception:
+                return ""
+        # Lone Esc → back; double-Esc → first is Esc (second replayed);
+        # arrows/focus/replies are recognised on the FIRST event only and any
+        # trailing bytes are stashed for the next call. An ignored event
+        # (focus/reply) is "" — never None, which means "timeout expired".
+        _decoded = _decode_menu_seq(seq)
+        return "" if _decoded is None else _decoded
     finally:
         if old is not None:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
