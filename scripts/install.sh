@@ -37,6 +37,11 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ─── 1. Detect distro ────────────────────────────────────────────────
 detect_distro() {
+    # Test/CI seam: lets the test suite exercise the dnf path on any runner.
+    if [[ -n "${FREEFLIX_DISTRO_OVERRIDE:-}" ]]; then
+        echo "$FREEFLIX_DISTRO_OVERRIDE"
+        return
+    fi
     if [[ -f /etc/os-release ]]; then
         # shellcheck source=/dev/null
         . /etc/os-release

@@ -37,6 +37,9 @@ def windows(monkeypatch):
     pytest itself. ``_is_windows()`` accepts either signal.
     """
     monkeypatch.setattr(pm.sys, "platform", "win32")
+    # Pin the platform helper itself: sys.platform alone is not enough on a
+    # real Windows runner, where os.name is already "nt".
+    monkeypatch.setattr(pm, "_is_windows", lambda: True)
     # Never probe the real GPU or the real config dir in these tests.
     monkeypatch.setattr(pm, "_nvidia_env", lambda: {})
     monkeypatch.setattr(pm, "_mpv_config_args", lambda: ["--no-config"])
@@ -46,6 +49,7 @@ def windows(monkeypatch):
 @pytest.fixture
 def posix(monkeypatch):
     monkeypatch.setattr(pm.sys, "platform", "linux")
+    monkeypatch.setattr(pm, "_is_windows", lambda: False)
     monkeypatch.setattr(pm, "_nvidia_env", lambda: {})
     monkeypatch.setattr(pm, "_mpv_config_args", lambda: ["--no-config"])
     return True

@@ -54,6 +54,9 @@ def test_windows_mpv_install_tries_real_cli_before_mpvnet(monkeypatch):
         sa.shutil, "which",
         lambda name: "winget" if name == "winget" else None,
     )
+    # The CI runner may already ship mpv (chocolatey): the installer would
+    # correctly skip winget, so pin "not installed" to exercise the fallbacks.
+    monkeypatch.setattr(sa, "_player_available", lambda name: False)
     monkeypatch.setattr(sa, "ask_yes_no", lambda *a, **k: True)
 
     calls = []

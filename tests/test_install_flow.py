@@ -28,6 +28,12 @@ from freeflix_cli import doctor, install_health
 from freeflix_cli import setup_assistant as sa
 from freeflix_cli.tracker import tracker
 
+# The shell installers are POSIX-only: their tests execute bash scripts and
+# shebang wrappers, which Windows cannot run (and its runner has no Linux
+# distro). Pure-Python setup tests still run everywhere.
+POSIX_ONLY = pytest.mark.skipif(
+    os.name == "nt", reason="POSIX shell installers / shebang wrappers")
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -255,6 +261,7 @@ def test_nerd_font_marker_prevents_redownload(monkeypatch):
     assert sa.install_nerd_font() is True
 
 
+@POSIX_ONLY
 def test_nerd_font_detected_from_disk_when_fc_list_fails(monkeypatch):
     def boom(*_a, **_k):
         raise OSError("fc-list missing")
@@ -285,15 +292,26 @@ def test_declined_dependency_install_is_not_asked_every_launch(monkeypatch):
     assert sa._linux_install_missing(["player"]) is False
 
 
+@POSIX_ONLY
 def test_prime_wrapper_never_clobbers_foreign_mpv(monkeypatch, tmp_path):
     bindir = tmp_path / ".local" / "bin"
     bindir.mkdir(parents=True)
     foreign = bindir / "mpv"
     foreign.write_text("#!/bin/sh\n# my own wrapper\n", encoding="utf-8")
 
+    # The wrapper resolves the real mpv by walking PATH: give it one (the CI
+    # runner has no mpv, which is not what this test is about).
+    sysbin = tmp_path / "sysbin"
+    sysbin.mkdir()
+    real = sysbin / "mpv"
+    real.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{sysbin}{os.pathsep}{bindir}{os.pathsep}"
+                                + os.environ.get("PATH", ""))
+
     monkeypatch.setattr(sa, "get_local_bin_dir", lambda: bindir)
     monkeypatch.setattr(sa.shutil, "which",
-                        lambda n: "/usr/bin/" + n if n in ("sudo", "mpv") else None)
+                        lambda n: str(sysbin / n) if n in ("sudo", "mpv") else None)
     monkeypatch.setattr(sa, "ask_yes_no", _fail)
 
     assert sa.install_prime_wrappers({"nvidia": True, "amd_discrete": False}) is True
@@ -339,6 +357,7 @@ def test_managed_mpv_counts_as_installed(monkeypatch):
     assert sa.install_media_player("mpv") is True
 
 
+@POSIX_ONLY
 def test_prime_wrapper_execs_the_real_mpv_from_path(tmp_path):
     """The wrapper must not hard-code /usr/bin/mpv (breaks Nix/snap/usr-local)."""
     source = ROOT / "scripts" / "wrappers" / "mpv"
@@ -362,6 +381,7 @@ def test_prime_wrapper_execs_the_real_mpv_from_path(tmp_path):
     assert "REAL_MPV_USED" in result.stdout
 
 
+@POSIX_ONLY
 def test_flatpak_player_counts_as_installed(monkeypatch):
     """Flatpak installs have no PATH binary: they must not look "missing"."""
     monkeypatch.setattr(
@@ -376,6 +396,7 @@ def test_flatpak_player_counts_as_installed(monkeypatch):
     assert sa.install_media_player("vlc") is True
 
 
+@POSIX_ONLY
 def test_flatpak_player_gets_a_managed_launcher(monkeypatch):
     monkeypatch.setattr(sa, "detect_os", lambda: "linux")
     monkeypatch.setattr(
@@ -439,6 +460,7 @@ def test_doctor_managed_binary_falls_back_to_system(monkeypatch, tmp_path):
     assert path == "/usr/bin/ffmpeg"
 
 
+@POSIX_ONLY
 def test_doctor_binary_finds_managed_copy_not_on_path(monkeypatch, tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -499,6 +521,7 @@ def test_install_health_hint_matches_the_installer(monkeypatch):
 
 
 # ─── 6. Shell installers: syntax + real double-run harness ───────────
+@POSIX_ONLY
 def test_shell_installers_are_syntactically_valid():
     for script in ("scripts/install.sh", "scripts/install-mac.sh"):
         result = subprocess.run(
@@ -536,6 +559,9 @@ def _fake_install_env(tmp_path: Path):
         # pyproject version: keep the fake in sync so a version bump in the
         # repo does not look like "needs reinstall".
         "FAKE_VERSION": project_version,
+        # Pin a distro so the dnf fake is valid on every runner (the test used
+        # to assume Fedora and failed on Ubuntu CI).
+        "FREEFLIX_DISTRO_OVERRIDE": "fedora",
     }
     (tmp_path / "home").mkdir()
 
@@ -607,6 +633,7 @@ exit 0
     return env, fake, state, calls
 
 
+@POSIX_ONLY
 def test_install_sh_is_idempotent_and_never_redownloads(tmp_path):
     env, _fake, _state, calls = _fake_install_env(tmp_path)
     script = str(ROOT / "scripts" / "install.sh")
@@ -641,6 +668,7 @@ def test_install_sh_is_idempotent_and_never_redownloads(tmp_path):
     assert "USER TUNED" in mpv_conf.read_text(encoding="utf-8")
 
 
+@POSIX_ONLY
 def test_install_py_reuses_installed_tools(tmp_path):
     """A second install.py run must upgrade (no-op) instead of re-downloading."""
     fake = tmp_path / "fakebin"
@@ -681,6 +709,9 @@ exit 0
         # pyproject version: keep the fake in sync so a version bump in the
         # repo does not look like "needs reinstall".
         "FAKE_VERSION": project_version,
+        # Pin a distro so the dnf fake is valid on every runner (the test used
+        # to assume Fedora and failed on Ubuntu CI).
+        "FREEFLIX_DISTRO_OVERRIDE": "fedora",
     }
     (tmp_path / "home").mkdir()
     installer = str(ROOT / "scripts" / "install.py")
