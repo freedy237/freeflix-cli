@@ -588,3 +588,20 @@ def test_do0od_is_a_doodstream_mirror():
 
     assert player_mod.is_supported("https://do0od.com/e/abc123") is True
     assert player_mod.players["do0od"]["type"] == "dood"
+
+
+def test_vidmoly_is_alive_on_biz_and_dead_on_me_and_to():
+    """Hiding the whole vidmoly family removed Coflix's working MyTV reader."""
+    from freeflix_cli.scraping import player as player_mod
+
+    assert player_mod.is_known_offline("https://vidmoly.biz/embed-x.html") is False
+    assert player_mod.is_known_offline("https://vidmoly.me/embed-x.html") is True
+    assert player_mod.is_known_offline("https://vidmoly.to/embed-x.html") is True
+
+
+def test_mivalyo_is_hidden_and_lplaygo_is_supported():
+    from freeflix_cli.scraping import player as player_mod
+
+    assert player_mod.is_known_offline("https://mivalyo.com/embed/x") is True
+    assert player_mod.is_supported("https://lplaygo.com/e/35r09mdc4nz7") is True
+    assert player_mod.players["lplaygo"]["type"] == "default"

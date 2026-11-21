@@ -93,3 +93,87 @@ def test_season_episodes_from_panel(monkeypatch):
     assert sea.title == "Saison 2"
     assert [e.title for e in sea.episodes] == ["Game of Thrones 2x1"]
     assert sea.episodes[0].url.endswith("/episode/got-2x1/")
+
+
+# ── 2026-11 layout: episodes list their mirrors directly ────────────────
+
+EPISODE_CFSERVERS = """
+<html><body>
+<h1>Frieren — S01E01</h1>
+<div class="cfp-videowrap"><video class="cfp-video"></video></div>
+<script>
+  var cfPlayerToken = "jwt";
+  var cfServers = [
+    {"nombre":"LECTEUR MyTV","embed_url":"https:\\/\\/vidmoly.biz\\/embed-hncfog3k416q.html","idioma":"VF"},
+    {"nombre":"LECTEUR MOON","embed_url":"https:\\/\\/gn1r5n.org\\/e\\/dsd6mjvfxjwq","idioma":"VF"},
+    {"nombre":"LECTEUR VOE","embed_url":"https:\\/\\/voe.sx\\/e\\/tfhh5va6r3nc","idioma":"VF"}
+  ];
+</script>
+</body></html>
+"""
+
+MOVIE_AGGREGATOR = """
+<html><body>
+<script>
+  var cfServers = [
+    {"nombre":"Lecteurvideo","embed_url":"https:\\/\\/lecteurvideo.com\\/embed.php?id=34359"}
+  ];
+</script>
+</body></html>
+"""
+
+
+def test_cfservers_direct_entries_become_players():
+    entries = coflix._cfservers_entries(EPISODE_CFSERVERS)
+    assert [p.name for p in entries] == [
+        "LECTEUR MyTV", "LECTEUR MOON", "LECTEUR VOE",
+    ]
+    assert entries[0].url == "https://vidmoly.biz/embed-hncfog3k416q.html"
+    assert coflix._cfservers_url(EPISODE_CFSERVERS) == entries[0].url
+
+
+def test_episode_players_use_direct_mirrors(monkeypatch):
+    monkeypatch.setattr(coflix, "website_origin", "https://coflix.esq")
+    monkeypatch.setattr(coflix, "_get", lambda *a, **k: _resp(EPISODE_CFSERVERS))
+    monkeypatch.setattr(coflix, "_get_cached", lambda *a, **k: EPISODE_CFSERVERS)
+    ep = coflix.get_episode("https://coflix.esq/episode/frieren-1x01/")
+    # The regression: only the aggregator URL was read, so an episode page
+    # listing mirrors directly produced ZERO players.
+    assert len(ep.players) == 3
+    assert ep.players[0].url.startswith("https://vidmoly.biz/")
+
+
+def test_movie_still_expands_lecteurvideo_aggregator(monkeypatch):
+    from freeflix_cli.scraping.objects import Player
+    monkeypatch.setattr(coflix, "website_origin", "https://coflix.esq")
+    monkeypatch.setattr(
+        coflix, "get_players",
+        lambda url: [Player("Lecteurvideo 1", "https://voe.sx/e/abc")],
+    )
+    from freeflix_cli.scraping.utils import parse_html
+    players = coflix._players_from_page(
+        parse_html(MOVIE_AGGREGATOR), MOVIE_AGGREGATOR
+    )
+    assert [p.name for p in players] == ["Lecteurvideo 1"]
+
+
+def test_latest_uses_shortlinks_and_resolves_them(monkeypatch):
+    home = """
+    <html><body>
+      <a href="https://coflix.esq/?p=101"><img alt="The Chosen"
+           src="https://coflix.esq/cover-a.webp"></a>
+      <a href="https://coflix.esq/?p=102"><img alt="Lupin"
+           src="https://coflix.esq/cover-b.webp"></a>
+    </body></html>
+    """
+    monkeypatch.setattr(coflix, "website_origin", "https://coflix.esq")
+    monkeypatch.setattr(coflix, "_get_cached", lambda *a, **k: home)
+    monkeypatch.setattr(
+        coflix, "_canonical_links",
+        lambda ids: {101: "https://coflix.esq/serie/the-chosen/",
+                     102: "https://coflix.esq/serie/lupin/"},
+    )
+    rows = coflix.latest(2)
+    assert [r.title for r in rows] == ["The Chosen", "Lupin"]
+    assert rows[0].url == "https://coflix.esq/serie/the-chosen/"
+    assert rows[0].img == "https://coflix.esq/cover-a.webp"

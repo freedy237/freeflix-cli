@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.6.0
+
+- **Match : l'hôte de l'API est découvert tout seul (nouveau domaine
+  21/11/2026)**. `def001.ycnapi.com` ne résout plus (NXDOMAIN), d'où
+  « Match est indisponible ». FreeFlix lit maintenant l'hôte vivant dans
+  **Firebase Remote Config** (projet `ycntv-7a08e`, entrée `defaults`), le
+  met en cache 6 h (`remote_config.json`) et bascule sans release sur le
+  nouveau nom (`def111.ycnapi.com` actuellement). Si Remote Config tombe, un
+  backoff de 5 min évite d'ajouter 12 s à chaque lancement, et les anciens
+  domaines restent en repli. Testé en direct : 16 événements, 4 flux
+  (Multi/HD/SD/Low) joignables.
+- **Coflix : les épisodes ont de nouveau des lecteurs**. Le nouveau gabarit
+  liste les miroirs **directement** dans `var cfServers = [...]`
+  (`LECTEUR MyTV` → vidmoly, `LECTEUR VOE` → voe.sx, …) au lieu de pointer
+  vers l'agrégateur `lecteurvideo.com`. FreeFlix ne lisait que la première URL,
+  donc `get_episode` renvoyait **0 lecteur**. Les entrées `cfServers` sont
+  désormais converties en lecteurs (et l'agrégateur est encore développé
+  quand il est présent). Testé : 5 lecteurs, MyTV joue **1080p/480p**.
+- **Coflix : « Nouveautés » retombe sur ses pattes**. La page d'accueil
+  utilise des liens courts `/?p=<id>` au lieu de `/film/…`, ce qui vidait la
+  liste. Les identifiants sont résolus par lots via l'API REST WordPress
+  (films + séries) : 5 nouveautés avec affiches et URLs canoniques.
+- **Vidmoly n'est pas morte, seul le domaine l'était**. Le marqueur global
+  `vidmoly` masquait **vidmoly.biz**, qui sert toujours 1080p (lecteur MyTV de
+  Coflix). Seuls `vidmoly.me` (timeout) et `vidmoly.to` (401 → redirection
+  publicitaire) sont désormais masqués, comme `mivalyo` (DNS disparu).
+- **French-Anime : le miroir `lplaygo.com` est reconnu**. Le « luluvid »
+  VOSTFR tourne maintenant sur `lplaygo.com` (JWPlayer empaqueté, type
+  `default`) : testé **720p**.
+- **Papystreaming** reste inaccessible : Cloudflare sert « Just a moment… »
+  (mur amont, non contournable en CLI) ; le handler affiche déjà
+  `blocked_by_cloudflare`.
+
 ## 2.5.0
 
 - **Anime-Sama : les lecteurs jouent enfin (nouveau format 12/11/2026)**. Les

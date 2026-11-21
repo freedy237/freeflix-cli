@@ -619,3 +619,83 @@ def test_handler_reports_empty_feed_as_provider_side(monkeypatch, capsys):
     assert t("Check your connection, then try again.") not in out
     # The provider-side wall of diagnostics is gone: the message stays short.
     assert "HTTP 200" not in out
+
+
+# ── Remote Config: the API host rotates (def001 → def111 → …) ────────────
+
+
+def _isolate_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(ym, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(ym, "_RC_FAILED_AT", 0.0)
+
+
+def test_cached_host_accepts_rotated_domain(monkeypatch, tmp_path):
+    """Any valid hostname in host.txt is used, not only the constants."""
+    _isolate_cache(monkeypatch, tmp_path)
+    (tmp_path / ym._HOST_CACHE).write_text(
+        "def999.ycnapi.com\n", encoding="utf-8")
+    assert ym._cached_host() == "def999.ycnapi.com"
+
+
+def test_cached_host_rejects_garbage(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    (tmp_path / ym._HOST_CACHE).write_text("not a host!", encoding="utf-8")
+    assert ym._cached_host() is None
+
+
+def test_hosts_to_try_puts_remote_host_first_and_dedupes(monkeypatch, tmp_path):
+    _isolate_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(ym, "_cached_host", lambda: "def111.ycnapi.com")
+    monkeypatch.setattr(ym, "_remote_config_host", lambda: "def222.ycnapi.com")
+    hosts = ym._hosts_to_try()
+    assert hosts[0] == "def111.ycnapi.com"   # cached winner stays first
+    assert "def222.ycnapi.com" in hosts
+    assert len(hosts) == len(set(hosts))
+    # Constants remain as last-resort fallbacks.
+    assert "def001.ycnapi.com" in hosts
+
+
+def test_remote_config_host_uses_fresh_cache(monkeypatch, tmp_path):
+    import time as _time
+    _isolate_cache(monkeypatch, tmp_path)
+    ym._write_json(tmp_path / ym._RC_CACHE,
+                   {"host": "def333.ycnapi.com", "ts": int(_time.time())})
+    calls = []
+    monkeypatch.setattr(ym.requests, "post",
+                        lambda *a, **k: calls.append(1))
+    assert ym._remote_config_host() == "def333.ycnapi.com"
+    assert calls == []
+
+
+def test_remote_config_host_fetches_and_caches(monkeypatch, tmp_path):
+    import json as _json
+    _isolate_cache(monkeypatch, tmp_path)
+    ym._write_json(tmp_path / ym._RC_CACHE,
+                   {"host": "def111.ycnapi.com", "ts": 0})  # expired
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"entries": {"defaults": "def444.ycnapi.com"}}
+
+    monkeypatch.setattr(ym.requests, "post", lambda *a, **k: _Resp())
+    assert ym._remote_config_host() == "def444.ycnapi.com"
+    blob = _json.loads((tmp_path / ym._RC_CACHE).read_text(encoding="utf-8"))
+    assert blob["host"] == "def444.ycnapi.com"
+    assert blob["ts"] > 0
+
+
+def test_remote_config_failure_is_backed_off(monkeypatch, tmp_path):
+    """A dead Remote Config must not add 12 s to every launch."""
+    _isolate_cache(monkeypatch, tmp_path)
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(ym.requests, "post", boom)
+    assert ym._remote_config_host() is None
+    assert ym._remote_config_host() is None   # within the 5 min backoff
+    assert len(calls) == 1

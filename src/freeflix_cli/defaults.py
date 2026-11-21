@@ -41,6 +41,9 @@ DEFAULT_PLAYERS = {
         "sec_headers": "Sec-Fetch-Dest:empty;Sec-Fetch-Mode:cors;Sec-Fetch-Site:same-origin",
     },
     "mivalyo": {"type": "default"},
+    # lplaygo.com : French-Manga's "luluvid" mirror (packed JWPlayer setup,
+    # like the other rotating luluvid/luluvdo domains).
+    "lplaygo": {"type": "default"},
     "dingtezuni": {"type": "default"},
     "bingezove": {"type": "default"},
     "vidzy": {"type": "fsvid", "referrer": "https://vidzy.org"},

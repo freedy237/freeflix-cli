@@ -138,13 +138,74 @@ def _cards_from_soup(soup) -> list[SearchResult]:
     return results
 
 
+def _homepage_shortlinks(soup) -> list[tuple[int, str, str]]:
+    """Homepage cards using WordPress short links (``/?p=<id>``).
+
+    The 2026 homepage stopped emitting canonical ``/film/…`` anchors: the
+    same card links to ``?p=<id>`` instead, so ``_cards_from_soup`` (which
+    requires /film|serie/) returned an empty "latest" list.
+    """
+    out: list[tuple[int, str, str]] = []
+    seen: set[int] = set()
+    for a in soup.find_all("a", href=True):
+        m = re.search(r"[?&]p=(\d+)", a["href"])
+        if not m:
+            continue
+        img = a.find("img")
+        if img is None:
+            continue
+        title = clean_text(img.get("alt") or "")
+        if not title:
+            continue
+        post_id = int(m.group(1))
+        if post_id in seen:
+            continue
+        seen.add(post_id)
+        out.append((post_id, title,
+                    _norm_img(img.get("src") or img.get("data-src") or "")))
+    return out
+
+
+def _canonical_links(post_ids: list[int]) -> dict[int, str]:
+    """id → canonical URL, in two batched WP REST calls (movies + series)."""
+    if not post_ids:
+        return {}
+    ids = ",".join(str(i) for i in post_ids)
+    links: dict[int, str] = {}
+    for kind in ("movies", "series"):
+        try:
+            r = _get(
+                f"{website_origin.rstrip('/')}/wp-json/wp/v2/{kind}"
+                f"?include={ids}&per_page=100"
+            )
+            for row in r.json() or []:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("id") and row.get("link"):
+                    links[int(row["id"])] = str(row["link"])
+        except Exception:
+            continue
+    return links
+
+
 def latest(limit: int = 12) -> list[SearchResult]:
     """Newest homepage additions (the front-page grid is reverse-chronological)."""
     try:
         body = _get_cached(website_origin.rstrip("/") + "/", 120)
     except Exception:
         return []
-    return _cards_from_soup(parse_html(body))[:limit]
+    soup = parse_html(body)
+    results = _cards_from_soup(soup)
+    if results:
+        return results[:limit]
+
+    cards = _homepage_shortlinks(soup)
+    links = _canonical_links([c[0] for c in cards[:limit]])
+    return [
+        SearchResult(title, links[post_id], cover, [])
+        for post_id, title, cover in cards[:limit]
+        if post_id in links
+    ]
 
 
 def _search_html(query: str) -> list[SearchResult]:
@@ -339,24 +400,38 @@ def get_players(players_url: str) -> list[Player]:
     return players
 
 
-def _cfservers_url(html: str) -> str:
-    """New Coflix player layout (no <iframe>) : ``var cfServers =
-    [{"nombre":…,"embed_url":"https:\\/\\/lecteurvideo.com\\/embed.php?id=…"}]``.
-    Return the first embed URL (the Lecteurvideo aggregator, parsed by
-    get_players), or "" — pure, testable."""
+def _cfservers_entries(html: str) -> list[Player]:
+    """Playable entries from the Coflix ``var cfServers = [...]`` array.
+
+    Episode pages now list the mirrors DIRECTLY (LECTEUR MyTV → vidmoly,
+    LECTEUR VOE → voe.sx, …) instead of pointing at the Lecteurvideo
+    aggregator. Reading only the first URL therefore produced an empty
+    player list on every episode. Pure + testable.
+    """
     m = re.search(r"var\s+cfServers\s*=\s*(\[.*?\])\s*;", html or "", re.DOTALL)
     if not m:
-        return ""
+        return []
     try:
         data = json.loads(m.group(1))
     except (ValueError, TypeError):
-        return ""
+        return []
     if not isinstance(data, list):
-        return ""
+        return []
+    out: list[Player] = []
     for entry in data:
-        if isinstance(entry, dict) and entry.get("embed_url"):
-            return str(entry["embed_url"])
-    return ""
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("embed_url") or "").strip()
+        if not url:
+            continue
+        out.append(Player(str(entry.get("nombre") or "Lecteur"), url))
+    return out
+
+
+def _cfservers_url(html: str) -> str:
+    """First cfServers embed URL (legacy helper, kept for callers/tests)."""
+    entries = _cfservers_entries(html)
+    return entries[0].url if entries else ""
 
 
 def _players_url_from_page(soup, html: str) -> str:
@@ -371,6 +446,38 @@ def _players_url_from_page(soup, html: str) -> str:
     return players_url
 
 
+def _players_from_page(soup, html: str) -> list[Player]:
+    """All players of a Coflix movie/episode page, whatever the layout.
+
+    1. Legacy ``<iframe>`` → fetch the (aggregator) page and parse its rows.
+    2. ``cfServers`` with a Lecteurvideo aggregator → expand that page.
+    3. ``cfServers`` listing the mirrors directly → use them as-is.
+    """
+    iframe = soup.find("iframe")
+    if iframe:
+        src = iframe.attrs.get("src") or ""
+        if src:
+            if not src.startswith("http"):
+                src = website_origin.rstrip("/") + "/" + src.lstrip("/")
+            return get_players(src)
+
+    entries = _cfservers_entries(html)
+    if not entries:
+        return []
+
+    aggregator = next(
+        (p for p in entries if "lecteurvideo." in (p.url or "").lower()), None
+    )
+    if aggregator:
+        try:
+            expanded = get_players(aggregator.url)
+        except Exception:
+            expanded = []
+        if expanded:
+            return expanded
+    return entries
+
+
 def get_episode(url: str) -> Episode:
     """
     Get episode details including players. On the WordPress theme the episode
@@ -383,9 +490,7 @@ def get_episode(url: str) -> Episode:
     h1 = soup.find("h1")
     title: str = clean_text(h1.get_text(strip=True)) if h1 else ""
 
-    players_url = _players_url_from_page(soup, body)
-
-    players = get_players(players_url) if players_url else []
+    players = _players_from_page(soup, body)
 
     return Episode(title, players)
 
@@ -500,8 +605,7 @@ def get_movie(url: str) -> CoflixMovie:
     year_elem = soup.find("span", {"class": "fwb fz20 e-fz25 dib"})
     year = year_elem.text.strip() if year_elem else "Unknown"
 
-    players_url = _players_url_from_page(soup, body)
-    players = get_players(players_url) if players_url else []
+    players = _players_from_page(soup, body)
 
     return CoflixMovie(title, url, img, genres, year, players)
 

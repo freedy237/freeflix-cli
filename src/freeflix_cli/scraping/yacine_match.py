@@ -15,6 +15,7 @@ import os
 import re
 import time
 import urllib.parse
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -25,7 +26,7 @@ from platformdirs import user_cache_dir
 
 _KEY = b"c!xZj+N9&G@Ev@vw"
 _UA = "okhttp/4.12.0"
-_API_HOSTS = ("def001.ycnapi.com", "def.yacinelive.com")
+_API_HOSTS = ("def111.ycnapi.com", "def001.ycnapi.com", "def.yacinelive.com")
 _CAMEROON = timezone(timedelta(hours=1))  # Africa/Douala, no DST
 
 _HOST_CACHE = "host.txt"
@@ -115,14 +116,85 @@ def _request_json(host: str, path: str, timeout: int = 10) -> dict:
 def _cached_host() -> str | None:
     host = (_cache_dir() / _HOST_CACHE).read_text(encoding="utf-8").strip() \
         if (_cache_dir() / _HOST_CACHE).exists() else ""
-    if host and host in _API_HOSTS:
+    if host and _HOST_RE.match(host):
         return host
     return None
 
 
+# The API host carries a rotating number (def001 → def111 …) and the old one
+# simply stops resolving. Firebase Remote Config keeps pointing at the live
+# one, so it is the authoritative source; the constants below are only the
+# offline fallback.
+_RC_URL = (
+    "https://firebaseremoteconfig.googleapis.com/v1/projects/ycntv-7a08e/"
+    "namespaces/firebase:fetch"
+    "?key=AIzaSyDRKL14PPiXzk7qNUNLgV2IsjasxNpWLeU"
+)
+_RC_BODY = {
+    "app_id": "1:692330584196:android:df021404468b881f04cad1",
+    "package_name": "com.ytv.pronew",
+    "language_code": "en",
+    "platform_version": "14",
+    "sdk_version": "22.0.0",
+    "app_version": "15.0",
+}
+_RC_CACHE = "remote_config.json"
+_RC_TTL = 6 * 3600
+_RC_RETRY_AFTER = 300          # do not hammer Remote Config when it is down
+_RC_FAILED_AT = 0.0            # epoch of the last failed lookup (in-process)
+_HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{2,80}\.[a-z]{2,12}$")
+
+
+def _remote_config_host() -> str | None:
+    """Live API host from Firebase Remote Config (``defaults``).
+
+    Cached for 6 h so a normal launch costs nothing; refreshed transparently
+    when the provider rotates the hostname again.
+    """
+    cache = _cache_dir() / _RC_CACHE
+    blob = _read_json(cache, {})
+    if isinstance(blob, dict):
+        host = str(blob.get("host") or "")
+        try:
+            fresh = time.time() - float(blob.get("ts") or 0) < _RC_TTL
+        except (TypeError, ValueError):
+            fresh = False
+        if fresh and _HOST_RE.match(host):
+            return host
+    global _RC_FAILED_AT
+    if _RC_FAILED_AT and time.time() - _RC_FAILED_AT < _RC_RETRY_AFTER:
+        return None
+    body = dict(_RC_BODY)
+    body["app_instance_id"] = uuid.uuid4().hex
+    body["time_zone"] = "Africa/Douala"
+    try:
+        r = requests.post(
+            _RC_URL, json=body, impersonate="chrome", timeout=12,
+            headers={"Content-Type": "application/json", "User-Agent": _UA},
+        )
+        if r.status_code != 200:
+            _RC_FAILED_AT = time.time()
+            return None
+        host = str((r.json() or {}).get("entries", {}).get("defaults") or "")
+    except Exception:  # noqa: BLE001 - remote config must never be fatal
+        _RC_FAILED_AT = time.time()
+        return None
+    host = host.strip().lower().replace("https://", "").split("/")[0]
+    if not _HOST_RE.match(host):
+        _RC_FAILED_AT = time.time()
+        return None
+    _write_json(cache, {"host": host, "ts": int(time.time())})
+    _RC_FAILED_AT = 0.0
+    return host
+
+
 def _hosts_to_try() -> list[str]:
-    cached = _cached_host()
-    return ([cached] if cached else []) + [h for h in _API_HOSTS if h != cached]
+    order = []
+    for host in (_cached_host(), _remote_config_host(), *_API_HOSTS):
+        if host and host not in order:
+            order.append(host)
+    return order
+
 
 
 @dataclass
