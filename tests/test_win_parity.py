@@ -782,3 +782,33 @@ def test_shared_binary_data_checker_reports_missing_files(tmp_path):
                          capture_output=True, text=True, timeout=30)
     assert bad.returncode == 1
     assert "MISSING" in bad.stderr
+
+
+@POSIX_SCRIPTS_ONLY
+def test_data_checker_understands_windows_archive_listings(tmp_path):
+    """Windows PyInstaller listings use tuple reprs: ``'a\\\\b\\\\c'`` + CRLF.
+
+    v2.7.0 failed on the Windows runner because the checker looked for
+    ``freeflix_cli/data/...`` while the listing contained doubled backslashes,
+    so a perfectly good binary was reported as missing every data file. The
+    normalisation must map that form to the POSIX one.
+    """
+    binary = tmp_path / "freeflix.exe"
+    binary.write_bytes(b"fake-binary")
+    viewer = tmp_path / "fake-viewer.sh"
+    pkg = [p.name for p in sorted(PKG_DATA.iterdir()) if p.is_file()]
+    root = [p.name for p in sorted((REPO / "data").iterdir()) if p.is_file()]
+    lines = [f"  (1, 1, 1, 'x', 'freeflix_cli\\\\\\\\data\\\\\\\\{n}')" for n in pkg]
+    lines += [f"  (1, 1, 1, 'x', 'data\\\\\\\\{n}')" for n in root]
+    viewer.write_text("#!/usr/bin/env bash\nprintf '%s\\r\\n' "
+                      + " ".join(f"\"{ln}\"" for ln in lines) + "\n",
+                      encoding="utf-8")
+    viewer.chmod(0o755)
+
+    env = dict(os.environ, PYI_ARCHIVE_VIEWER=str(viewer))
+    checker = str(REPO / "scripts" / "check-binary-data.sh")
+    proc = subprocess.run(["bash", checker, str(binary)], env=env,
+                          capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, (
+        "a Windows-style archive listing must satisfy the checker:\n"
+        + proc.stderr)

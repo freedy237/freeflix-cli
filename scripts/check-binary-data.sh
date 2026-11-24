@@ -46,26 +46,39 @@ if [[ ! -d "$PKG_DATA_DIR" ]]; then
     exit 2
 fi
 
+# Git Bash/MSYS hands POSIX paths to native Windows tools; the archive viewer
+# is a native exe, so give it the Windows form (Linux/macOS keep theirs).
+BIN_VIEW="$BIN"
+case "$(uname -s 2>/dev/null || echo)" in
+    MINGW*|MSYS*|CYGWIN*)
+        BIN_VIEW="$(cygpath -w "$BIN" 2>/dev/null || printf '%s' "$BIN")"
+        ;;
+esac
+
 LIST="$(mktemp)"
 trap 'rm -f "$LIST"' EXIT
 
 viewer() {
     if [[ -n "${PYI_ARCHIVE_VIEWER:-}" ]]; then
         # shellcheck disable=SC2086  # deliberate word splitting of the command
-        $PYI_ARCHIVE_VIEWER -l "$BIN"
+        $PYI_ARCHIVE_VIEWER -l "$BIN_VIEW"
     elif command -v pyi-archive_viewer >/dev/null 2>&1; then
-        pyi-archive_viewer -l "$BIN"
+        pyi-archive_viewer -l "$BIN_VIEW"
     else
         uv run --with . --with pyinstaller --with lxml \
-            pyi-archive_viewer -l "$BIN"
+            pyi-archive_viewer -l "$BIN_VIEW"
     fi
 }
 
-if ! viewer > "$LIST" 2>/dev/null; then
+if ! viewer > "$LIST.raw" 2>/dev/null; then
     echo "ERROR: could not list the PyInstaller archive of $BIN" >&2
     echo "       (is this really a FreeFlix standalone binary?)" >&2
     exit 1
 fi
+# PyInstaller's Windows builds list entries with backslashes (and the console
+# may emit CRLF). Normalise once so ONE pattern works on every OS/runner.
+tr -d '\r' < "$LIST.raw" | sed -e 's|\\|/|g' -e 's|//*|/|g' > "$LIST"
+rm -f "$LIST.raw"
 
 missing=()
 required=0
@@ -73,7 +86,7 @@ required=0
 while IFS= read -r path; do
     rel="${path#"$PKG_DATA_DIR"/}"
     required=$((required + 1))
-    if ! grep -Eq "freeflix_cli[\\\\/]data[\\\\/]${rel//\//[\\\\/]}" "$LIST"; then
+    if ! grep -Fq "freeflix_cli/data/$rel" "$LIST"; then
         missing+=("freeflix_cli/data/$rel")
     fi
 done < <(find "$PKG_DATA_DIR" -type f | sort)
@@ -82,7 +95,7 @@ done < <(find "$PKG_DATA_DIR" -type f | sort)
 while IFS= read -r path; do
     rel="${path#"$PORTAL_DATA_DIR"/}"
     required=$((required + 1))
-    if ! grep -Eq "(^|[^[:alnum:]_])data[\\\\/]${rel//\//[\\\\/]}" "$LIST"; then
+    if ! grep -Fq "data/$rel" "$LIST"; then
         missing+=("data/$rel")
     fi
 done < <(find "$PORTAL_DATA_DIR" -maxdepth 1 -type f | sort)

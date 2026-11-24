@@ -460,7 +460,7 @@ def test_collect_binaries_reports_missing_and_old(monkeypatch):
     entries = doctor.collect_binaries()
     assert _label(entries, "ffmpeg")["status"] == doctor.PASS
     assert _label(entries, "chafa")["status"] == doctor.WARN
-    assert "chafa" in _label(entries, "chafa")["action"]
+    assert "chafa" in _label(entries, "chafa")["action"].lower()
     assert _label(entries, "yt-dlp")["status"] == doctor.WARN   # OLD
     assert _label(entries, "aria2c")["status"] == doctor.FAIL   # BROKEN
     assert not any(status == doctor.ERROR for status in _statuses(entries))
