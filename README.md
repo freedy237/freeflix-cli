@@ -77,7 +77,7 @@
 | | Feature |
 |---|---|
 | 🎬 | Stream movies, series and anime in **VF / VOSTFR / VA / VJ / VKR / VCN** |
-| 📥 | Download single episodes or **entire seasons** to `~/Downloads/FreeFlix/` |
+| 📥 | Download single episodes or **entire seasons** to your OS Downloads folder (`~/Downloads/FreeFlix/` on Linux/macOS; on Windows: the real Downloads known folder, OneDrive/localized path included) |
 | ▶️ | **Resume at the exact second** you left off (mpv only) |
 | 🔄 | **AniList sync** : mark-as-watched on AniList automatically |
 | 📝 | **OpenSubtitles** fallback when a source has no subs |
@@ -97,7 +97,7 @@
 | 🎨 | **Anime4K** pre-bundled, **off by default** — CTRL+1 max, CTRL+2 light, CTRL+0 off |
 | 🔒 | **Player configs isolated** — global mpv/VLC settings untouched |
 | 🩺 | **`freeflix --doctor`** system diagnostic (check deps, config, network) |
-| 🔄 | **Startup updater** : asks yes/no, upgrades with the same installer (uv/pipx/pip), reloads |
+| 🔄 | **Startup updater** : asks yes/no and upgrades with the same installer (uv/pipx/pip), reloads; the standalone `.exe` shows the download link instead |
 
 ---
 

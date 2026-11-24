@@ -8,6 +8,7 @@ import sys
 import shutil
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -22,7 +23,9 @@ from freeflix_cli.setup_assistant import (
     _download_and_install_binary,
     _find_in_tar,
     _find_in_zip,
+    _find_payload,
     _have_managed,
+    _install_bundle,
     _managed_bin,
     _safe_extract_zip,
     ensure_runtime_deps,
@@ -131,6 +134,14 @@ class TestBinarySources:
     def test_unknown_os_returns_empty(self):
         assert _BINARY_SOURCES.get("unknown", {}) == {}
 
+    def test_mpv_sources_use_bundle_install(self):
+        # Both upstream mpv zips are wrappers around a real bundle; a plain
+        # executable-only install cannot start.
+        for os_name in ("macos", "windows"):
+            assert _BINARY_SOURCES[os_name]["mpv"].get("bundle") is True
+            assert _BINARY_SOURCES[os_name]["mpv"]["binary"] in (
+                "mpv", "mpv.exe")
+
 
 class TestFindInTar:
     """_find_in_tar() finds a binary inside a tar.xz/tar.gz."""
@@ -195,6 +206,82 @@ class TestDownloadAndInstallBinary:
                 "extras": [],
             })
         assert result is False
+
+
+class TestNestedPlayerBundles:
+    """Vendor mpv zips are wrappers; the managed install must be complete.
+
+    The Windows x86_64 release zip contains a nested zip (mpv.exe + every
+    DLL), and the macOS zip contains mpv.tar.gz (mpv + lib/ + Frameworks/).
+    Installing only the executable produced a player that could never start.
+    """
+
+    @staticmethod
+    def _make_zip(path, entries):
+        with zipfile.ZipFile(path, "w") as zf:
+            for name, data in entries.items():
+                zf.writestr(name, data)
+
+    def test_windows_nested_zip_installs_exe_and_dlls(self, tmp_path):
+        inner = tmp_path / "mpv-inner.zip"
+        self._make_zip(inner, {
+            "mpv.exe": b"MZ fake exe",
+            "mpv.com": b"MZ fake com",
+            "avcodec-62.dll": b"fake dll",
+            "libplacebo-351.dll": b"fake dll",
+            "doc/manual.html": b"<html>",
+        })
+        outer = tmp_path / "mpv-windows.zip"
+        self._make_zip(outer, {
+            "mpv-v0.41.0-x86_64-w64-mingw32.zip": inner.read_bytes(),
+        })
+
+        found = _find_payload(outer, "mpv.exe", "zip",
+                              tmp_path / "bundle")
+        assert found is not None and found.name == "mpv.exe"
+
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        with mock.patch("freeflix_cli.setup_assistant._bin_dir",
+                        return_value=bindir):
+            assert _install_bundle(found, "mpv.exe") is True
+
+        assert (bindir / "mpv.exe").is_file()
+        assert (bindir / "mpv.com").is_file()
+        assert (bindir / "avcodec-62.dll").is_file()
+        assert (bindir / "libplacebo-351.dll").is_file()
+        assert not (bindir / "manual.html").exists()
+
+    def test_macos_nested_tar_installs_app_bundle_libs(self, tmp_path):
+        mpv_tar = tmp_path / "mpv.tar.gz"
+        with tarfile.open(mpv_tar, "w:gz") as tar:
+            for name, data in {
+                "mpv.app/Contents/MacOS/mpv": b"fake mach-o",
+                "mpv.app/Contents/MacOS/lib/libavcodec.dylib": b"fake dylib",
+                "mpv.app/Contents/Frameworks/libfoo.dylib": b"fake framework",
+            }.items():
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.REGTYPE
+                info.size = len(data)
+                import io
+                tar.addfile(info, io.BytesIO(data))
+        outer = tmp_path / "mpv-macos.zip"
+        self._make_zip(outer, {
+            "mpv-v0.41.0-macos-15-intel.tar.gz": mpv_tar.read_bytes(),
+        })
+
+        found = _find_payload(outer, "mpv", "zip", tmp_path / "bundle")
+        assert found is not None and found.name == "mpv"
+
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        with mock.patch("freeflix_cli.setup_assistant._bin_dir",
+                        return_value=bindir):
+            assert _install_bundle(found, "mpv") is True
+
+        assert (bindir / "mpv").is_file()
+        assert (bindir / "lib" / "libavcodec.dylib").is_file()
+        assert (bindir / "Frameworks" / "libfoo.dylib").is_file()
 
 
 class TestAutoInstallManaged:

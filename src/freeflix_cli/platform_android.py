@@ -108,7 +108,8 @@ def _is_linker_failure(output: str) -> bool:
 def _run(cmd: list) -> tuple[int, str]:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=20,
-                           env=_android_env())
+                           env=_android_env(),
+                           encoding="utf-8", errors="replace")
         return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
     except Exception as e:
         return 1, str(e)

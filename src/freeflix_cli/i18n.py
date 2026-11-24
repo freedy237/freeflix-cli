@@ -427,6 +427,8 @@ _FR = {
     "Installed": "Installée",
     "Latest": "Dernière",
     "Upgrade with": "Mets à jour avec",
+    "run the daily new-episode scan (used by the scheduler)":
+        "lance le scan quotidien des nouveaux épisodes (utilisé par le planificateur)",
 
     # ── Misc ────────────────────────────────────────────────────
     "Resuming": "Reprise de",
@@ -493,6 +495,9 @@ _FR = {
     "No episodes found in season.": "Aucun épisode trouvé dans la saison.",
     "No local player found (tried mpv, vlc). Install one with: sudo dnf install mpv":
         "Aucun lecteur local trouvé (mpv, vlc testés). Installe-en un avec : sudo dnf install mpv",
+    "No local player found (tried mpv, vlc).":
+        "Aucun lecteur local trouvé (mpv, vlc testés).",
+    "Install it with:": "Installe-le avec :",
     "DASH streams require mpv. Choose mpv (recommended) or another source.":
         "Les flux DASH nécessitent mpv. Choisis mpv (recommandé) ou une autre source.",
     "No results found on Anime-Sama.": "Aucun résultat trouvé sur Anime-Sama.",
@@ -846,7 +851,7 @@ _FR = {
     'via': 'via',
     'via Proxy': 'via le proxy',
     'via winget…': 'via winget…',
-    "winget not found. Install 'App Installer' from the Microsoft Store, or install mpv.net and VLC manually, so FreeFlix can launch them.": 'winget introuvable. Installe « App Installer » depuis le Microsoft Store, ou installe mpv.net et VLC manuellement, pour que FreeFlix puisse les lancer.',
+    "winget not found. Install 'App Installer' from the Microsoft Store, or install mpv and VLC manually, so FreeFlix can launch them.": 'winget introuvable. Installe « App Installer » depuis le Microsoft Store, ou installe mpv et VLC manuellement, pour que FreeFlix puisse les lancer.',
     'yt-dlp is required for HLS streams but is not installed.': "yt-dlp est requis pour les flux HLS mais n'est pas installé.",
     '↑/↓ navigate · type to filter · Enter · Esc': '↑/↓ naviguer · taper pour filtrer · Entrée · Échap',
     '🌊 Nyaa.si Torrents': '🌊 Torrents Nyaa.si',
@@ -949,6 +954,10 @@ _FR = {
     'FreeFlix is up to date:': 'FreeFlix est à jour :',
     'Download the latest version here:':
         'Télécharge la dernière version ici :',
+    'This standalone FreeFlix.exe cannot update itself.':
+        'Ce FreeFlix.exe autonome ne peut pas se mettre à jour lui-même.',
+    'Download the new .exe here, then replace the old one:':
+        'Télécharge le nouvel .exe ici, puis remplace l’ancien :',
     'Press Enter to restart FreeFlix with the new version.':
         "Appuie sur Entrée pour relancer FreeFlix avec la nouvelle version.",
     # ── Anime-Sama weekly planning ──

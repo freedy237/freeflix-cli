@@ -48,6 +48,7 @@ TECHNICAL = {
     "freeflix --doctor --sources",
     "freeflix --doctor --upload",
     "freeflix --help",
+    "freeflix --scan-notifications",
     "freeflix --setup",
     "freeflix --verbose",
     "freeflix --version",

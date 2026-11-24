@@ -1,3 +1,4 @@
+import atexit
 import os
 import readchar
 import re
@@ -583,6 +584,21 @@ def _mouse_available() -> bool:
 
 # Cached console capability probe (Windows only). None = not probed yet.
 _VT_READY = None
+# Original Windows console modes, restored at exit so disabling QuickEdit for
+# mouse support does not permanently change the user's terminal.
+_ORIG_CONSOLE_MODES = []
+
+
+def _restore_windows_console_modes() -> None:
+    while _ORIG_CONSOLE_MODES:
+        try:
+            k32, handle, mode = _ORIG_CONSOLE_MODES.pop()
+            k32.SetConsoleMode(handle, mode)
+        except Exception:
+            pass
+
+
+atexit.register(_restore_windows_console_modes)
 
 
 def _enable_windows_vt() -> bool:
@@ -611,6 +627,7 @@ def _enable_windows_vt() -> bool:
         ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
         ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
         ENABLE_EXTENDED_FLAGS = 0x0080
+        ENABLE_QUICK_EDIT_MODE = 0x0040
 
         h = k32.GetStdHandle(STD_OUTPUT_HANDLE)
         if not h or h == wintypes.HANDLE(-1).value:
@@ -619,6 +636,7 @@ def _enable_windows_vt() -> bool:
         if not k32.GetConsoleMode(h, ctypes.byref(mode)):
             return _VT_READY
         if not (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+            _ORIG_CONSOLE_MODES.append((k32, h, mode.value))
             if not k32.SetConsoleMode(
                 h, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
             ):
@@ -633,11 +651,13 @@ def _enable_windows_vt() -> bool:
         imode = wintypes.DWORD()
         if not k32.GetConsoleMode(hi, ctypes.byref(imode)):
             return _VT_READY
-        if not (imode.value & ENABLE_VIRTUAL_TERMINAL_INPUT):
-            # Windows requires extended flags (and quick-edit off) for VT
-            # input; without it msvcrt never sees SGR mouse reports.
-            new_mode = (imode.value | ENABLE_VIRTUAL_TERMINAL_INPUT
-                        | ENABLE_EXTENDED_FLAGS)
+        # QuickEdit intercepts mouse-down events for text selection, so the
+        # SGR reports never reach the app. ENABLE_EXTENDED_FLAGS is required
+        # for the clear to take effect; restore the original mode on exit.
+        new_mode = ((imode.value | ENABLE_VIRTUAL_TERMINAL_INPUT
+                     | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE)
+        if new_mode != imode.value:
+            _ORIG_CONSOLE_MODES.append((k32, hi, imode.value))
             if not k32.SetConsoleMode(hi, new_mode):
                 return _VT_READY
 

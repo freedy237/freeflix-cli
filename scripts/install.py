@@ -299,7 +299,7 @@ HEADER = r"""
 """
 
 # Keep in sync with pyproject.toml `[project] version`.
-VERSION = "2.4.4"
+VERSION = "2.6.1"
 
 
 def _usage():

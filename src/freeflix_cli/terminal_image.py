@@ -25,6 +25,7 @@ So the rest of the app can call render_url() unconditionally, on any OS.
 
 from __future__ import annotations  # `str | None` annotations work on Python 3.9
 
+import glob
 import os
 import re
 import shutil
@@ -56,11 +57,46 @@ _CHAFA_PATH = None
 _pixel_image_visible = False
 
 
+def _resolve_chafa() -> str:
+    """Locate chafa on PATH, then in winget's Links/package folders.
+
+    winget installs portable shims into %LOCALAPPDATA%\\Microsoft\\WinGet\\
+    Links and only updates PATH for FUTURE processes. The current session
+    would therefore claim "chafa missing" (no posters) right after a
+    successful install until the user opened a new terminal.
+    """
+    found = shutil.which("chafa")
+    if found:
+        return found
+    if os.name != "nt":
+        return ""
+    local = os.environ.get("LOCALAPPDATA", "")
+    candidates = [
+        os.path.join(local, "Microsoft", "WinGet", "Links", "chafa.exe"),
+        os.path.join(os.environ.get("ProgramFiles", ""), "chafa", "bin",
+                     "chafa.exe"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    if local:
+        pattern = os.path.join(
+            local, "Microsoft", "WinGet", "Packages",
+            "hpjansson.Chafa*", "**", "chafa.exe")
+        try:
+            for candidate in glob.glob(pattern, recursive=True):
+                if os.path.isfile(candidate):
+                    return candidate
+        except OSError:
+            pass
+    return ""
+
+
 def chafa_available() -> bool:
-    """True if the `chafa` binary is on PATH."""
+    """True if the `chafa` binary can be found and launched."""
     global _CHAFA_PATH
     if _CHAFA_PATH is None:
-        _CHAFA_PATH = shutil.which("chafa") or ""
+        _CHAFA_PATH = _resolve_chafa()
     return bool(_CHAFA_PATH)
 
 

@@ -259,21 +259,30 @@ def _browse_local_downloads():
             continue
 
         preferred = tracker.get_player() or "mpv"
+        from .player_manager import (
+            get_mpv_path, get_vlc_path, _install_hint, _no_console_window,
+        )
         player_bin = None
         for cand in [preferred, "mpv", "vlc"]:
             if cand in ("download", "browser", "manual", "android"):
                 continue
-            b = shutil.which(cand)
+            if cand == "mpv":
+                b = get_mpv_path()
+            elif cand == "vlc":
+                b = get_vlc_path()
+            else:
+                b = shutil.which(cand)
             if b:
                 player_bin = b
                 break
         if not player_bin:
-            print_error(t("No local player found (tried mpv, vlc). "
-                          "Install one with: sudo dnf install mpv"))
+            print_error(t("No local player found (tried mpv, vlc).")
+                        + f" {t('Install it with:')} {_install_hint('mpv')}")
             pause()
             continue
         try:
-            subprocess.run([player_bin, payload], check=False)
+            subprocess.run([player_bin, payload], check=False,
+                           **_no_console_window())
         except KeyboardInterrupt:
             pass
 

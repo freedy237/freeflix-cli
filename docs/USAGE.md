@@ -80,7 +80,9 @@ sous-titres, `_`/`ALT+V` vidéo, `i` stats, `Échap` retour FreeFlix.
 - Un épisode ou une saison entière (1–4 workers en parallèle).
 - Staging `~/Downloads/FreeFlix/.temp/` → vérification durée/taille →
   déplacement atomique. Un fichier incomplet devient `.incomplete` et peut
-  être repris ; un fichier partiel n'est jamais publié.
+  être repris ; un fichier partiel n'est jamais publié. Sur Windows, le
+  dossier de téléchargements est celui connu par l'Explorateur (OneDrive ou
+  chemin localisé inclus), et `.temp` est masqué.
 - Reprise après coupure réseau ou changement d'opérateur.
 - `Échap Échap` (ou double-clic sur la barre) annule proprement.
 

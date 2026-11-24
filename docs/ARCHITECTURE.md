@@ -41,7 +41,7 @@ freeflix (console script)
 | `~/.cache/AutoFlixCLI/origins.json` | resolved site mirrors (24 h) |
 | `~/.config/freeflix/mpv/` | dedicated mpv config, scripts, shaders |
 | `~/.cache/freeflix-cli/freeflix.log` | rotating log (`--verbose` also prints) |
-| `~/Downloads/FreeFlix/` | published downloads; staging in `.temp/` |
+| OS Downloads/`FreeFlix/` | published downloads; staging in `.temp/` (on Windows the shell's Downloads known folder, including OneDrive/localized paths) |
 
 The `AutoFlixCLI` names are inherited from the upstream fork and kept for
 backward compatibility: renaming them would orphan every existing install.

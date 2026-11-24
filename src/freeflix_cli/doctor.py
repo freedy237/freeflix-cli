@@ -63,7 +63,10 @@ def _probe_binary(path: str, name: str) -> tuple[str, str]:
     """Run ``<path> --version`` and return (status, first output line)."""
     try:
         flag = _VERSION_FLAGS.get(Path(name).name.lower(), "--version")
-        out = subprocess.run([path, flag], capture_output=True, text=True, timeout=10)
+        out = subprocess.run(
+            [path, flag], capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
+        )
         ver = (out.stdout or out.stderr or "").splitlines()[0].strip()
         # An existing shim can still be broken (stale uv/pip env).
         return ("OK" if out.returncode == 0 and ver else "BROKEN", ver)
@@ -111,6 +114,18 @@ def _check_binary(label: str, *names: str) -> tuple[str, str, str]:
         if path:
             status, ver = _probe_binary(path, n)
             return (status, ver, path)
+    if _os() == "windows":
+        # winget installs shims here but only refreshes PATH for future
+        # processes; a doctor run from a shell started before the install
+        # otherwise reports MISSING for a working tool.
+        links = os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "Microsoft", "WinGet", "Links")
+        for n in names:
+            cand = Path(links) / (n if n.lower().endswith(".exe") else n + ".exe")
+            if cand.is_file():
+                status, ver = _probe_binary(str(cand), n)
+                return (status, ver, str(cand))
     try:
         from .setup_assistant import _managed_bin
         for n in names:
@@ -242,6 +257,7 @@ def _detect_distro() -> str:
                 capture_output=True,
                 text=True,
                 timeout=5,
+                encoding="utf-8", errors="replace",
             )
             return f"macOS {out.stdout.strip()}"
         except Exception:
@@ -249,7 +265,8 @@ def _detect_distro() -> str:
     if _os() == "windows":
         try:
             out = subprocess.run(
-                ["cmd", "/c", "ver"], capture_output=True, text=True, timeout=5
+                ["cmd", "/c", "ver"], capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="replace",
             )
             return out.stdout.strip()
         except Exception:
@@ -463,6 +480,7 @@ def _upload_gist(content: str) -> str | None:
             capture_output=True,
             text=True,
             timeout=30,
+            encoding="utf-8", errors="replace",
         )
         url = (result.stdout or "").strip()
         if url.startswith("https://"):

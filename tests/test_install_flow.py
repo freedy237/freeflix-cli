@@ -33,6 +33,10 @@ from freeflix_cli.tracker import tracker
 # distro). Pure-Python setup tests still run everywhere.
 POSIX_ONLY = pytest.mark.skipif(
     os.name == "nt", reason="POSIX shell installers / shebang wrappers")
+# Flatpak only exists on Linux; macOS runs the POSIX suite and used to fail
+# these two tests because `detect_os()` correctly returned "macos".
+LINUX_ONLY = pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Flatpak is Linux-only")
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -381,7 +385,7 @@ def test_prime_wrapper_execs_the_real_mpv_from_path(tmp_path):
     assert "REAL_MPV_USED" in result.stdout
 
 
-@POSIX_ONLY
+@LINUX_ONLY
 def test_flatpak_player_counts_as_installed(monkeypatch):
     """Flatpak installs have no PATH binary: they must not look "missing"."""
     monkeypatch.setattr(
@@ -396,7 +400,7 @@ def test_flatpak_player_counts_as_installed(monkeypatch):
     assert sa.install_media_player("vlc") is True
 
 
-@POSIX_ONLY
+@LINUX_ONLY
 def test_flatpak_player_gets_a_managed_launcher(monkeypatch):
     monkeypatch.setattr(sa, "detect_os", lambda: "linux")
     monkeypatch.setattr(

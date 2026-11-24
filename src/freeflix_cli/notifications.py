@@ -9,6 +9,7 @@ invokes it once a day. See `install_systemd_timer()` for setup.
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -111,6 +112,62 @@ def _toast_xml(title: str, body: str) -> str:
     )
 
 
+def _notify_windows_balloon(title: str, body: str) -> bool:
+    """Reliable fallback for unpackaged Win32 apps.
+
+    WinRT toasts require a registered AppUserModelID (a Start Menu shortcut
+    with System.AppUserModel.ID). FreeFlix has none, so CreateToastNotifier
+    can fail with 0x80070490 and send nothing. NotifyIcon.ShowBalloonTip has
+    no such requirement and the shell surfaces it as a normal notification.
+    Title/body travel through UTF-8 temp files, never through the command
+    string, so scraped apostrophes/quotes cannot break out.
+    """
+    title_path = body_path = None
+    try:
+        fd, title_path = tempfile.mkstemp(
+            prefix="freeflix-notify-title-", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(title or "FreeFlix")
+        fd, body_path = tempfile.mkstemp(
+            prefix="freeflix-notify-body-", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body or "")
+
+        def _ps_path(p: str) -> str:
+            return p.replace("'", "''")
+
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "Add-Type -AssemblyName System.Drawing; "
+            "$n = New-Object System.Windows.Forms.NotifyIcon; "
+            "$n.Icon = [System.Drawing.SystemIcons]::Information; "
+            f"$n.BalloonTipTitle = Get-Content -Raw -Encoding UTF8 "
+            f"'{_ps_path(title_path)}'; "
+            f"$n.BalloonTipText = Get-Content -Raw -Encoding UTF8 "
+            f"'{_ps_path(body_path)}'; "
+            "$n.Visible = $true; "
+            "$n.ShowBalloonTip(10000); "
+            "Start-Sleep -Seconds 8; "
+            "$n.Dispose()"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-WindowStyle", "Hidden",
+             "-Command", ps],
+            check=False, capture_output=True, timeout=20,
+            encoding="utf-8", errors="replace",
+        )
+        return getattr(r, "returncode", 1) == 0
+    except Exception:
+        return False
+    finally:
+        for p in (title_path, body_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
 def _notify_windows_toast(title: str, body: str) -> bool:
     """Toast natif Windows 10+ via WinRT (aucune dépendance). Best-effort.
 
@@ -128,6 +185,7 @@ def _notify_windows_toast(title: str, body: str) -> bool:
             f.write(xml)
         safe_path = xml_path.replace("'", "''")
         ps = (
+            "$ErrorActionPreference = 'Stop'; "
             "[Windows.UI.Notifications.ToastNotificationManager, "
             "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; "
             "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; "
@@ -136,14 +194,18 @@ def _notify_windows_toast(title: str, body: str) -> bool:
             "::CreateToastNotifier('FreeFlix').Show("
             "[Windows.UI.Notifications.ToastNotification]::new($doc))"
         )
-        subprocess.run(
+        r = subprocess.run(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden",
              "-Command", ps],
             check=False, capture_output=True, timeout=15,
+            encoding="utf-8", errors="replace",
         )
-        return True
+        if getattr(r, "returncode", 1) == 0:
+            return True
+        # AUMID not registered / WinRT unavailable → balloon fallback.
+        return _notify_windows_balloon(title, body)
     except Exception:
-        return False
+        return _notify_windows_balloon(title, body)
     finally:
         if xml_path:
             try:
@@ -198,6 +260,28 @@ def _python_path() -> str:
     return sys.executable
 
 
+def _notify_argv() -> list:
+    """Command that runs the daily scanner in THIS install.
+
+    A frozen FreeFlix .exe is not a Python interpreter: ``exe -m module``
+    launched the TUI instead of the scanner (and the task appeared to work).
+    The CLI exposes ``--scan-notifications`` for that case.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--scan-notifications"]
+    return [sys.executable, "-m", "freeflix_cli.notifications"]
+
+
+def _notify_command_posix() -> str:
+    return " ".join(shlex.quote(part) for part in _notify_argv())
+
+
+def _notify_command_windows() -> str:
+    # list2cmdline quotes the executable path only when needed; schtasks then
+    # receives one properly quoted /TR value.
+    return subprocess.list2cmdline(_notify_argv())
+
+
 def install_systemd_timer() -> bool:
     """
     Write the .service and .timer files, reload daemon, enable + start
@@ -216,7 +300,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart={_python_path()} -m freeflix_cli.notifications
+ExecStart={_notify_command_posix()}
 """
     )
 
@@ -292,6 +376,7 @@ def _schtasks(*args: str):
     try:
         return subprocess.run(
             ["schtasks", *args], capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
         )
     except Exception:
         return None
@@ -305,12 +390,22 @@ def is_windows_task_installed() -> bool:
 
 
 def install_windows_task() -> bool:
-    """Create a daily Task Scheduler entry running the same scan."""
+    """Create a daily Task Scheduler entry running the same scan.
+
+    ``/it`` = run only when the user is logged on, interactively. Without it
+    the task can run in a non-interactive session where toast/balloon
+    notifications can never be displayed.
+    """
     if os.name != "nt":
         return False
-    action = f'"{_python_path()}" -m freeflix_cli.notifications'
-    r = _schtasks("/create", "/tn", _WINDOWS_TASK_NAME, "/tr", action,
-                  "/sc", "daily", "/st", "09:00", "/f")
+    action = _notify_command_windows()
+    base = ["/create", "/tn", _WINDOWS_TASK_NAME, "/tr", action,
+            "/sc", "daily", "/st", "09:00"]
+    r = _schtasks(*base, "/it", "/f")
+    if r is None or r.returncode != 0:
+        # Some locked-down Windows builds reject /it; still schedule the scan
+        # (it works, only the visible notification may be suppressed).
+        r = _schtasks(*base, "/f")
     return bool(r is not None and r.returncode == 0)
 
 

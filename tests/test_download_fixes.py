@@ -9,6 +9,8 @@ from freeflix_cli.player_manager import (
     clean_episode_title,
     _sanitize_filename,
     _stable_temp_dir,
+    _default_download_dir,
+    _path_budget,
     DOWNLOAD_DIR,
     TEMP_DIR,
 )
@@ -118,6 +120,70 @@ class TestStableTempDir:
         assert _sanitize_filename("   ") == "video"
         assert "?" not in _sanitize_filename("bad?name")
         assert "/" not in _sanitize_filename("a/b")
+
+
+class TestWindowsDownloadLocation:
+    """Downloads land in the shell's real Downloads folder, not ~/Downloads."""
+
+    def test_uses_platformdirs_downloads(self, monkeypatch):
+        import platformdirs
+        base = os.path.join("C:\\Users\\u\\OneDrive", "Downloads")
+        monkeypatch.setattr(platformdirs, "user_downloads_dir", lambda: base)
+        assert _default_download_dir() == os.path.join(base, "FreeFlix")
+
+    def test_falls_back_when_platformdirs_fails(self, monkeypatch):
+        import platformdirs
+
+        def _boom():
+            raise OSError("no known folder")
+
+        monkeypatch.setattr(platformdirs, "user_downloads_dir", _boom)
+        assert _default_download_dir() == os.path.join(
+            os.path.expanduser("~/Downloads"), "FreeFlix")
+
+    def test_long_windows_path_gets_a_smaller_filename_budget(self, monkeypatch):
+        import freeflix_cli.player_manager as pm
+        monkeypatch.setattr(pm, "_is_windows", lambda: True)
+        base = ("C:\\Users\\somebody\\OneDrive - Company\\Documents\\"
+                "Downloads\\FreeFlix\\Serie - Saison 1")
+        budget = _path_budget(base)
+        assert 40 <= budget < 200
+        assert len(os.path.abspath(base)) + 1 + budget + 24 <= 240
+
+    def test_hidden_attribute_is_set_on_windows(self, monkeypatch):
+        import ctypes
+        import types
+        import freeflix_cli.player_manager as pm
+
+        calls = []
+
+        class _Kernel32:
+            def GetFileAttributesW(self, path):
+                return 0x10  # FILE_ATTRIBUTE_DIRECTORY
+
+            def SetFileAttributesW(self, path, attrs):
+                calls.append((path, attrs))
+                return 1
+
+        monkeypatch.setattr(pm, "_is_windows", lambda: True)
+        monkeypatch.setattr(pm, "_TEMP_HIDDEN", False)
+        monkeypatch.setattr(
+            ctypes, "windll",
+            types.SimpleNamespace(kernel32=_Kernel32()), raising=False)
+        pm._hide_windows_temp_dir()
+        assert calls and calls[0][1] & 0x2
+
+    def test_stable_temp_dir_requests_hidden_attribute(self, monkeypatch):
+        import freeflix_cli.player_manager as pm
+
+        called = []
+        monkeypatch.setattr(
+            pm, "_hide_windows_temp_dir", lambda: called.append(True))
+        d = _stable_temp_dir("hide_me_ep1")
+        try:
+            assert called == [True]
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class TestDownloadQualityHeights:

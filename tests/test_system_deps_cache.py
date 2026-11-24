@@ -388,3 +388,79 @@ class TestWindowsNotifications:
                                     side_effect=OSError("no schtasks")):
                 assert n.is_windows_task_installed() is False
                 assert n.install_windows_task() is False
+
+    def test_notify_argv_frozen_uses_cli_flag(self, monkeypatch):
+        from freeflix_cli import notifications as n
+        exe = r"C:\Program Files\FreeFlix\FreeFlix.exe"
+        monkeypatch.setattr(n.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(n.sys, "executable", exe)
+        assert n._notify_argv() == [exe, "--scan-notifications"]
+        # One quoted /TR value: schtasks must not split the path on spaces.
+        assert n._notify_command_windows() == (
+            '"C:\\Program Files\\FreeFlix\\FreeFlix.exe" '
+            "--scan-notifications"
+        )
+
+    def test_notify_argv_source_uses_module(self, monkeypatch):
+        from freeflix_cli import notifications as n
+        monkeypatch.setattr(n.sys, "frozen", False, raising=False)
+        monkeypatch.setattr(n.sys, "executable", "/opt/venv/bin/python")
+        assert n._notify_argv() == [
+            "/opt/venv/bin/python", "-m", "freeflix_cli.notifications",
+        ]
+        assert n._notify_command_posix() == (
+            "/opt/venv/bin/python -m freeflix_cli.notifications"
+        )
+
+    def test_windows_task_uses_scan_notifications_and_it(self, monkeypatch):
+        from freeflix_cli import notifications as n
+
+        calls = []
+
+        class _R:
+            returncode = 0
+
+        monkeypatch.setattr(n.os, "name", "nt")
+        monkeypatch.setattr(
+            n, "_notify_command_windows",
+            lambda: '"C:\\FreeFlix\\FreeFlix.exe" --scan-notifications',
+        )
+        monkeypatch.setattr(
+            n, "_schtasks", lambda *a: calls.append(a) or _R())
+
+        assert n.install_windows_task() is True
+        assert calls[0][-2:] == ("/it", "/f")
+        assert calls[0][calls[0].index("/tr") + 1] == (
+            '"C:\\FreeFlix\\FreeFlix.exe" --scan-notifications')
+
+    def test_windows_task_falls_back_without_it(self, monkeypatch):
+        from freeflix_cli import notifications as n
+
+        calls = []
+
+        class _R:
+            def __init__(self, rc):
+                self.returncode = rc
+
+        monkeypatch.setattr(n.os, "name", "nt")
+        monkeypatch.setattr(n, "_notify_command_windows", lambda: "freeflix.exe")
+        codes = iter([1, 0])
+        monkeypatch.setattr(
+            n, "_schtasks", lambda *a: calls.append(a) or _R(next(codes)))
+
+        assert n.install_windows_task() is True
+        assert "/it" in calls[0]
+        assert "/it" not in calls[1]
+
+    def test_toast_failure_falls_back_to_balloon(self, monkeypatch):
+        from freeflix_cli import notifications as n
+
+        class _R:
+            returncode = 1
+
+        monkeypatch.setattr(n.os, "name", "nt")
+        monkeypatch.setattr(n.shutil, "which", lambda name: "powershell")
+        monkeypatch.setattr(n.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(n, "_notify_windows_balloon",
+                            lambda t, b: True)
+        assert n._notify_windows_toast("title", "body") is True

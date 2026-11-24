@@ -62,6 +62,8 @@ qualités sont analysées avant la lecture.
 
 Les fichiers sont préparés dans `~/Downloads/FreeFlix/.temp/`, vérifiés, puis
 déplacés atomiquement. Un fichier `.incomplete` est conservé pour reprise.
+Sur Windows, ce chemin se trouve sous le dossier « Téléchargements » réel de
+l'utilisateur (OneDrive/localisé), et `.temp` porte l'attribut Hidden.
 
 ```bash
 freeflix --doctor            # yt-dlp / ffmpeg / aria2c présents ?

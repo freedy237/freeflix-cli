@@ -84,7 +84,8 @@ def detect_gpus() -> Dict[str, bool]:
     if shutil.which("nvidia-smi"):
         try:
             r = subprocess.run(
-                ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=3
+                ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=3,
+                encoding="utf-8", errors="replace"
             )
             if r.returncode == 0 and "GPU" in r.stdout:
                 flags["nvidia"] = True
@@ -95,7 +96,8 @@ def detect_gpus() -> Dict[str, bool]:
         if shutil.which("lspci"):
             try:
                 r = subprocess.run(
-                    ["lspci", "-nn"], capture_output=True, text=True, timeout=3
+                    ["lspci", "-nn"], capture_output=True, text=True, timeout=3,
+                    encoding="utf-8", errors="replace"
                 )
                 if r.returncode == 0:
                     lines = r.stdout.lower().splitlines()
@@ -110,7 +112,8 @@ def detect_gpus() -> Dict[str, bool]:
 
     elif os_name == "macos":
         try:
-            r = subprocess.run(["uname", "-m"], capture_output=True, text=True, timeout=2)
+            r = subprocess.run(["uname", "-m"], capture_output=True, text=True, timeout=2,
+                         encoding="utf-8", errors="replace")
             if "arm64" in r.stdout:
                 flags["apple_silicon"] = True
         except Exception:
@@ -123,6 +126,7 @@ def detect_gpus() -> Dict[str, bool]:
                 ["powershell", "-Command",
                  "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
                 capture_output=True, text=True, timeout=8,
+                encoding="utf-8", errors="replace",
             )
             out = (r.stdout or "").lower()
             if "nvidia" in out or "geforce" in out or "quadro" in out:
@@ -397,6 +401,9 @@ _BINARY_SOURCES: dict[str, dict[str, dict]] = {
         "mpv": {
             "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-macos-15-intel.zip",
             "type": "zip", "binary": "mpv", "extras": [],
+            # The upstream zip is a wrapper around mpv.tar.gz (mpv.app bundle):
+            # extracting only the binary loses @executable_path/lib.
+            "bundle": True,
             "sha256": "41003617ab4f7784394b5ddea7ce51b3e0838e8cfc8166ad1a378b2eda3b583c",
             "min_bytes": 48_000_000,
         },
@@ -418,6 +425,9 @@ _BINARY_SOURCES: dict[str, dict[str, dict]] = {
         "mpv": {
             "url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/mpv-v0.41.0-x86_64-w64-mingw32.zip",
             "type": "zip", "binary": "mpv.exe", "extras": [],
+            # This upstream zip contains a nested zip; mpv.exe also needs its
+            # ~20 sibling DLLs (avcodec, libplacebo…) to start at all.
+            "bundle": True,
             "sha256": "a49811c0752c108b8260636f9c6f6fcb97406641c98b30f1e7b500dfb20177de",
             "min_bytes": 38_000_000,
         },
@@ -464,6 +474,145 @@ def _find_in_zip(archive: Path, target: str) -> Path | None:
     except Exception:
         return None
     return None
+
+
+def _archive_kind(name: str) -> str | None:
+    """Archive type from a filename (used to unwrap vendor bundles)."""
+    low = (name or "").lower()
+    if low.endswith(".zip"):
+        return "zip"
+    if low.endswith((".tar.gz", ".tgz")):
+        return "tar.gz"
+    if low.endswith((".tar.xz", ".txz")):
+        return "tar.xz"
+    return None
+
+
+def _safe_extract_tar(tar, dest_dir: str) -> None:
+    """Extract a tar while refusing absolute / `..` / device members.
+
+    Python 3.12+ and back-ported 3.9 builds support ``filter="data"``; older
+    interpreters get the same checks manually. We only unpack archives pinned
+    by sha256, but a nested archive is still untrusted input.
+    """
+    try:
+        tar.extractall(dest_dir, filter="data")
+        return
+    except TypeError:
+        pass
+    dest_real = os.path.realpath(dest_dir)
+    for m in tar.getmembers():
+        name = m.name
+        if not name or os.path.isabs(name):
+            continue
+        target_real = os.path.realpath(os.path.join(dest_real, name))
+        if target_real != dest_real and not target_real.startswith(dest_real + os.sep):
+            continue
+        if not (m.isfile() or m.isdir()):
+            continue
+        tar.extract(m, dest_dir)
+
+
+def _extract_archive(archive: Path, dest: Path, kind: str) -> bool:
+    """Safely unpack one archive into *dest* (zip / tar.gz / tar.xz)."""
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        if kind == "zip":
+            import zipfile
+            with zipfile.ZipFile(archive) as zf:
+                _safe_extract_zip(zf, str(dest))
+        else:
+            import tarfile
+            with tarfile.open(archive, "r:*") as tar:
+                _safe_extract_tar(tar, str(dest))
+        return True
+    except Exception:
+        return False
+
+
+def _find_payload(archive: Path, target: str, kind: str,
+                  dest: Path, depth: int = 0) -> Path | None:
+    """Find *target* in an archive, unwrapping nested zip/tar wrappers.
+
+    Upstream mpv releases are wrappers: the Windows x86_64 zip contains a
+    nested zip (mpv.exe + ~20 DLLs) and the macOS zip contains mpv.tar.gz
+    (an app bundle with mpv + lib/). ``_find_in_zip`` only looked at top-level
+    names, and even a hit installed mpv.exe alone, so the managed player could
+    never start. Return the extracted executable path; its siblings are then
+    installed as a bundle.
+    """
+    if depth > 2:
+        return None
+    if not _extract_archive(archive, dest, kind):
+        return None
+    try:
+        for found in dest.rglob(target):
+            if found.is_file():
+                return found
+    except OSError:
+        return None
+    # Vendor wrapper: a single nested archive at or below the extracted root.
+    index = 0
+    try:
+        children = sorted(dest.rglob("*"))
+    except OSError:
+        children = []
+    for child in children:
+        if not child.is_file():
+            continue
+        nested_kind = _archive_kind(child.name)
+        if not nested_kind:
+            continue
+        index += 1
+        nested = _find_payload(
+            child, target, nested_kind,
+            dest / f"_nested_{depth}_{index}", depth + 1,
+        )
+        if nested is not None:
+            return nested
+    return None
+
+
+def _install_bundle(extracted: Path, target: str) -> bool:
+    """Install a self-contained player payload next to its libraries.
+
+    Windows: copy mpv.exe/mpv.com + every sibling DLL (the loader resolves
+    them from the executable's directory).
+    macOS: copy mpv plus its ``lib/`` directory — the Mach-O binary links via
+    ``@executable_path/lib`` and is unusable without those dylibs.
+    """
+    dest = _ensure_bin_dir()
+    try:
+        if target.lower().endswith(".exe"):
+            copied_exe = False
+            for entry in extracted.parent.iterdir():
+                if not entry.is_file():
+                    continue
+                if entry.suffix.lower() not in (".exe", ".com", ".dll"):
+                    continue
+                shutil.copy2(entry, dest / entry.name)
+                try:
+                    (dest / entry.name).chmod(0o755)
+                except OSError:
+                    pass
+                if entry.name.lower() == target.lower():
+                    copied_exe = True
+            return copied_exe
+
+        shutil.copy2(extracted, dest / target)
+        try:
+            (dest / target).chmod(0o755)
+        except OSError:
+            pass
+        lib_src = extracted.parent / "lib"
+        if lib_src.is_dir():
+            shutil.copytree(lib_src, dest / "lib", dirs_exist_ok=True)
+        fw_src = extracted.parent.parent / "Frameworks"
+        if fw_src.is_dir():
+            shutil.copytree(fw_src, dest / "Frameworks", dirs_exist_ok=True)
+        return (dest / target).is_file()
+    except OSError:
+        return False
 
 
 def _crlf_variants(data: bytes):
@@ -565,6 +714,12 @@ def _download_and_install_binary(label: str, info: dict) -> bool:
         # Integrity gate: never extract/run an archive that fails size or hash.
         if not _verify_archive(arc_path, info, label):
             return False
+
+        if info.get("bundle"):
+            extracted = _find_payload(arc_path, bin_target, arc_type, tmp / "bundle")
+            if extracted is None or not extracted.is_file():
+                return False
+            return _install_bundle(extracted, bin_target)
 
         if arc_type in ("tar.xz", "tar.gz"):
             extracted = _find_in_tar(arc_path, bin_target)
@@ -684,7 +839,10 @@ def _get_installed_version() -> str:
 # Essential tools gate playback ; the rest are quality-of-life (posters,
 # faster downloads) and never block.
 _TOOLS = [
-    ("player",  "mpv.net",         ("mpvnet", "mpv", "vlc"), True),
+    # mpv.net only ships the mpvnet.exe GUI and its winget manifest has been
+    # removed from winget-pkgs; keep it last, behind two real mpv.exe CLIs.
+    ("player",  ("shinchiro.mpv", "mpv-player.mpv-CI.MSVC", "mpv.net"),
+     ("mpvnet", "mpv", "vlc"), True),
     ("yt-dlp",  "yt-dlp.yt-dlp",   ("yt-dlp",),              True),
     ("ffmpeg",  "Gyan.FFmpeg",     ("ffmpeg",),              True),
     ("aria2",   "aria2.aria2",     ("aria2c",),              False),
@@ -770,17 +928,34 @@ def runtime_ready() -> bool:
     return not missing_essential_tools()
 
 
-def _winget_install(pkg_id: str) -> None:
-    try:
-        # capture_output so winget's own logs don't fight the loading screen.
-        subprocess.run(
-            ["winget", "install", "--silent",
-             "--accept-source-agreements", "--accept-package-agreements",
-             "--id", pkg_id],
-            check=False, capture_output=True, text=True, timeout=900,
-        )
-    except Exception:
-        pass
+def _winget_install(pkg_id, bins=None) -> bool:
+    """Try one or several winget package ids, returning True on success.
+
+    ``mpv.net`` used to be the only player fallback, but that manifest is no
+    longer in winget-pkgs and it only ships the mpvnet.exe GUI. Try the real
+    mpv CLIs first, then verify the resulting executable (winget can exit 0
+    for an already-satisfied/partially installed package). PATH is refreshed
+    after every attempt because winget installs shims into a directory that an
+    already-running process does not have on PATH.
+    """
+    ids = (pkg_id,) if isinstance(pkg_id, str) else tuple(pkg_id)
+    for pid in ids:
+        try:
+            # capture_output so winget's own logs don't fight the loading screen.
+            r = subprocess.run(
+                ["winget", "install", "--silent",
+                 "--accept-source-agreements", "--accept-package-agreements",
+                 "--id", pid],
+                check=False, capture_output=True, text=True, timeout=900,
+                encoding="utf-8", errors="replace",
+            )
+        except Exception:
+            continue
+        _refresh_winget_path()
+        if getattr(r, "returncode", 1) == 0 and (
+                bins is None or _have(bins)):
+            return True
+    return False
 
 
 def _mark_deps_ok(version: str) -> None:
@@ -806,6 +981,12 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
     """
     _version = _get_installed_version()
     _cached_version = tracker.data.get("system_deps_ok_version")
+
+    # A tool installed by winget in a previous session lives in
+    # %LOCALAPPDATA%\Microsoft\WinGet\Links. The current process inherited a
+    # PATH from before the install, so refresh it before declaring anything
+    # missing (this was the "installed but still not found" loop).
+    _refresh_winget_path()
 
     # Invalidate cache on version change — new version may have added
     # or removed dependencies in _TOOLS.
@@ -862,7 +1043,8 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
                     _ls.status(f"{t('Installing')} {label}… ({i + 1}/{total})",
                                frac=(i + 1) / total)
                     if not _have(bins):
-                        _winget_install(pkg_id)
+                        _winget_install(pkg_id, bins)
+                        _refresh_winget_path()
                 _ls.status(t("Finishing up…"), frac=1.0)
                 time.sleep(0.5)
 
@@ -1350,6 +1532,7 @@ def install_chafa() -> bool:
     manager. Interactive : asks before touching the system. Returns True
     if chafa ends up available.
     """
+    _refresh_winget_path()
     if shutil.which("chafa"):
         print_success(t("chafa already installed — anime posters enabled"))
         return True
@@ -1390,7 +1573,13 @@ def install_chafa() -> bool:
         print_warning(f"chafa {t('install failed')} ({type(e).__name__}: {e})")
         return False
 
-    if shutil.which("chafa"):
+    # winget installs chafa.exe into its Links folder and only updates the
+    # user PATH for FUTURE processes. Refresh now, and clear the poster cache
+    # so the current session immediately sees it.
+    _refresh_winget_path()
+    from . import terminal_image
+    terminal_image.reset_cache()
+    if terminal_image.chafa_available():
         print_success(f"  ✓ chafa {t('installed — anime posters enabled')}")
         return True
     print_warning(f"  ! chafa {t('still not found — posters will stay off for now')}")
@@ -1464,7 +1653,8 @@ def detect_nerd_font() -> bool:
     if os_name in ("linux", "macos"):
         try:
             out = subprocess.run(
-                ["fc-list"], capture_output=True, text=True, timeout=10
+                ["fc-list"], capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace"
             ).stdout
             import re
             if re.search(r"(?i)CaskaydiaCove|Nerd Font", out):
@@ -1868,6 +2058,7 @@ def _flaresolverr_make_persistent(runtime: str):
             ["podman", "generate", "systemd", "--new", "--name", "flaresolverr",
              "--restart-policy=always"],
             capture_output=True, text=True, timeout=25,
+            encoding="utf-8", errors="replace",
         )
         if gen.returncode == 0 and gen.stdout.strip():
             (unit_dir / "flaresolverr.service").write_text(gen.stdout)
@@ -1991,20 +2182,20 @@ def install_flaresolverr() -> bool:
 # ─── Windows : install the media players ──────────────────────────────
 def install_windows_players() -> bool:
     """
-    Windows : install mpv (mpv.net) and VLC via winget so FreeFlix can
-    actually launch them. Users who installed FreeFlix with `uv` never ran
-    install.ps1, so the players may be missing. The tuned mpv config is
-    applied separately by install_config_files() into %APPDATA%/freeflix/mpv.
+    Windows : install mpv and VLC via winget so FreeFlix can actually launch
+    them. Users who installed FreeFlix with `uv` never ran install.ps1, so the
+    players may be missing. The tuned mpv config is applied separately by
+    install_config_files() into %APPDATA%/freeflix/mpv.
 
-    mpv.net's binary is mpvnet.exe ; player_manager.get_mpv_path() resolves
-    both that and the winget shim, so FreeFlix can call it.
+    The real mpv.exe CLI (shinchiro / official CI) is preferred; mpv.net's
+    mpvnet.exe is only a last-resort fallback.
     """
     if detect_os() != "windows":
         return True
     if not shutil.which("winget"):
         print_warning(
             t("winget not found. Install 'App Installer' from the Microsoft "
-            "Store, or install mpv.net and VLC manually, so FreeFlix can "
+            "Store, or install mpv and VLC manually, so FreeFlix can "
             "launch them.")
         )
         return False
@@ -2031,6 +2222,7 @@ def install_windows_players() -> bool:
                      "--accept-source-agreements", "--accept-package-agreements",
                      "--id", pkg_id],
                     check=False, capture_output=True, text=True, timeout=1800,
+                    encoding="utf-8", errors="replace",
                 )
             except Exception as e:
                 print_warning(

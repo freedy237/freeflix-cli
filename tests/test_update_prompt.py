@@ -178,6 +178,56 @@ def test_prompt_and_update_declined_does_nothing(monkeypatch):
     assert order == ["ask"]
 
 
+def test_run_update_exe_shows_manual_replacement(monkeypatch):
+    """A frozen .exe cannot pip/uv-upgrade itself: no misleading prompt."""
+    monkeypatch.setattr(uc, "installer_kind", lambda: "exe")
+    _fake_plan(monkeypatch, "1.0.0", "1.1.0")
+    printed = []
+    monkeypatch.setattr(uc, "print_warning", lambda m, *a, **k: printed.append(m))
+    monkeypatch.setattr(uc, "print_info", lambda m, *a, **k: printed.append(m))
+    monkeypatch.setattr(uc, "print_success", lambda *a, **k: None)
+    ran = []
+    monkeypatch.setattr(uc.subprocess, "run",
+                        lambda *a, **k: ran.append(a))
+    assert uc.run_update() is False
+    assert ran == []
+    text = " ".join(str(m) for m in printed)
+    assert "FreeFlix.exe" in text
+    assert uc.RELEASES_URL in text
+
+
+def test_ask_update_exe_never_asks_yes_no(monkeypatch):
+    monkeypatch.setattr(uc, "installer_kind", lambda: "exe")
+    _fake_plan(monkeypatch, "1.0.0", "1.1.0")
+    import freeflix_cli.cli_utils as cu
+    monkeypatch.setattr(
+        cu, "ask_yes_no",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not ask")),
+    )
+    shown = []
+
+    def _print(_self, obj=None, **k):
+        shown.append(str(getattr(obj, "renderable", obj)))
+
+    monkeypatch.setattr(uc, "console", type("C", (), {"print": _print})())
+    assert uc.ask_update() is False
+    text = " ".join(shown)
+    assert "FreeFlix.exe" in text and uc.RELEASES_URL in text
+
+
+def test_check_update_exe_shows_download_link(monkeypatch):
+    monkeypatch.setattr(uc, "installer_kind", lambda: "exe")
+    _fake_plan(monkeypatch, "1.0.0", "1.1.0")
+    shown = []
+
+    def _print(_self, obj=None, **k):
+        shown.append(str(getattr(obj, "renderable", obj)))
+
+    monkeypatch.setattr(uc, "console", type("C", (), {"print": _print})())
+    assert uc.check_update() is True
+    assert uc.RELEASES_URL in " ".join(shown)
+
+
 def test_reload_process_windows_spawns_and_exits(monkeypatch):
     monkeypatch.setattr(uc.os, "name", "nt")
     monkeypatch.setattr(uc.sys, "frozen", False, raising=False)

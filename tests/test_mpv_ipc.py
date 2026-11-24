@@ -75,8 +75,10 @@ class _FakeMpv:
         self._srv.close()
 
 
-def test_connect_and_track_position_and_eof(tmp_path):
-    path = str(tmp_path / "mpv.sock")
+def test_connect_and_track_position_and_eof():
+    # make_ipc_path() is length-checked (macOS AF_UNIX max 104 bytes);
+    # pytest's long tmp_path used to make bind() fail on macOS CI.
+    path = mpv_ipc.make_ipc_path()
     fake = _FakeMpv(path, pos=118.0, dur=120.0, end_reason="eof")
     try:
         seen = []
@@ -91,10 +93,11 @@ def test_connect_and_track_position_and_eof(tmp_path):
         assert mon.finished_naturally() is True
     finally:
         fake.close()
+        mpv_ipc._unlink_ipc_path(path)
 
 
-def test_quit_is_not_finished(tmp_path):
-    path = str(tmp_path / "mpv2.sock")
+def test_quit_is_not_finished():
+    path = mpv_ipc.make_ipc_path()
     # user quit early (pos far from end) → not "finished"
     fake = _FakeMpv(path, pos=10.0, dur=120.0, end_reason="quit")
     try:
@@ -106,10 +109,11 @@ def test_quit_is_not_finished(tmp_path):
         assert mon.finished_naturally() is False
     finally:
         fake.close()
+        mpv_ipc._unlink_ipc_path(path)
 
 
-def test_connect_times_out_without_server(tmp_path):
-    path = str(tmp_path / "nope.sock")
+def test_connect_times_out_without_server():
+    path = mpv_ipc.make_ipc_path()
     client = mpv_ipc.MpvIPC(path)
     assert client.connect(timeout=0.5) is False
 
@@ -136,7 +140,7 @@ def test_make_ipc_path_inside_private_dir():
     assert os.path.basename(p).startswith("ff-")
 
 
-def test_connect_failure_leaks_no_fd(tmp_path):
+def test_connect_failure_leaks_no_fd():
     import os
     import sys
     if sys.platform.startswith("win") or not os.path.isdir("/proc/self/fd"):
@@ -144,7 +148,7 @@ def test_connect_failure_leaks_no_fd(tmp_path):
     def _fds():
         return len(os.listdir("/proc/self/fd"))
     before = _fds()
-    client = mpv_ipc.MpvIPC(str(tmp_path / "nope.sock"))
+    client = mpv_ipc.MpvIPC(mpv_ipc.make_ipc_path())
     assert client.connect(timeout=0.6) is False
     assert _fds() <= before + 1, "socket fuit à chaque tentative ratée"
 

@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.6.1
+
+- **Windows : mpv géré s'installe enfin complet**. L'archive upstream
+  contient un zip imbriqué (`mpv.exe` + une vingtaine de DLL) ; FreeFlix ne
+  copiait que l'exécutable, donc le lecteur ne pouvait pas démarrer. Le zip
+  imbriqué est maintenant décompressé et `mpv.exe`, `mpv.com` et toutes les
+  DLL voisines sont installés. La recherche winget privilégie les vrais
+  clients `shinchiro.mpv` / `mpv-player.mpv-CI.MSVC` (mpv.net ne fournit que
+  `mpvnet.exe`), vérifie que le binaire existe après installation et rafraîchit
+  le `PATH` de winget dans la session en cours.
+- **macOS : mpv géré est un bundle complet**. Le zip upstream contient
+  `mpv.tar.gz` (`mpv.app` avec `lib/` et `Frameworks/`) ; l'installation copie
+  désormais le binaire **et** ses bibliothèques, au lieu d'un exécutable isolé
+  qui ne trouvait pas ses dylibs.
+- **Notifications Windows réparées**. Le planificateur d'un `.exe` figé lance
+  `<exe> --scan-notifications` (avant, `-m freeflix_cli.notifications`
+  rouvrait le TUI) ; les chemins contenant des espaces sont correctement
+  cités pour `schtasks`, la tâche est créée avec `/it`, et un fallback
+  `NotifyIcon` remplace le toast WinRT quand l'AppUserModelID n'est pas
+  enregistré.
+- **Console Windows lisible**. Le code page passe en UTF-8 (65001) pour que
+  les cadres, flèches et affiches chafa ne plantent plus en cp1252 ; QuickEdit
+  est désactivé pour que la souris fonctionne, puis les modes d'origine sont
+  restaurés à la sortie.
+- **Téléchargements au bon endroit**. Le dossier « Téléchargements » est
+  demandé à l'OS (`platformdirs`) : OneDrive, dossiers localisés et
+  redirections sont respectés. `.temp` reçoit l'attribut Hidden sur Windows,
+  et les noms de fichiers sont raccourcis quand le chemin complet risquerait
+  de dépasser `MAX_PATH`. Le navigateur de téléchargements locaux retrouve
+  aussi mpv/VLC gérés et ne fait plus clignoter de console.
+- **`.exe` autonome : mise à jour honnête**. Il ne peut pas se remplacer
+  lui-même : FreeFlix affiche le lien de la nouvelle version et la consigne
+  de remplacer l'ancien fichier, au lieu d'un « mettre à jour ? » qui échoue.
+- **Divers Windows** : décodage UTF-8 de toutes les sondes sous-processus,
+  détection de chafa et des shims winget même si le `PATH` date d'avant
+  l'installation, et hints d'installation `winget` corrects pour mpv/VLC.
+- **CI macOS** : les tests Flatpak sont limités à Linux et les sockets IPC
+  utilisent un chemin court, ce qui supprime les échecs hebdomadaires sans
+  changer le comportement de l'application.
+
 ## 2.6.0
 
 - **Match : l'hôte de l'API est découvert tout seul (nouveau domaine

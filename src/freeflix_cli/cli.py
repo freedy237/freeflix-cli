@@ -6,6 +6,7 @@ off to `freeflix_cli.main` for the real run. This keeps those commands at
 a few tens of milliseconds instead of paying the whole import tax.
 """
 
+import os
 import sys
 
 
@@ -14,8 +15,18 @@ def _utf8_console() -> None:
 
     The Windows standalone binary inherits a cp1252 console; --doctor (box
     drawing, arrows) then crashed with UnicodeEncodeError before printing
-    anything. TUI output uses the same code path.
+    anything. TUI output uses the same code path. Setting Python's streams is
+    not enough for chafa: it writes UTF-8 block glyphs directly to the console,
+    which cp1252 would print as mojibake, so switch the console itself to 65001.
     """
+    if os.name == "nt":
+        try:
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.SetConsoleOutputCP(65001)
+            k32.SetConsoleCP(65001)
+        except Exception:
+            pass
     for stream in (sys.stdout, sys.stderr):
         try:
             enc = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
@@ -42,6 +53,7 @@ def print_help():
     print(f"  freeflix --doctor --sources  {t('live-test every source (search + resolve)')}")
     print(f"  freeflix --doctor --upload  {t('diagnostic + upload to Gist')}")
     print(f"  freeflix --verbose {t('print DEBUG to the console (also always logged)')}")
+    print(f"  freeflix --scan-notifications  {t('run the daily new-episode scan (used by the scheduler)')}")
     print(f"  freeflix --version {t('print the installed version')}")
     print(f"  freeflix --help    {t('this message')}")
     try:
@@ -64,6 +76,11 @@ def main():
     if args & {"--doctor", "-D"}:
         from .doctor import cli_doctor
         return cli_doctor()
+    if "--scan-notifications" in args:
+        # Frozen builds cannot run `freeflix.exe -m freeflix_cli.notifications`
+        # (that started the TUI). The scheduler calls this flag instead.
+        from .notifications import main as scan_notifications
+        return scan_notifications()
 
     # Everything else needs the app (TUI, setup, verbose logging…).
     from .main import main as run

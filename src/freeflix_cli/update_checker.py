@@ -148,6 +148,12 @@ def run_update(package_name: str = "freeflix-cli") -> bool:
 
     cmd, label = _upgrade_command(package_name)
     if not cmd:
+        if installer_kind() == "exe":
+            print_warning(t(
+                "This standalone FreeFlix.exe cannot update itself."))
+            print_info(t("Download the new .exe here, then replace the old one:")
+                       + " " + RELEASES_URL)
+            return False
         print_warning(t("Could not find how FreeFlix was installed."))
         print_info(t("Download the latest version here:") + " "
                    + RELEASES_URL)
@@ -278,6 +284,31 @@ def ask_update(package_name: str = "freeflix-cli") -> bool:
         return False
     current, latest = plan
 
+    # A frozen one-file .exe has no pip/uv/pipx install to upgrade: asking
+    # "update now?" then failing at download was a dead end. Show the only
+    # action that actually works (replace the .exe) instead.
+    if installer_kind() == "exe":
+        body = Text()
+        body.append(f"\n  {icon('up')}  {t('A new version of FreeFlix is available!')}\n\n",
+                    style="bold yellow")
+        body.append(f"     {t('Installed')}:  ", style="white")
+        body.append(f"{current}\n", style="bold red")
+        body.append(f"     {t('Latest')}:     ", style="white")
+        body.append(f"{latest}\n\n", style="bold green")
+        body.append("  " + t("This standalone FreeFlix.exe cannot update itself.")
+                    + "\n", style="bold white")
+        body.append("  " + t("Download the new .exe here, then replace the old one:")
+                    + "\n\n", style="white")
+        body.append(f"     {RELEASES_URL}\n", style="cyan")
+        console.print(Panel(
+            body,
+            title=f"[bold yellow]{icon('party')} {t('Update available')}[/bold yellow]",
+            subtitle=f"[dim]{current} → {latest}[/dim]",
+            border_style="yellow",
+            expand=False,
+        ))
+        return False
+
     body = Text()
     body.append(f"\n  {icon('up')}  {t('A new version of FreeFlix is available!')}\n\n",
                 style="bold yellow")
@@ -364,8 +395,19 @@ def check_update(package_name: str = "freeflix-cli") -> bool:
     body.append(f"{current}\n", style="bold red")
     body.append(f"     {t('Latest')}:     ", style="white")
     body.append(f"{latest}\n\n", style="bold green")
-    body.append(f"  {t('Upgrade with')}:\n\n", style="bold white")
-    body.append(f"     uv tool upgrade {package_name}\n", style="cyan")
+    if installer_kind() == "exe":
+        body.append("  " + t("This standalone FreeFlix.exe cannot update itself.")
+                    + "\n", style="bold white")
+        body.append("  " + t("Download the new .exe here, then replace the old one:")
+                    + "\n\n", style="white")
+        body.append(f"     {RELEASES_URL}\n", style="cyan")
+    else:
+        cmd, _label = _upgrade_command(package_name)
+        body.append(f"  {t('Upgrade with')}:\n\n", style="bold white")
+        if cmd:
+            body.append("     " + " ".join(cmd) + "\n", style="cyan")
+        else:
+            body.append(f"     {RELEASES_URL}\n", style="cyan")
 
     console.print(
         Panel(

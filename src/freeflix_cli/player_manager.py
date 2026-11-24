@@ -215,7 +215,8 @@ def _has_nvidia_dgpu() -> bool:
         _gpu_cache["nvidia"] = False
         return False
     try:
-        r = subprocess.run([nv, "-L"], capture_output=True, text=True, timeout=2)
+        r = subprocess.run([nv, "-L"], capture_output=True, text=True, timeout=2,
+                           encoding="utf-8", errors="replace")
         _gpu_cache["nvidia"] = r.returncode == 0 and "GPU" in r.stdout
     except Exception:
         _gpu_cache["nvidia"] = False
@@ -237,7 +238,8 @@ def _has_amd_dgpu() -> bool:
         _gpu_cache["amd"] = False
         return False
     try:
-        r = subprocess.run(["lspci"], capture_output=True, text=True, timeout=2)
+        r = subprocess.run(["lspci"], capture_output=True, text=True, timeout=2,
+                           encoding="utf-8", errors="replace")
         out = (r.stdout or "").lower()
         _gpu_cache["amd"] = (
             r.returncode == 0
@@ -652,7 +654,8 @@ def _ffprobe_quality(url: str, headers: dict, timeout: int = 12):
         cmd += ["-headers", hdr]
     cmd.append(url)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
         data = json.loads(r.stdout or "{}")
     except Exception:
         return None
@@ -959,8 +962,81 @@ try:
 except Exception:
     _ON_ANDROID = False
 
-DOWNLOAD_DIR = _android_download_dir() if _ON_ANDROID else os.path.expanduser("~/Downloads/FreeFlix")
+def _default_download_dir() -> str:
+    """The OS's real Downloads known folder + FreeFlix.
+
+    ``~/Downloads`` is wrong on Windows when OneDrive (or a locale-specific
+    folder) redirects Downloads; platformdirs asks the shell for CSIDL_DOWNLOADS,
+    so the app writes where Explorer and the user actually look.
+    """
+    try:
+        from platformdirs import user_downloads_dir
+        base = user_downloads_dir()
+    except Exception:
+        base = os.path.expanduser("~/Downloads")
+    if not base:
+        base = os.path.expanduser("~/Downloads")
+    return os.path.join(base, "FreeFlix")
+
+
+DOWNLOAD_DIR = (_android_download_dir() if _ON_ANDROID
+                else _default_download_dir())
 TEMP_DIR = os.path.join(DOWNLOAD_DIR, ".temp")
+_TEMP_HIDDEN = False
+
+
+def _hide_windows_temp_dir() -> None:
+    """Mark ``.temp`` Hidden on Windows (dot-prefix is not special there).
+
+    Without the attribute Explorer and OneDrive show/sync gigabytes of
+    in-progress fragments; POSIX already hides dotfolders.
+    """
+    global _TEMP_HIDDEN
+    if _TEMP_HIDDEN or not _is_windows():
+        return
+    try:
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(TEMP_DIR)
+        if attrs != 0xFFFFFFFF and not (attrs & 0x2):
+            ctypes.windll.kernel32.SetFileAttributesW(TEMP_DIR, attrs | 0x2)
+        _TEMP_HIDDEN = True
+    except Exception:
+        pass
+
+
+def _download_out_dir(subfolder: str = None) -> str:
+    """Final destination for a download (season subfolder aware).
+
+    The season folder gets its own budget (leaving room for the episode file)
+    so a long OneDrive Downloads path + long series name cannot push the
+    final path over the Windows MAX_PATH limit.
+    """
+    if subfolder:
+        return os.path.join(
+            DOWNLOAD_DIR,
+            _sanitize_filename(
+                subfolder, max_len=_path_budget(DOWNLOAD_DIR, reserve=64)),
+        )
+    return DOWNLOAD_DIR
+
+
+def _path_budget(base_dir: str, reserve: int = 24) -> int:
+    """Filename length budget that keeps a full Windows path under MAX_PATH.
+
+    ``_sanitize_filename`` caps names at 200 chars, but a long OneDrive
+    Downloads path + season folder + title can still exceed 260 and make every
+    download fail with error 206. Keep ~240 bytes for the directory + file.
+    """
+    if not _is_windows():
+        return 200
+    budget = 240 - len(os.path.abspath(base_dir)) - 1 - reserve
+    return max(40, min(200, budget))
+
+
+def _download_stem(title: str, subfolder: str = None) -> str:
+    """Sanitized filename stem, path-length aware on Windows."""
+    return _sanitize_filename(
+        title, max_len=_path_budget(_download_out_dir(subfolder)))
 
 
 def get_player_display(code: str, default: str = "manual") -> str:
@@ -1216,8 +1292,10 @@ def _stable_temp_dir(safe_title: str, subfolder: str = None) -> str:
     """
     key = safe_title if not subfolder else (
         _sanitize_filename(subfolder) + "__" + safe_title)
-    d = os.path.join(TEMP_DIR, key[:200])
+    limit = _path_budget(TEMP_DIR, reserve=48)
+    d = os.path.join(TEMP_DIR, key[:limit])
     os.makedirs(d, exist_ok=True)
+    _hide_windows_temp_dir()
     return d
 
 
@@ -1664,6 +1742,8 @@ def _install_hint(*tools: str) -> str:
     """Platform-appropriate installer command for a missing downloader."""
     if os.name == "nt":
         ids = {
+            "mpv": "shinchiro.mpv",
+            "vlc": "VideoLAN.VLC",
             "yt-dlp": "yt-dlp.yt-dlp",
             "ffmpeg": "Gyan.FFmpeg",
             "aria2": "aria2.aria2",
@@ -1876,7 +1956,8 @@ def _ffprobe_file_info(path: str, timeout: int = 45):
         "-of", "json", path,
     ]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
         data = json.loads(r.stdout or "{}")
         fmt = data.get("format") or {}
         dur = fmt.get("duration")
@@ -2251,9 +2332,8 @@ def _download_stream(
 
     Subtitles, if previously downloaded, are copied next to the video.
     """
-    safe_title = _sanitize_filename(title)
-    out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
-               if subfolder else DOWNLOAD_DIR)
+    out_dir = _download_out_dir(subfolder)
+    safe_title = _download_stem(title, subfolder)
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError as e:
@@ -2605,9 +2685,8 @@ def is_already_downloaded(title: str, subfolder: str = None) -> bool:
     True if a completed download for `title` already exists on disk (so a batch
     can skip it). Mirrors the path `_download_stream` writes to.
     """
-    out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
-               if subfolder else DOWNLOAD_DIR)
-    base = _sanitize_filename(title).lower()
+    out_dir = _download_out_dir(subfolder)
+    base = _download_stem(title, subfolder).lower()
     names = {n.lower() for n in _downloaded_names(out_dir)}
     return any(base + ext in names
                for ext in (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v"))
@@ -2621,9 +2700,8 @@ def is_download_usable(title: str, subfolder: str = None,
     a 30 s uqload ad/placeholder saved earlier must be re-downloaded, not
     silently skipped. Unknown duration (ffprobe missing) is treated as usable.
     """
-    out_dir = (os.path.join(DOWNLOAD_DIR, _sanitize_filename(subfolder))
-               if subfolder else DOWNLOAD_DIR)
-    base = _sanitize_filename(title).lower()
+    out_dir = _download_out_dir(subfolder)
+    base = _download_stem(title, subfolder).lower()
     path = None
     for name in _downloaded_names(out_dir):
         low = name.lower()
@@ -3053,7 +3131,8 @@ def match_stream_reachable(stream_url: str, headers: dict,
             proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.PIPE, text=True,
-                                    errors="replace", **_no_console_window())
+                                    encoding="utf-8", errors="replace",
+                                    **_no_console_window())
         except Exception:
             proc = None
         if proc is not None:
