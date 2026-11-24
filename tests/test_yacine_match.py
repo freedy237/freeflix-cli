@@ -532,8 +532,10 @@ def test_play_falls_back_to_another_source(monkeypatch):
     multi = {"name": "Multi", "url": "https://ok.example/m.m3u8", "headers": {}}
     results = {"https://dead.example/hd.m3u8": (False, "dead"),
                "https://ok.example/m.m3u8": (True, "")}
+    # _play skips the preflight for the first candidate (the pipe is the real
+    # proof) but still preflights the fallbacks.
     monkeypatch.setattr(player_manager, "match_stream_reachable",
-                        lambda url, h: results[url])
+                        lambda url, h=None, **kw: results[url])
     played = []
     monkeypatch.setattr(player_manager, "play_direct_stream",
                         lambda url, h, title, player_name=None:
@@ -699,3 +701,35 @@ def test_remote_config_failure_is_backed_off(monkeypatch, tmp_path):
     assert ym._remote_config_host() is None
     assert ym._remote_config_host() is None   # within the 5 min backoff
     assert len(calls) == 1
+
+
+def test_quality_menu_only_offers_sources_that_deliver(monkeypatch):
+    """HD/SD/Low answer 5XX while Multi streams: the menu must show Multi only.
+
+    The CDN publishes four quality names per fixture, but in practice the
+    shared host times out or returns 5XX. Listing dead rows made the user pick
+    one, hit an error, and get bounced through the remaining sources (and on
+    Windows the rebuilt list flickered). Probed once, in parallel, before the
+    menu.
+    """
+    from freeflix_cli.handlers import match as mh
+
+    alive = {"name": "Multi", "url": "https://ok.example/m.m3u8",
+             "headers": {}}
+    dead = [{"name": "HD", "url": "https://x.example/hd.m3u8", "headers": {}},
+            {"name": "SD", "url": "https://x.example/sd.m3u8", "headers": {}},
+            {"name": "Low", "url": "https://x.example/low.m3u8", "headers": {}}]
+    monkeypatch.setattr(mh, "_probe_stream",
+                        lambda s, timeout=18.0: s if s is alive else None)
+    kept = mh._filter_playable([*dead, alive])
+    assert kept == [alive]
+
+
+def test_quality_menu_never_hides_every_source(monkeypatch):
+    """If every probe fails (transient CDN outage) keep the list for a retry."""
+    from freeflix_cli.handlers import match as mh
+
+    streams = [{"name": "HD", "url": "u1", "headers": {}},
+               {"name": "Multi", "url": "u2", "headers": {}}]
+    monkeypatch.setattr(mh, "_probe_stream", lambda s, timeout=18.0: None)
+    assert mh._filter_playable(streams) == streams

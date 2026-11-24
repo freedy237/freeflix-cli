@@ -1040,6 +1040,15 @@ _FR = {
         'Les matchs utilisent mpv ou VLC ; lancement de mpv.',
     'The stream ended unexpectedly.':
         'Le flux s’est arrêté de façon inattendue.',
+    'The channel\'s CDN answers 404 for the video segments (temporary outage or geo-block). Try another source.':
+        'Le CDN de la chaîne répond 404 sur les segments vidéo (panne '
+        'temporaire ou blocage géographique). Essaie une autre source.',
+    "The channel's server refuses this stream (403). Try another match.":
+        'Le serveur de la chaîne refuse ce flux (403). Essaie un autre match.',
+    "The channel's server is unreachable right now.":
+        'Le serveur de la chaîne est injoignable pour le moment.',
+    'The channel sent an undecodable stream. Try another match.':
+        'La chaîne envoie un flux indécodable. Essaie un autre match.',
     'Playing in VLC…': 'Lecture dans VLC…',
     'VLC stopped early. Log:': 'VLC s’est arrêté trop tôt. Journal :',
     'Movies, Series & Anime': 'Films, Séries & Anime',

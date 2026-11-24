@@ -29,6 +29,9 @@ class _LiveProxy:
         # diagnostics. Must exist even before the first request (attribute
         # access on a proxy that was only preflighted used to raise).
         self.last_error: str | None = None
+        # Set when a master playlist was collapsed to its first media one, so
+        # 404 recovery re-fetches THAT media playlist (not the master).
+        self.master_url: str | None = None
 
     # ── upstream ─────────────────────────────────────────────────────
     @staticmethod
@@ -79,7 +82,8 @@ class _LiveProxy:
         fresh fetch before giving up on a 404.
         """
         try:
-            conn, resp = self._request(self.playlist_url, self.headers)
+            conn, resp = self._request(self.master_url or self.playlist_url,
+                                       self.headers)
             try:
                 text = resp.read().decode("utf-8", "replace")
             finally:
@@ -90,7 +94,7 @@ class _LiveProxy:
                 if ln.strip() and not ln.startswith("#")]
         if not segs:
             return
-        base = self.playlist_url
+        base = self.master_url or self.playlist_url
         for old, (_url, kind) in list(self.items.items()):
             if kind == "segment":
                 self.items.pop(old, None)
@@ -135,9 +139,50 @@ class _LiveProxy:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 return raw
+            text = self._resolve_master(text, url)
             return self._rewrite(text, base).encode("utf-8")
         finally:
             conn.close()
+
+    def _resolve_master(self, text: str, url: str) -> str:
+        """Collapse a MASTER playlist into its first playable media playlist.
+
+        YacineTV's non-"Multi" sources are served through a master manifest
+        whose variants point at *.php/.pdf paths (and often a backup host).
+        mpv's HLS demuxer then fails on those extensions ("Failed to
+        recognize file format" / "Failed to open"), which is what made
+        HD/SD/Low unpublishable while "Multi" (a plain media playlist)
+        worked. Proxying the FIRST variant that actually answers gives every
+        player a normal media playlist of local .ts URIs.
+
+        Returns the media playlist text, or the original text when this is
+        already a media playlist / no variant works (the caller then keeps
+        the per-URI proxying, which is the old behaviour).
+        """
+        if "#EXT-X-STREAM-INF" not in text:
+            return text  # already a media playlist
+        lines = [ln.strip() for ln in text.splitlines()]
+        candidates = [
+            lines[i] for i, ln in enumerate(lines[:-1])
+            if ln.startswith("#EXT-X-STREAM-INF")
+            and lines[i + 1] and not lines[i + 1].startswith("#")
+        ]
+        for rel in candidates[:4]:
+            media_url = urllib.parse.urljoin(url, rel)
+            try:
+                conn, resp = self._request(media_url, self.headers)
+                try:
+                    media = resp.read().decode("utf-8", "replace")
+                finally:
+                    conn.close()
+            except Exception:
+                continue
+            if "#EXTINF" not in media:
+                continue  # a nested master: keep the per-URI proxy instead
+            self.master_url = media_url
+            return media
+        return text
+
 
     # ── HTTP handler ────────────────────────────────────────────────
     def _make_handler(self):

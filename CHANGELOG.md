@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.7.2
+
+- **Menu Match : seulement les sources qui donnent réellement**. Le CDN publie
+  quatre qualités par match, mais en pratique seule « Multi » répond : HD/SD/
+  Low partagent un hôte qui expire ou renvoie 5XX. FreeFlix sondait la
+  première source, ouvrait le lecteur, échouait, puis retombait sur les
+  autres — d'où les allers-retours (et, sous Windows, la liste qui
+  disparaissait puis revenait). Les sources sont désormais sondées **en
+  parallèle avant le menu** avec le même moteur que la lecture (ffmpeg : les
+  playlists pointent vers des segments déguisés `.pdf`, refusés par le
+  démultiplexeur HLS natif). Ce qui est proposé joue ; on ne propose plus de
+  ligne morte. Un CDN entièrement muet n'efface jamais toutes les sources.
+- **Plus de ligne empoisonnée par un proxy cassé**. Le proxy HLS local
+  transmettait tel quel les en-têtes du CDN : en mode keep-alive, la
+  connexion restait en `Transfer-Encoding: chunked` avec le `Content-Length`
+  d'origine, ce qui désynchronisait le client et bloquait mpv (fenêtre figée
+  après un `403`, erreur `Failed to open http://127.0.0.1…`). Il répond
+  maintenant toujours une longueur connue. Les manifestes maîtres (variantes
+  `.php`/`.pdf`) sont résolus vers la première playlist média qui répond, au
+  lieu d'être transmis tels quels.
+- **Fini les échecs silencieux**. ffmpeg gardait ses erreurs dans
+  `/dev/null` : on ne voyait que « Failed to recognize file format » de mpv,
+  impossible à diagnostiquer. Son journal est maintenant lu et traduit en une
+  phrase actionnable (CDN en 404 / 403 / injoignable / flux indécodable), et
+  si ffmpeg meurt pendant la lecture, mpv est arrêté proprement après une
+  courte grâce au lieu de rester bloqué sur stdin (`Audio device underrun`
+  en boucle).
+- **932 tests**, ruff propre.
+
 ## 2.7.1
 
 - **Les binaires Windows de la 2.7.0 n'ont pas pu être publiés** : la

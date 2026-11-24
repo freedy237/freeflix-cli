@@ -7,6 +7,8 @@ falls back to the last snapshot only when the API is unreachable.
 from __future__ import annotations
 
 import re
+import subprocess
+import time
 
 from datetime import datetime, timedelta, timezone
 
@@ -230,6 +232,72 @@ def _quality_label(stream: dict) -> str:
             f"~{gb:.2f} {t('GB/h')}")
 
 
+def _probe_stream(stream: dict, timeout: float = 18.0) -> dict | None:
+    """Return the stream when ffmpeg receives real MPEG-TS data from it.
+
+    ffmpeg is the exact engine playback uses (segment extensions, headers,
+    live timestamps), so this predicts the player instead of guessing from an
+    HTTP status: a manifest can answer 200 and still yield no packets.
+    """
+    from ..player_manager import _resolve_tool
+
+    ffmpeg = _resolve_tool("ffmpeg")
+    if not ffmpeg:
+        return stream  # cannot probe without ffmpeg: keep the source
+    headers = stream.get("headers") or {}
+    hdr = "".join(
+        f"{k}: {str(v).replace(chr(13), ' ').replace(chr(10), ' ')}\r\n"
+        for k, v in headers.items() if v)
+    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+           "-headers", hdr, "-allowed_segment_extensions", "ALL",
+           "-extension_picky", "0", "-fflags", "+genpts+discardcorrupt",
+           "-i", stream["url"], "-c", "copy", "-f", "mpegts", "pipe:1"]
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except Exception:
+        return stream
+    got = 0
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline and got < 262144:
+            import select
+            ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+            if ready:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                got += len(chunk)
+    except Exception:
+        pass
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    return stream if got >= 262144 else None
+
+
+def _filter_playable(streams: list) -> list:
+    """Keep only sources that actually deliver data (probed in parallel)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if len(streams) == 1:
+        return streams
+    try:
+        with ThreadPoolExecutor(max_workers=min(4, len(streams))) as pool:
+            verdicts = list(pool.map(_probe_stream, streams))
+    except Exception:
+        return streams  # never let a probe failure hide every source
+    alive = [s for s in verdicts if s]
+    return alive or streams
+
+
 def _play(event: ym.MatchEvent, stream: dict, player_name: str = "",
           alternatives: list = None) -> None:
     """Play `stream`, falling back to another source if it is dead.
@@ -384,6 +452,20 @@ def handle_match() -> None:
 
         if not streams:
             print_warning(t("No stream available for this match."))
+            continue
+
+        # Probe every source ONCE, in parallel, before offering them. The CDN
+        # publishes four quality names per fixture but in practice only
+        # "Multi" answers: HD/SD/Low share a host that times out or returns
+        # 5XX, so listing them meant the user picked a dead row, got an error,
+        # and was silently bounced through the other sources. Offering only
+        # what really delivers data is why the menu now leads straight to a
+        # playing stream.
+        streams = _filter_playable(streams)
+        if not streams:
+            print_warning(t("No stream available for this match."))
+            print_info(t("This channel is often blocked or taken down; "
+                         "try another match."))
             continue
 
         options = [_quality_label(s) for s in streams]

@@ -2838,6 +2838,36 @@ def _play_dash_mpv(player_executable, stream_url, headers, title,
         _set_term_title("FreeFlix CLI")
 
 
+def _ffmpeg_failure_reason(log_path: str, stream_url: str = "") -> str:
+    """One short, actionable sentence from ffmpeg's own error log.
+
+    The pipe used to discard ffmpeg's stderr, so every failure surfaced as a
+    bare "Failed to recognize file format" from mpv and the user could not
+    tell a dead CDN from a broken build. The most common causes are mapped to
+    plain language; anything else shows ffmpeg's last error line.
+    """
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = [ln.strip() for ln in fh.readlines() if ln.strip()]
+    except OSError:
+        return ""
+    if not lines:
+        return ""
+    tail = " | ".join(lines[-4:]).lower()
+    if "404" in tail or "not found" in tail:
+        return t("The channel's CDN answers 404 for the video segments "
+                 "(temporary outage or geo-block). Try another source.")
+    if "403" in tail or "forbidden" in tail:
+        return t("The channel's server refuses this stream (403). "
+                 "Try another match.")
+    if any(k in tail for k in ("timed out", "timeout", "connection refused",
+                               "could not resolve", "name not known")):
+        return t("The channel's server is unreachable right now.")
+    if "invalid data" in tail or "decode" in tail:
+        return t("The channel sent an undecodable stream. Try another match.")
+    return lines[-1][:160]
+
+
 def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
                       title: str) -> bool:
     """ExoPlayer-like path: ffmpeg handles HLS, mpv plays the remuxed TS.
@@ -2877,16 +2907,61 @@ def _play_ffmpeg_pipe(player_executable, stream_url: str, headers: dict,
         # Windows (where a console child shares the console input buffer) and
         # swallow playback keys. The stdout pipe is inherited by mpv on both
         # platforms (subprocess duplicates the handle for the child).
-        ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL,
-                              **_no_console_window())
+        # ffmpeg's stderr goes to a LOG FILE, never a pipe: the old DEVNULL
+        # made every failure a silent "Reading from stdin... Failed to
+        # recognize file format" with no cause. The file also lets the
+        # watchdog below tell "CDN refuses the stream" from "mpv crashed".
+        ff_log_path = os.path.join(tempfile.gettempdir(),
+                                   "freeflix-ffmpeg.log")
+        try:
+            os.unlink(ff_log_path)
+        except OSError:
+            pass
+        ff_log = open(ff_log_path, "wb")
+        try:
+            ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE,
+                                  stderr=ff_log,
+                                  **_no_console_window())
+        finally:
+            ff_log.close()
         mpv = subprocess.Popen(mpv_cmd, stdin=ff.stdout, env=_nvidia_env(),
                                **_no_console_window())
         ff.stdout.close()
-        rc = mpv.wait()
+        # Watchdog: when ffmpeg dies, mpv blocks forever on its stdin ("Audio
+        # device underrun" loops, or a frozen window). Poll instead of a bare
+        # wait() and give up cleanly after a short grace so the caller can
+        # fall back to another source.
+        grace = 2.5
+        dead_since = None
+        while True:
+            try:
+                rc = mpv.wait(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if ff.poll() is not None:
+                dead_since = dead_since or time.monotonic()
+                try:
+                    if mpv.stdin is not None:
+                        mpv.stdin.close()
+                except Exception:
+                    pass
+                if time.monotonic() - dead_since > grace:
+                    mpv.terminate()
+                    try:
+                        mpv.wait(timeout=3)
+                    except Exception:
+                        mpv.kill()
+                    rc = 1
+                    break
         if rc != 0:
-            print_error(t("The stream ended unexpectedly."))
+            reason = _ffmpeg_failure_reason(ff_log_path, stream_url)
+            if reason:
+                print_warning(t("The stream ended unexpectedly."))
+                print_info(f"[dim]{reason}[/dim]")
+            else:
+                print_error(t("The stream ended unexpectedly."))
             return False
         print_success(t("Playback completed successfully!"))
         return True
