@@ -221,6 +221,116 @@ def detect_image_protocol() -> str:
 # Tri-state cache : None = not probed yet, True/False = probe result.
 _SIXEL_OK = None
 
+# DA1 reply: ESC [ ? <attr>;<attr>… c ; attribute 4 = sixel support.
+_DA1_RE = re.compile(rb"\x1b\[\?([0-9;]+)c")
+
+
+def _da1_has_sixel(buf: bytes) -> bool:
+    """Parse a Primary Device Attributes reply; True when it advertises sixel.
+
+    Pure function (unit-tested): ``ESC [ ? 62;4;… c`` → True, anything else
+    (no reply, DA1 without 4) → False.
+    """
+    m = _DA1_RE.search(buf or b"")
+    if not m:
+        return False
+    try:
+        return b"4" in m.group(1).split(b";")
+    except Exception:
+        return False
+
+
+def _win_console_read_da1(timeout: float = 0.4) -> bytes:
+    """Windows: query DA1 over the console and read the reply (best effort).
+
+    Windows has no termios, but it DOES have console VT modes: enable
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING on output, enable
+    ENABLE_VIRTUAL_TERMINAL_INPUT on input, write ``ESC [ c``, then read the
+    reply characters through msvcrt until *timeout*. The original console
+    modes are ALWAYS restored and nothing escapes — an unsupported console
+    simply returns b"" (→ blocks, same as the old fail-closed behaviour).
+
+    Isolated from the parser so the logic is testable on Linux.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    STD_INPUT_HANDLE = -10
+    STD_OUTPUT_HANDLE = -11
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004  # output
+    ENABLE_EXTENDED_FLAGS = 0x0080
+    ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
+    ENABLE_LINE_INPUT = 0x0002
+    ENABLE_ECHO_INPUT = 0x0004
+
+    try:
+        import msvcrt
+        import time as _time
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        h_in = k32.GetStdHandle(STD_INPUT_HANDLE)
+        h_out = k32.GetStdHandle(STD_OUTPUT_HANDLE)
+        if not h_in or not h_out:
+            return b""
+
+        out_mode = wintypes.DWORD()
+        in_mode = wintypes.DWORD()
+        if not k32.GetConsoleMode(h_in, ctypes.byref(in_mode)):
+            return b""
+        if not k32.GetConsoleMode(h_out, ctypes.byref(out_mode)):
+            return b""
+        orig_in, orig_out = in_mode.value, out_mode.value
+        changed_out = changed_in = False
+        try:
+            # The query itself is a VT escape: output processing must be on.
+            if not (orig_out & ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+                if k32.SetConsoleMode(
+                        h_out, orig_out | ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+                    changed_out = True
+            # Replies arrive as console INPUT, which needs VT input + raw mode.
+            new_in = (orig_in | ENABLE_VIRTUAL_TERMINAL_INPUT
+                      | ENABLE_EXTENDED_FLAGS) & ~(ENABLE_LINE_INPUT
+                                                  | ENABLE_ECHO_INPUT)
+            if new_in != orig_in:
+                if not k32.SetConsoleMode(h_in, new_in):
+                    return b""
+                changed_in = True
+            written = wintypes.DWORD()
+            query = ctypes.create_string_buffer(b"\x1b[c", 4)
+            if not k32.WriteFile(h_out, query, 3, ctypes.byref(written), None):
+                return b""
+            buf = b""
+            deadline = _time.monotonic() + timeout
+            while _time.monotonic() < deadline:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch in ("\x00", "\xe0"):
+                        # Special key: consume its scan code and ignore it.
+                        try:
+                            msvcrt.getwch()
+                        except Exception:
+                            pass
+                        continue
+                    buf += ch.encode("utf-8", "ignore")
+                    if buf.rstrip().endswith(b"c"):
+                        break
+                else:
+                    _time.sleep(0.005)
+            return buf
+        finally:
+            if changed_in:
+                try:
+                    k32.SetConsoleMode(h_in, orig_in)
+                except Exception:
+                    pass
+            if changed_out:
+                try:
+                    k32.SetConsoleMode(h_out, orig_out)
+                except Exception:
+                    pass
+    except Exception:
+        return b""
+
 
 def _terminal_supports_sixel() -> bool:
     """Ask the terminal (Primary Device Attributes) whether sixel is ACTIVE.
@@ -230,9 +340,15 @@ def _terminal_supports_sixel() -> bool:
     — it reflects whether sixel is actually enabled RIGHT NOW, not just that the
     emulator could do it. Cached; best-effort (any issue → False → blocks).
 
-    Must run on the MAIN thread (it briefly puts the tty in cbreak mode); the
-    inline-blocks path never calls it, and the full-screen render does so from
-    the main thread. Windows has no termios, so we trust Windows Terminal's env.
+    Windows: Windows Terminal 1.22+ implements sixel, and recent versions have
+    it ON by default — but an older/disabled console must not receive sixel
+    (it would paint garbage). So instead of trusting ``WT_SESSION``, we ASK the
+    console for DA1 exactly like on POSIX; a console that cannot answer keeps
+    the safe blocks fallback.
+
+    Must run on the MAIN thread (it briefly manipulates the tty/console modes);
+    the inline-blocks path never calls it, and the full-screen render does so
+    from the main thread.
     """
     global _SIXEL_OK
     if _SIXEL_OK is not None:
@@ -241,13 +357,11 @@ def _terminal_supports_sixel() -> bool:
     try:
         import sys
         if os.name == "nt":
-            # Windows has no termios, so DA1 can't be queried — and WT_SESSION
-            # only proves the terminal IS Windows Terminal, NOT that its
-            # opt-in "Experimental: Sixel" flag is enabled (off by default).
-            # Trusting it painted sixels that never render → blank preview
-            # pane and blank full-screen posters. Fail closed (blocks) ;
-            # users who really enabled Sixel can force poster mode "sixel".
-            _SIXEL_OK = False
+            # Only Windows Terminal can render sixel on Windows; skip the
+            # probe entirely on conhost/cmd.exe (no graphics layer).
+            if not os.environ.get("WT_SESSION"):
+                return _SIXEL_OK
+            _SIXEL_OK = _da1_has_sixel(_win_console_read_da1())
             return _SIXEL_OK
         import termios
         import tty
@@ -278,9 +392,7 @@ def _terminal_supports_sixel() -> bool:
                 termios.tcflush(fdin, termios.TCIFLUSH)  # drop any stray bytes
             except Exception:
                 pass
-        m = re.search(rb"\x1b\[\?([0-9;]+)c", buf)
-        if m:
-            _SIXEL_OK = b"4" in m.group(1).split(b";")
+        _SIXEL_OK = _da1_has_sixel(buf)
     except Exception:
         _SIXEL_OK = False
     return _SIXEL_OK
@@ -308,7 +420,8 @@ def sixel_hint() -> str | None:
                 "Settings → Edit Profile → Terminal Features → Sixel graphics.")
     if env.get("WT_SESSION"):
         return ("Windows Terminal can show sharper posters via Sixel — enable "
-                "\"Experimental: Sixel\" in its settings.")
+                "Sixel for the profile in its settings (WT 1.22+), then reopen "
+                "the terminal.")
     return None
 
 

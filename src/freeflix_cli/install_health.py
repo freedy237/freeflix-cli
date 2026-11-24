@@ -13,7 +13,7 @@ import os
 import sys
 
 # Version BAKED INTO THE CODE — bump together with pyproject.toml.
-CODE_VERSION = "2.6.1"
+CODE_VERSION = "2.7.0"
 
 
 def metadata_version() -> str | None:
@@ -37,6 +37,127 @@ def module_file() -> str:
 def is_frozen() -> bool:
     """True when running as a PyInstaller onefile binary."""
     return bool(getattr(sys, "frozen", False))
+
+
+# ── bundled reference data (Match clubs / channel logos) ──────────────
+# These JSON indexes live INSIDE the package (src/freeflix_cli/data/). A
+# PyInstaller build produced with --collect-submodules only (no
+# --collect-data) still starts, but silently loses Match's curated team names
+# and channel logos — a functional downgrade users cannot diagnose. The
+# helpers below let --doctor / startup report it instead of hiding it.
+# SINGLE SOURCE OF TRUTH for the reference data the app reads from the
+# package. Any file added to src/freeflix_cli/data/ must be listed here; a CI
+# test compares this manifest with the directory so a forgotten entry fails
+# the build instead of silently degrading a release. The value is the minimal
+# plausible size in bytes (an HTML error page must never be accepted as data).
+BUNDLED_DATA_FILES = {
+    "clubs.json": 5_000,           # real: ~22 KB, 441 clubs
+    "channel_logos.json": 200_000,  # real: ~2.3 MB, ~30k logos
+}
+
+
+def package_dir() -> str:
+    """Directory of the RUNNING freeflix_cli package (or of the frozen bundle).
+
+    In a PyInstaller onefile build this resolves inside ``_MEIPASS`` because
+    PyInstaller sets ``freeflix_cli.__file__`` there — the same anchor the
+    scraper uses to read its data files.
+    """
+    try:
+        import freeflix_cli
+        return os.path.dirname(getattr(freeflix_cli, "__file__", "") or "")
+    except Exception:
+        return ""
+
+
+def match_data_cache_dir() -> str:
+    """Persistent cache where an affected build self-heals the Match data.
+
+    Older standalone exes (built without --collect-data) repair themselves at
+    launch by downloading the two JSON indexes here; the loader is pointed at
+    that directory, so users never have to re-download the application.
+    """
+    try:
+        from platformdirs import user_data_dir
+        return os.path.join(
+            user_data_dir("freeflix-cli", "PaulExplorer"), "match-data")
+    except Exception:
+        return ""
+
+
+def _file_status(data_dir: str, name: str) -> tuple:
+    path = os.path.join(data_dir, name) if data_dir else ""
+    size = 0
+    try:
+        if path and os.path.isfile(path):
+            size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    return path, size
+
+
+def bundled_data_status(package_dir_override: str | None = None) -> dict:
+    """Per-file presence/size/source of the Match reference data.
+
+    Checks the package/bundle first, then the self-heal cache (an affected
+    build patches its loader to read from there). Passing *package_dir_override*
+    restricts the check to that directory (used by tests).
+    """
+    if package_dir_override is not None:
+        dirs = ((os.path.join(package_dir_override, "data")
+                 if package_dir_override else ""),)
+    else:
+        base = package_dir()
+        dirs = (
+            os.path.join(base, "data") if base else "",
+            match_data_cache_dir(),
+        )
+    out: dict = {}
+    for name in BUNDLED_DATA_FILES:
+        path, size = "", 0
+        for data_dir in dirs:
+            cand_path, cand_size = _file_status(data_dir, name)
+            if cand_size:
+                path, size = cand_path, cand_size
+                break
+            if not path:
+                path = cand_path
+        source = "package"
+        if size and path and package_dir_override is None:
+            base = package_dir()
+            in_package = bool(
+                base
+                and os.path.normcase(os.path.abspath(path)).startswith(
+                    os.path.normcase(os.path.abspath(
+                        os.path.join(base, "data"))))
+            )
+            source = "package" if in_package else "cache"
+        out[name] = {
+            "path": path,
+            "present": bool(size),
+            "size": size,
+            "min_bytes": BUNDLED_DATA_FILES[name],
+            "source": source,
+        }
+    return out
+
+
+def bundled_data_ok(package_dir_override: str | None = None) -> bool:
+    """True when this install/bundle carries Match's clubs + logos data."""
+    return all(
+        entry["present"]
+        for entry in bundled_data_status(package_dir_override).values()
+    )
+
+
+def bundled_data_missing(package_dir_override: str | None = None) -> list:
+    """Names of the reference-data files missing from this build ([] = OK)."""
+    return [
+        name
+        for name, entry in bundled_data_status(package_dir_override).items()
+        if not entry["present"]
+    ]
+
 
 
 def find_shims() -> list[str]:
@@ -96,6 +217,10 @@ def install_state() -> dict:
         "mismatch": bool(meta) and meta != CODE_VERSION,
         "shims": find_shims(),
         "installer": installer_kind(),
+        # A frozen build can be missing its bundled Match data; the report
+        # should show that instead of leaving users with silent bad names.
+        "bundle_data_ok": bundled_data_ok(),
+        "bundle_data_missing": bundled_data_missing(),
     }
     return state
 
@@ -109,9 +234,18 @@ def cleanup_hint() -> str:
     """
     kind = installer_kind()
     if kind == "frozen":
+        # The release workflow builds one target per OS/arch. Naming the
+        # Windows .exe unconditionally sent frozen-Linux/macOS users looking
+        # for an artifact that does not exist (the .exe is a Windows file).
+        asset = {
+            "win32": "freeflix-windows-x86_64.exe",
+            "cygwin": "freeflix-windows-x86_64.exe",
+            "darwin": "freeflix-macos-arm64",
+            "linux": "freeflix-linux-x86_64",
+        }.get(sys.platform, "standalone binary")
         return (
-            "Download the latest freeflix-windows-x86_64.exe from GitHub "
-            "Releases and replace the old one (close FreeFlix first)."
+            f"Download the latest {asset} from GitHub Releases and replace "
+            "the old one (close FreeFlix first)."
         )
     if kind == "pipx":
         cmd = "pipx uninstall freeflix-cli && pipx install freeflix-cli"

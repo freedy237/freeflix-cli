@@ -1,0 +1,115 @@
+name: Standalone binaries
+
+# The release workflow (binaries.yml) only runs when a release is published,
+# so a packaging regression — like the 2.6.1 Windows exe that shipped without
+# Match's clubs.json/channel_logos.json — could reach users unnoticed. This
+# workflow builds the SAME standalone binary for EVERY OS on every change that
+# can affect packaging, smoke-tests it, and verifies the embedded data with the
+# shared checker (scripts/check-binary-data.sh).
+#
+# DURABILITY: the checker derives the required file list from the repository,
+# so any data file added to src/freeflix_cli/data/ is automatically required in
+# every future build — there is no list to keep in sync, ever.
+#
+# Maintainers can also trigger it by hand (workflow_dispatch); it is the
+# workflow used by `scripts/rebuild-binaries.sh --windows-ci`.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/freeflix_cli/**"
+      - "data/**"
+      - "pyproject.toml"
+      - "scripts/build-binary.sh"
+      - "scripts/check-binary-data.sh"
+      - ".github/workflows/binaries.yml"
+      - ".github/workflows/standalone-binaries.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/freeflix_cli/**"
+      - "data/**"
+      - "pyproject.toml"
+      - "scripts/build-binary.sh"
+      - "scripts/check-binary-data.sh"
+      - ".github/workflows/binaries.yml"
+      - ".github/workflows/standalone-binaries.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }} standalone
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            sep: ":"
+          - os: windows-latest
+            name: windows-x86_64
+            sep: ";"
+          - os: macos-latest
+            name: macos-arm64
+            sep: ":"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # IMPORTANT: keep these flags identical to .github/workflows/binaries.yml
+      # and scripts/build-binary.sh — tests/test_win_parity.py pins the parity.
+      - name: Build the standalone binary (same recipe as the release)
+        shell: bash
+        env:
+          PYI_SEP: ${{ matrix.sep }}
+        run: >
+          uv run --with . --with pyinstaller --with lxml
+          pyinstaller --onefile --name freeflix
+          --collect-all curl_cffi
+          --collect-submodules freeflix_cli
+          --collect-data freeflix_cli
+          --hidden-import readchar
+          --copy-metadata readchar
+          --copy-metadata freeflix-cli
+          --copy-metadata curl_cffi
+          --add-data "data/source_portal.jsonc${PYI_SEP}data"
+          --add-data "data/selectors.jsonc${PYI_SEP}data"
+          src/freeflix_cli/__main__.py
+
+      - name: Smoke-test the binary
+        shell: bash
+        run: |
+          if [ -f dist/freeflix.exe ]; then BIN=dist/freeflix.exe; else BIN=dist/freeflix; fi
+          "$BIN" --version
+          # --version short-circuits before importing rich/curl_cffi; --doctor
+          # proves the bundle and its dependencies actually load.
+          "$BIN" --doctor > /dev/null
+
+      - name: Verify embedded reference data
+        shell: bash
+        run: |
+          if [ -f dist/freeflix.exe ]; then BIN=dist/freeflix.exe; else BIN=dist/freeflix; fi
+          bash scripts/check-binary-data.sh "$BIN"
+
+      - name: Upload the binary as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freeflix-${{ matrix.name }}
+          path: |
+            dist/freeflix
+            dist/freeflix.exe
+          if-no-files-found: error
+          retention-days: 14

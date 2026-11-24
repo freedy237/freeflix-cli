@@ -1,5 +1,66 @@
 # Changelog
 
+## 2.7.0
+
+- **Le binaire Windows n'est plus une version « au rabais »**. Le `.exe`
+  autonome était construit avec `--collect-submodules`, qui n'embarque que le
+  code Python : les données de référence `clubs.json` (441 équipes) et
+  `channel_logos.json` (29 786 chaînes) manquaient. Résultat : dans Match, les
+  noms d'équipes n'étaient plus traduits par le dictionnaire embarqué et aucun
+  logo n'était disponible, alors que l'installation `pip` les avait — c'est
+  exactement le « downgrade malgré les numéros de version » signalé. Le build
+  ajoute `--collect-data freeflix_cli` (release **et** build local), une étape
+  CI vérifie l'archive (`pyi-archive_viewer` + présence des deux JSON) pour
+  qu'une régression casse la CI au lieu de partir en release, et les anciens
+  binaires incomplets se **réparent seuls** : au lancement, les deux fichiers
+  sont téléchargés silencieusement dans le cache utilisateur et le loader Match
+  pointe dessus (`FREEFLIX_NO_MATCH_DATA_REPAIR=1` pour désactiver).
+- **Parité Windows : posters sixel et VLC en direct**. Sous Windows Terminal,
+  FreeFlix interroge maintenant le terminal (DA1 via les modes console VT) pour
+  savoir si le sixel est réellement actif, au lieu de supposer « non » : les
+  affiches passent en qualité photo quand le terminal le permet, sinon en blocs
+  comme avant. Et pour VLC en direct (Match), le remux ffmpeg qui alimentait le
+  pipe POSIX est servi à VLC en MPEG-TS sur `127.0.0.1` — même robustesse que
+  sous Linux, avec repli automatique sur le proxy HLS.
+- **`--doctor` devient LE rapport de diagnostic**. 13 domaines et ~110
+  contrôles : installation (mode, versions code/métadonnées, doublons de
+  lanceurs, données Match), système (OS/terminal/encodage/locale/Python/PATH/
+  permissions), configuration et disque, binaires et commande d'installation
+  exacte par OS, lecteurs mpv/VLC (résolution + démarrage réel), configuration
+  mpv et validité GLSL des shaders Anime4K, proxy local (bind + aller-retour),
+  réseau (DNS/TCP/TLS/certificats/proxy), sources et **lecteurs réels**
+  (résolution + premier segment, classés OK / MORT-FOURNISSEUR / BUG-FREEFLIX),
+  terminal et images, logs, état et cache, spécificités Windows, puis un
+  **VERDICT** PASS/WARN/FAIL par domaine et une liste d'actions concrètes.
+  Nouveaux drapeaux : `--report [fichier]` (rapport texte prêt à coller),
+  `--json`, `--players`, `--no-network` ; `--sources` et `--upload` conservés.
+  Un rapport complet prend ~4 s (2 s hors réseau), ne plante jamais (chaque
+  contrôle est isolé avec timeout) et n'affiche jamais un jeton.
+- **Un seul niveau de Retour, partout**. Corrigés : le menu qualité de Match
+  (Retour fermait Match au lieu de revenir à la liste des matchs), le flux
+  AniList (Retour depuis les lecteurs sautait la liste d'épisodes ; la fin de
+  lecture renvoyait à l'accueil au lieu des épisodes), les Nouveautés (Retour
+  depuis la langue ou depuis un épisode renvoyait à l'accueil au lieu de la
+  liste), Papystreaming (Retour depuis les saisons sautait les résultats) et
+  **Échap sur l'accueil** qui sélectionnait « Quitter » par accident (il ne
+  fait plus rien ; quitter reste un choix explicite). Le tout est verrouillé
+  par `tests/test_nav_coherence.py`.
+- **Lecteurs : uqload réparé, dood réparé, hôtes morts masqués**. uqload sert
+  le lecteur sur `/embed-<id>.html` et une page « premium » sans lecteur sur
+  `/<id>.html` : les deux formes sont maintenant essayées et la première qui
+  contient réellement le lecteur gagne (c'était la cause des « Lecteur 3 »
+  systématiquement injouables sur Anime-Sama). DoodStream reçoit son propre
+  domaine en `Referer` (le domaine source déclenchait un stub de 38 octets) et
+  `wishonly` est masqué : il refuse l'embed tiers sur tous les fichiers testés.
+- **Binaires autonomes vérifiés avant release** : nouveau workflow
+  `standalone-binaries.yml` (Linux/macOS/Windows sur chaque changement de
+  packaging, smoke test + vérification des données) et
+  `scripts/rebuild-binaries.sh` (`--local`, `--windows-ci`, `--verify-release`,
+  `--republish`) pour reconstruire et vérifier les binaires d'une release.
+- **929 tests** (dont 44 de parité Windows, 6 de cohérence de navigation et 84
+  pour `--doctor`), ruff et shellcheck propres, CI Ubuntu 3.9→3.13 + Windows
+  3.9/3.12 verte.
+
 ## 2.6.1
 
 - **Windows : mpv géré s'installe enfin complet**. L'archive upstream

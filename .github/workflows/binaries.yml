@@ -44,6 +44,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      # PyInstaller note: --collect-submodules ships Python modules ONLY. The
+      # package's data dir (src/freeflix_cli/data/clubs.json + channel_logos.json,
+      # used by Match for curated team names and channel logos) needs
+      # --collect-data; without it the standalone binary is a downgrade vs a
+      # wheel install (raw Arabic names, no logos).
       - name: Build with PyInstaller
         shell: bash
         env:
@@ -54,6 +59,7 @@ jobs:
           pyinstaller --onefile --name freeflix
           --collect-all curl_cffi
           --collect-submodules freeflix_cli
+          --collect-data freeflix_cli
           --hidden-import readchar
           --copy-metadata readchar
           --copy-metadata freeflix-cli
@@ -71,6 +77,16 @@ jobs:
           # --doctor so a bundle missing a real dependency fails here, not at
           # the user's first launch.
           "$BIN" --doctor > /dev/null
+
+      - name: Verify bundled package data
+        shell: bash
+        run: |
+          if [ -f dist/freeflix.exe ]; then BIN=dist/freeflix.exe; else BIN=dist/freeflix; fi
+          # One shared checker (scripts/check-binary-data.sh) so the release
+          # build, the local build and the Windows CI build cannot drift: it
+          # lists the PyInstaller archive and fails if Match's clubs/logos
+          # data (or the portal JSONC files) is missing.
+          bash scripts/check-binary-data.sh "$BIN"
 
       - name: Name the artifact
         shell: bash

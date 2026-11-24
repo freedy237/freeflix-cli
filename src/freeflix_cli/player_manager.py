@@ -2980,6 +2980,204 @@ def _play_vlc_pipe(player_executable, stream_url: str, headers: dict,
                     pass
 
 
+class _TsRelay:
+    """Serve an ffmpeg-produced MPEG-TS stream on localhost HTTP.
+
+    Why this exists: the POSIX path pipes ffmpeg's TS output straight into the
+    player's stdin. VLC's Windows stdin input is unreliable (the ``-`` input can
+    never start, leaving a black window), so VLC used to fall back to its own
+    HLS module — which is LESS robust than the ffmpeg remux (the CDN can stop
+    publishing segments and VLC then ends the playlist). This relay gives
+    Windows VLC the exact same ffmpeg remux as the POSIX pipe (UTF-8 headers,
+    ``.php``/``.pdf`` segments allowed, live timestamps normalised) over a
+    plain localhost HTTP stream, which VLC plays perfectly. Fully automatic:
+    used only when ffmpeg is present, with the local HLS proxy as fallback.
+    """
+
+    def __init__(self):
+        import queue as _queue
+        self._queue = _queue.Queue(maxsize=256)
+        self._closed = False
+        self.first_chunk_event = _threading.Event()
+        self._httpd = None
+        self._thread = None
+        self._port = 0
+
+    # ── HTTP server ───────────────────────────────────────────────
+    def start(self) -> bool:
+        import http.server
+
+        relay = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):  # silence the TUI
+                pass
+
+            def do_GET(self):  # noqa: N802 - http.server API
+                if self.path.split("?", 1)[0] != "/live.ts":
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp2t")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                try:
+                    while True:
+                        chunk = relay._queue.get(timeout=0.5)
+                        if chunk is None:
+                            break
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except Exception:  # player closed the connection
+                    pass
+
+        try:
+            self._httpd = http.server.ThreadingHTTPServer(
+                ("127.0.0.1", 0), _Handler)
+        except OSError:
+            return False
+        self._httpd.daemon_threads = True
+        self._port = self._httpd.server_address[1]
+        self._thread = _threading.Thread(
+            target=self._httpd.serve_forever, daemon=True,
+            name="freeflix-ts-relay")
+        self._thread.start()
+        return True
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._port}/live.ts"
+
+    # ── data feed ────────────────────────────────────────────────
+    def feed(self, chunk: bytes) -> None:
+        if not chunk or self._closed:
+            return
+        try:
+            self._queue.put(chunk, timeout=5)
+        except Exception:
+            return
+        self.first_chunk_event.set()
+
+    def finish(self) -> None:
+        """Signal end-of-stream to the player (it then exits cleanly)."""
+        self._closed = True
+        try:
+            self._queue.put_nowait(None)
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        self.finish()
+        httpd, thread = self._httpd, self._thread
+        self._httpd = self._thread = None
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+                httpd.server_close()
+            except Exception:
+                pass
+        if thread is not None:
+            try:
+                thread.join(timeout=2)
+            except Exception:
+                pass
+
+
+def _play_vlc_http_ts(player_executable, stream_url: str, headers: dict,
+                      title: str) -> bool:
+    """Windows: same ffmpeg remux as the stdin pipe, delivered over HTTP.
+
+    Returns True on a clean playback. Any failure (no ffmpeg, no data, VLC
+    error) returns False so the caller can fall back to the local HLS proxy —
+    the user never sees a difference.
+    """
+    ffmpeg = _resolve_tool("ffmpeg")
+    if not ffmpeg:
+        return False
+    hdr = "".join(
+        f"{k}: {str(v).replace(chr(13), ' ').replace(chr(10), ' ')}\r\n"
+        for k, v in (headers or {}).items() if v
+    )
+    ff_cmd = [
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-headers", hdr,
+        "-allowed_segment_extensions", "ALL", "-extension_picky", "0",
+        "-fflags", "+genpts+discardcorrupt",
+        "-i", stream_url, "-c", "copy",
+        "-muxdelay", "0", "-muxpreload", "0",
+        "-avoid_negative_ts", "make_zero", "-f", "mpegts", "pipe:1",
+    ]
+    vlc_log = os.path.join(tempfile.gettempdir(), "freeflix-vlc.log")
+    try:
+        os.unlink(vlc_log)
+    except OSError:
+        pass
+    relay = _TsRelay()
+    ff = None
+    try:
+        if not relay.start():
+            return False
+        vlc_cmd = [
+            player_executable, "--no-one-instance", "--intf", "dummy",
+            "--demux=ts", "--play-and-exit", "--quiet",
+            "--avcodec-hw=none", "--clock-synchro=0",
+            "--ignore-config", "--no-media-library", "--no-plugins-cache",
+            "--file-logging", f"--logfile={vlc_log}", "--log-verbose=1",
+            relay.url,
+        ]
+        ff = subprocess.Popen(ff_cmd, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL,
+                              **_no_console_window())
+
+        def _pump():
+            try:
+                while True:
+                    chunk = ff.stdout.read(65536)
+                    if not chunk:
+                        break
+                    relay.feed(chunk)
+            except Exception:
+                pass
+            finally:
+                relay.finish()
+
+        _threading.Thread(target=_pump, name="freeflix-ts-pump",
+                          daemon=True).start()
+        # Do not open a VLC window on a dead stream: if ffmpeg produces no
+        # data quickly (CDN refused / expired), let the caller use the proxy
+        # fallback instead of showing a black window.
+        if not relay.first_chunk_event.wait(4.0):
+            return False
+        vlc = subprocess.Popen(vlc_cmd, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL,
+                               **_no_console_window())
+        rc = vlc.wait()
+        if rc != 0:
+            print_error(t("Error running player:"))
+            return False
+        print_success(t("Playback completed successfully!"))
+        return True
+    except Exception as e:
+        print_error(f"{t('Error running player:')} {e}")
+        return False
+    finally:
+        if ff is not None:
+            try:
+                ff.terminate()
+                ff.wait(timeout=3)
+            except Exception:
+                try:
+                    ff.kill()
+                except Exception:
+                    pass
+        relay.close()
+
+
 def probe_hls_playable(stream_url: str, headers: dict = None,
                        timeout: int = 8):
     """Check that an HLS stream is *actually* playable, not just listed.
@@ -3260,9 +3458,16 @@ def play_direct_stream(stream_url: str, headers: dict, title: str,
         # its stdin input is unreliable (the '-' input may never start, so the
         # window stays black forever instead of exiting). Go straight to the
         # local HLS proxy there — VLC then talks plain localhost, which works.
-        if not _is_windows() and _resolve_tool("ffmpeg") and _play_vlc_pipe(
-                exe, stream_url, headers, title):
-            return True
+        if _resolve_tool("ffmpeg"):
+            if not _is_windows() and _play_vlc_pipe(
+                    exe, stream_url, headers, title):
+                return True
+            # Windows: VLC's stdin input is unreliable, but it plays a plain
+            # localhost HTTP stream perfectly. Same ffmpeg remux as the POSIX
+            # pipe, so live matches keep the pipe's robustness on Windows too.
+            if _is_windows() and _play_vlc_http_ts(
+                    exe, stream_url, headers, title):
+                return True
         # Fallback without ffmpeg: normal VLC + local HLS proxy.
         try:
             proxy, local_url = start_live_proxy(stream_url, headers)

@@ -615,17 +615,32 @@ def _theme_settings():
             return
 
 
+def _home_choice_is_valid(choice_idx) -> bool:
+    """True when the home menu returned a real row index.
+
+    ``select_from_list`` returns ``None`` when Esc is pressed and the menu is
+    configured with ``esc_selects_last=False`` (Home). Any non-index answer
+    must redraw Home; only an explicit row can reach the Exit branch.
+    """
+    return isinstance(choice_idx, int) and choice_idx >= 0
+
+
 def _browse_new_releases(items=None):
     """Show the background-fetched new releases with posters (chafa preview
     pane); selecting one jumps straight into its latest season. When the silent
-    background feed hasn't landed yet, wait for it (bounded) with a spinner."""
+    background feed hasn't landed yet, wait for it (bounded) with a spinner.
+
+    Back stack: players → episodes → language → releases list → home. Every
+    exit returns exactly one level up; leaving a release used to jump straight
+    to the home menu, skipping the list the user came from.
+    """
     from .cli_utils import select_with_preview, make_preview, crumb, spinner
     from .scraping import anime_sama
     from .handlers.playback import play_episode_flow
     from .player_manager import episode_badges
+    from . import recent
 
     if not items:
-        from . import recent
         with spinner(t("Checking for new releases...")):
             items = recent.wait_ready()
     if not items:
@@ -639,102 +654,110 @@ def _browse_new_releases(items=None):
             label += f" · {it['latest_episode']}"
         return label
 
-    previews = [
-        make_preview(
-            cover=it.get("poster", ""),
-            title=it["title"],
-            lines=[
-                f"{icon('sparkle')} {it['latest_season']}",
-                str(it.get("latest_episode") or ""),
-            ],
-            panel_title=t("New releases"),
+    while True:  # ── Releases list ──
+        # Keep the snapshot taken at entry: an opened release is dismissed for
+        # the home badge, and it must not vanish from the list under the user.
+        if not items:
+            return
+        previews = [
+            make_preview(
+                cover=it.get("poster", ""),
+                title=it["title"],
+                lines=[
+                    f"{icon('sparkle')} {it['latest_season']}",
+                    str(it.get("latest_episode") or ""),
+                ],
+                panel_title=t("New releases"),
+            )
+            for it in items
+        ]
+        labels = [_item_label(it) for it in items]
+        idx = select_with_preview(
+            labels, f"{icon('sparkle')} {t('New releases')}", previews)
+        if idx < 0 or idx >= len(items):
+            return
+        it = items[idx]
+
+        # Keep the selected artwork on screen while choosing language/episode.
+        from . import terminal_image
+        terminal_image.show_poster(
+            it.get("poster", ""),
+            info_lines=[it.get("latest_season", "")],
         )
-        for it in items
-    ]
-    labels = [_item_label(it) for it in items]
-    idx = select_with_preview(labels, f"{icon('sparkle')} {t('New releases')}", previews)
-    if idx >= len(items):
-        return
-    it = items[idx]
 
-    # Keep the selected artwork on screen while choosing language/episode.
-    from . import terminal_image
-    terminal_image.show_poster(
-        it.get("poster", ""),
-        info_lines=[it.get("latest_season", "")],
-    )
+        try:
+            with spinner(f"{t('Loading')} {it['latest_season']}…"):
+                season = anime_sama.get_season(it["season_url"])
+        except Exception:
+            print_warning(t(
+                "The source may be down or rate-limiting — try again in a moment."))
+            pause()
+            continue  # → releases list
+        langs = list(season.episodes.keys())
+        if not langs:
+            print_warning(t("No episodes found."))
+            pause()
+            continue  # → releases list
 
-    try:
-        with spinner(f"{t('Loading')} {it['latest_season']}…"):
-            season = anime_sama.get_season(it["season_url"])
-    except Exception:
-        print_warning(t("The source may be down or rate-limiting — try again in a moment."))
-        pause()
-        return
+        # The user has opened/seen this release: remove it from the home badge.
+        # A later episode gets a different key and reappears automatically.
+        recent.dismiss(it)
 
-    langs = list(season.episodes.keys())
-    if not langs:
-        print_warning(t("No episodes found."))
-        pause()
-        return
+        def _default_ep_idx(episodes, _it=it):
+            wanted = _it.get("latest_episode") or ""
+            wanted_num = recent._ep_num(wanted)
+            for i, ep in enumerate(episodes):
+                title = getattr(ep, "title", "")
+                if title == wanted or (
+                    wanted_num and recent._ep_num(title) == wanted_num
+                ):
+                    return i
+            return 0
 
-    # The user has opened/seen this release: remove it from the home badge.
-    # A later episode gets a different key and reappears automatically.
-    from . import recent
-    recent.dismiss(it)
-
-    def _default_ep_idx(episodes):
-        wanted = it.get("latest_episode") or ""
-        wanted_num = recent._ep_num(wanted)
-        for i, ep in enumerate(episodes):
-            title = getattr(ep, "title", "")
-            if title == wanted or (
-                wanted_num and recent._ep_num(title) == wanted_num
-            ):
-                return i
-        return 0
-
-    with crumb(it["title"]), crumb(it["latest_season"]):
-        while True:  # ── Language ──
-            if len(langs) == 1:
-                lang = langs[0]
-            else:
-                li = select_from_list(
-                    langs + [t("← Back")],
-                    f"{icon('globe')} {t('Select Language:')}",
-                    clear_on_back=False, inline=True,
-                )
-                if li >= len(langs):
-                    return
-                lang = langs[li]
-            episodes = season.episodes[lang]
-            ep_idx = _default_ep_idx(episodes)
-            while True:  # ── Episode ──
-                ep_labels = [
-                    e.title + episode_badges(it["title"], it["latest_season"], e.title)
-                    for e in episodes
-                ]
-                with crumb(lang):
-                    ep_idx = select_from_list(
-                        ep_labels + [t("← Back")],
-                        f"{icon('tv')} {t('Select Episode:')}",
-                        default_index=min(ep_idx, len(episodes) - 1),
+        with crumb(it["title"]), crumb(it["latest_season"]):
+            while True:  # ── Language ──
+                if len(langs) == 1:
+                    lang = langs[0]
+                else:
+                    li = select_from_list(
+                        langs + [t("← Back")],
+                        f"{icon('globe')} {t('Select Language:')}",
                         clear_on_back=False, inline=True,
                     )
-                if ep_idx >= len(episodes):
-                    break
-                play_episode_flow(
-                    provider_name="Anime-Sama",
-                    series_title=it["title"],
-                    season_title=it["latest_season"],
-                    episode=episodes[ep_idx],
-                    series_url=it["url"],
-                    season_url=it["season_url"],
-                    logo_url=it.get("poster"),
-                    headers={"Referer": anime_sama.website_origin},
-                )
-            if len(langs) == 1:
-                return
+                    if li >= len(langs):
+                        break  # → releases list
+                    lang = langs[li]
+                episodes = season.episodes[lang]
+                ep_idx = _default_ep_idx(episodes)
+                while True:  # ── Episode ──
+                    ep_labels = [
+                        e.title + episode_badges(
+                            it["title"], it["latest_season"], e.title)
+                        for e in episodes
+                    ]
+                    with crumb(lang):
+                        ep_idx = select_from_list(
+                            ep_labels + [t("← Back")],
+                            f"{icon('tv')} {t('Select Episode:')}",
+                            default_index=min(ep_idx, len(episodes) - 1),
+                            clear_on_back=False, inline=True,
+                        )
+                    if ep_idx >= len(episodes):
+                        break  # → language (or releases when single)
+                    play_episode_flow(
+                        provider_name="Anime-Sama",
+                        series_title=it["title"],
+                        season_title=it["latest_season"],
+                        episode=episodes[ep_idx],
+                        series_url=it["url"],
+                        season_url=it["season_url"],
+                        logo_url=it.get("poster"),
+                        headers={"Referer": anime_sama.website_origin},
+                    )
+                    # Back from the players → episode list (one level up).
+                if len(langs) == 1:
+                    break  # → releases list
+        # Loop back: the list is rebuilt (the opened item is now dismissed).
 
 
 def _show_about(version: str):
@@ -1542,9 +1565,11 @@ def _main():
             header=f"{icon('home')} {t('FreeFlix CLI - Home')}  •  v{_VERSION}",
             top=_dash,
             flush_input=True,        # drop the startup terminal-query burst first
-            esc_selects_last=True,   # Esc on Home = Exit (stray bytes are
-                                     # handled upstream : paste/reply swallow,
-                                     # 200 ms sequence drain, chafa --probe off)
+            # Esc on Home must NOT quit. Everywhere else Esc = "one level up";
+            # Home has no parent, and silently selecting the last row ("Exit")
+            # meant a stray Esc closed the app — it looked like a bug and lost
+            # whatever the user was about to do. Quitting is an explicit pick.
+            esc_selects_last=False,
         )
 
         if last_watch and choice_idx == resume_idx:
@@ -1652,6 +1677,12 @@ def _main():
 
         if choice_idx == settings_idx:
             _settings_menu(_VERSION)
+            continue
+
+        # No selection (Esc on Home, now that Esc no longer picks the Exit
+        # row): just redraw the home screen instead of falling through to the
+        # quit path below, which used to treat *any* unmatched answer as "Exit".
+        if not _home_choice_is_valid(choice_idx):
             continue
 
         # Exit

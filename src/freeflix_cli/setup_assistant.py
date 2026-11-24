@@ -21,6 +21,7 @@ import shutil
 import hashlib
 import platform
 import subprocess
+import threading
 import urllib.request
 from pathlib import Path
 from typing import Dict
@@ -995,6 +996,16 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
         tracker.data.pop("system_deps_ok_version", None)
         tracker._save_data()
 
+    # A frozen build can be produced without --collect-data, which silently
+    # drops Match's bundled club names / channel logos (the 2.6.1 Windows
+    # downgrade). Repair it INVISIBLY (background download into the user cache
+    # + point the loader at it) before the "all deps OK" short-circuit below:
+    # the user must never have to re-download the .exe to get working names.
+    try:
+        _ensure_match_data_async()
+    except Exception:
+        pass
+
     # Cheap idempotent repair that must not wait for a cache miss: an
     # upgraded release that adds Flatpak support has to expose the shim even
     # though system_deps_ok is already cached.
@@ -1045,6 +1056,13 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
                     if not _have(bins):
                         _winget_install(pkg_id, bins)
                         _refresh_winget_path()
+                        if label == "chafa":
+                            # terminal_image caches its PATH lookup for the
+                            # session: without this reset, posters stayed off
+                            # until the NEXT launch even though winget had just
+                            # installed chafa — a first-run Windows downgrade.
+                            from . import terminal_image
+                            terminal_image.reset_cache()
                 _ls.status(t("Finishing up…"), frac=1.0)
                 time.sleep(0.5)
 
@@ -1075,12 +1093,16 @@ def ensure_runtime_deps(auto_install: bool = True) -> bool:
 
 
 # ─── Downloads ────────────────────────────────────────────────────────
-def _download(url: str, dest: Path) -> bool:
+def _download(url: str, dest: Path, quiet: bool = False) -> bool:
     """Download `url` into `dest` atomically. Returns True on success.
 
     A failed/truncated transfer used to leave `dest` half-written; callers then
     saw a file and skipped the retry. Write to `.part` and only publish on a
     complete download.
+
+    ``quiet`` is used by invisible background repairs (Match reference data):
+    the user must not see a scary warning just because a download was skipped
+    while offline — the next launch retries.
     """
     part = dest.with_name(dest.name + ".part")
     try:
@@ -1094,8 +1116,152 @@ def _download(url: str, dest: Path) -> bool:
             part.unlink()
         except OSError:
             pass
-        print_warning(f"{t('Could not download')} {url} ({type(e).__name__}: {e})")
+        if not quiet:
+            print_warning(f"{t('Could not download')} {url} ({type(e).__name__}: {e})")
         return False
+
+
+# ─── Match reference data : invisible self-healing ────────────────────
+# The standalone binaries need src/freeflix_cli/data/clubs.json (~441 clubs)
+# and channel_logos.json (~30k logos); Match's loader reads them from
+# ``<package>/data``. A PyInstaller build produced with --collect-submodules
+# only (no --collect-data) — which is exactly what the released 2.6.1 Windows
+# exe was — loses them: team names silently fall back to machine translation
+# and logos disappear. That is the reported "Windows version does less than
+# Linux" downgrade.
+#
+# The build recipe is fixed (--collect-data), but the exes ALREADY in users'
+# hands must not require a re-download: on startup an affected build fetches
+# the two small JSON indexes from this repo into a persistent cache and points
+# the loader at that cache. No prompt, no warning, no user action — for the
+# user it is just FreeFlix launching. New builds already embed the data, so
+# this is a no-op for them.
+# Same manifest as install_health (single source of truth): file -> minimum
+# plausible size. Imported lazily below to keep module import order simple.
+def _match_data_files() -> dict:
+    from . import install_health
+    return install_health.BUNDLED_DATA_FILES
+
+
+MATCH_DATA_FILES = {
+    "clubs.json": 5_000,
+    "channel_logos.json": 200_000,
+}
+_MATCH_DATA_LOCK = threading.Lock()
+_MATCH_DATA_REPAIR_RUNNING = False
+
+
+def match_data_cache_dir() -> Path:
+    """Persistent cache for the self-healed Match reference data."""
+    from platformdirs import user_data_dir
+    return Path(user_data_dir("freeflix-cli", "PaulExplorer")) / "match-data"
+
+
+def _match_data_repair_needed() -> bool:
+    """True when the loader would run without its bundled reference data."""
+    try:
+        from . import install_health
+        return not install_health.bundled_data_ok()
+    except Exception:
+        return False
+
+
+def _point_loader_at(cache_dir: Path) -> bool:
+    """Make the Match scraper read clubs/logos from *cache_dir*."""
+    try:
+        from .scraping import yacine_match as ym
+        ym._DATA_DIR = cache_dir
+        # Drop a negative/partial cache so the next read re-parses.
+        try:
+            ym._DICT_CACHE.clear()
+        except Exception:
+            ym._DICT_CACHE = {}
+        return True
+    except Exception:
+        return False
+
+
+def _valid_match_data(path: Path, min_bytes: int) -> bool:
+    """A real JSON object large enough to be the shipped index (not an HTML
+    captive-portal/404 page)."""
+    try:
+        if not path.is_file() or path.stat().st_size < min_bytes:
+            return False
+        import json
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return isinstance(payload, dict) and bool(payload)
+    except Exception:
+        return False
+
+
+def ensure_match_data(timeout_probe: bool = False) -> bool:
+    """Ensure clubs.json + channel_logos.json are usable, downloading them
+    silently into the user cache when the build shipped without them.
+
+    Returns True when the loader can serve curated names/logos afterwards.
+    Best-effort and silent: offline users just keep the old behaviour and the
+    next launch retries. ``timeout_probe`` is accepted for signature symmetry
+    with the async wrapper's tests.
+    """
+    if not _match_data_repair_needed():
+        return True
+
+    cache = match_data_cache_dir()
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+
+    all_ok = True
+    files = _match_data_files()
+    for name, floor in files.items():
+        dest = cache / name
+        if _valid_match_data(dest, floor):
+            continue
+        url = f"{REPO_RAW}/src/freeflix_cli/data/{name}"
+        if not _download(url, dest, quiet=True):
+            all_ok = False
+            continue
+        if not _valid_match_data(dest, floor):
+            all_ok = False
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+
+    if all_ok and _point_loader_at(cache):
+        return True
+    return False
+
+
+def _ensure_match_data_async() -> None:
+    """Fire-and-forget repair so startup is never blocked or slowed down."""
+    global _MATCH_DATA_REPAIR_RUNNING
+    try:
+        if not _match_data_repair_needed():
+            return
+        if os.environ.get("FREEFLIX_NO_MATCH_DATA_REPAIR", "").lower() in (
+                "1", "true", "yes", "on"):
+            return
+    except Exception:
+        return
+    with _MATCH_DATA_LOCK:
+        if _MATCH_DATA_REPAIR_RUNNING:
+            return
+        _MATCH_DATA_REPAIR_RUNNING = True
+
+    def _work():
+        global _MATCH_DATA_REPAIR_RUNNING
+        try:
+            ensure_match_data()
+        except Exception:
+            pass
+        finally:
+            with _MATCH_DATA_LOCK:
+                _MATCH_DATA_REPAIR_RUNNING = False
+
+    threading.Thread(target=_work, name="freeflix-match-data",
+                     daemon=True).start()
 
 
 # Pins d'intégrité pour les fichiers versionnés téléchargés au setup

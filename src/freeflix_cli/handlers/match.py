@@ -390,31 +390,36 @@ def handle_match() -> None:
         options.append(f"{icon('sparkle')} {t('Auto (best quality)')}")
         options.append(t("← Back"))
         auto_idx = len(streams)
-        choice = select_from_list(
-            options,
-            f"{t('Choose the quality')}  ·  {event.home}  VS  {event.away}",
-            header=(f"{icon('football')} "
-                    f"{event.championship or t('Football')}"
-                    + (f"  ·  {_channel_label(event.channel)}"
-                       if event.channel else "")),
-        )
-        if choice < 0 or choice >= auto_idx:
+
+        # Back stack: players → quality → match list → home. Each screen goes
+        # exactly one level up: Esc/← Back on the quality screen used to close
+        # Match entirely, and Back in the player picker skipped the quality
+        # screen. Both now return to their real parent.
+        while True:
+            choice = select_from_list(
+                options,
+                f"{t('Choose the quality')}  ·  {event.home}  VS  {event.away}",
+                header=(f"{icon('football')} "
+                        f"{event.championship or t('Football')}"
+                        + (f"  ·  {_channel_label(event.channel)}"
+                           if event.channel else "")),
+            )
+            if choice < 0 or choice == auto_idx + 1:
+                break  # → match list (one level up)
             if choice == auto_idx:
                 stream = ym.pick_auto(streams)
                 if not stream:
                     print_warning(t("No stream available for this match."))
-                    continue
+                    break
                 _h, _mbps, _gb = _quality_metrics(stream)
                 print_info(f"{t('Auto quality:')} {stream.get('name', '?')}  ·  "
                            f"≥ {_mbps:.1f} {t('Mbps')}  ·  ~{_gb:.2f} "
                            f"{t('GB/h')}")
-                chosen = _choose_player(player_name, allow_cancel=True)
-                if chosen:
-                    _play(event, stream, chosen, streams)
             else:
-                return
-            continue
-
-        chosen = _choose_player(player_name, allow_cancel=True)
-        if chosen:
-            _play(event, streams[choice], chosen, streams)
+                stream = streams[choice]
+            chosen = _choose_player(player_name, allow_cancel=True)
+            if not chosen:
+                continue  # → quality screen (one level up)
+            _play(event, stream, chosen, streams)
+            break
+        continue  # → refreshed match list

@@ -300,6 +300,135 @@ def get_hls_link_embed4me(embed_url: str) -> str:
     return None
 
 
+_UQLOAD_ROOT_RE = re.compile(r"^(https?://[^/]+)/+(.*)$")
+
+
+def _uqload_page_candidates(url: str) -> list:
+    """Every page URL worth trying for one uqload embed.
+
+    uqload ships TWO layouts and the player is NOT always on the same one :
+    the modern ``/embed-<id>.html`` page carries the packed player, while the
+    legacy ``/<id>.html`` form can answer a 20 KB "premium/landing" page with
+    no player at all. Some file ids only answer on one of the two forms (the
+    site rotates), so trying the requested URL first then the alternate
+    form(s) is the only reliable way to reach the player. Pure (no network).
+
+    Real case that motivated this : every Anime-Sama "Lecteur 3" (uqload.vc)
+    resolved to None while ``/embed-…html`` served a perfectly valid signed
+    HLS — the extractor only fetched the stripped ``/…html`` form.
+    """
+    url = (url or "").strip()
+    if not url:
+        return []
+    out: list = []
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in out:
+            out.append(candidate)
+
+    _add(url)
+    if "/embed-" in url:
+        _add(url.replace("/embed-", "/", 1))
+        return out
+    match = _UQLOAD_ROOT_RE.match(url)
+    if not match:
+        return out
+    root = match.group(1)
+    tail = match.group(2).split("?", 1)[0].split("#", 1)[0].strip("/")
+    if re.fullmatch(r"[A-Za-z0-9]+(?:\.html)?", tail):
+        ident = tail[:-5] if tail.endswith(".html") else tail
+        _add(f"{root}/embed-{ident}.html")
+    embed = re.fullmatch(r"e/([A-Za-z0-9]+)", tail)
+    if embed:
+        _add(f"{root}/embed-{embed.group(1)}.html")
+    return out
+
+
+# Markers of a page that actually carries the uqload player: the modern page
+# ships a packed Dean Edwards block, older ones a signed master.m3u8 URL.
+_UQLOAD_PAGE_PLAYER_MARKERS = (
+    "master.m3u8",
+    "eval(function(p,a,c,k,e,d)",
+    "urlset",
+)
+
+
+def _uqload_looks_like_player(text: str) -> bool:
+    """True when an uqload page response carries the actual player."""
+    haystack = text or ""
+    return any(marker in haystack for marker in _UQLOAD_PAGE_PLAYER_MARKERS)
+
+
+def _fetch_uqload_page(page_url: str, page_headers: dict):
+    """GET one uqload page, preferring a response that carries the player.
+
+    The shared scraper session can hold Cloudflare / premium cookies for this
+    host, and uqload then serves a shorter "premium" page with no player at
+    all (20 KB vs the 38 KB real embed). The Cloudflare-aware cascade is tried
+    first, then a clean one-shot request with the embedder's Referer, and the
+    first answer that actually embeds the player wins.
+    """
+    shared = None
+    try:
+        shared = _get(page_url, headers=page_headers, impersonate="chrome")
+    except Exception:
+        shared = None
+    if shared is not None and _uqload_looks_like_player(
+            getattr(shared, "text", "") or ""):
+        return shared
+    clean = None
+    try:
+        clean = requests.get(page_url, headers=page_headers or None,
+                             impersonate="chrome", timeout=(8, 25))
+    except Exception:
+        clean = None
+    if clean is not None and _uqload_looks_like_player(
+            getattr(clean, "text", "") or ""):
+        return clean
+    return shared if shared is not None else clean
+
+
+def _uqload_stream_from_page(text: str):
+    """Extract the signed stream URL from one uqload page body.
+
+    Pure (deobfuscation only, no network) so the layout handling is testable.
+    """
+    text = text or ""
+    if not text:
+        return None
+    # uqload now ships the player JS packed (dean-edwards). Unpack first.
+    try:
+        code = deobfuscate(text)
+    except Exception:
+        code = text
+    haystack = (code or "") + "\n" + text
+    # `deobfuscate()` covers the base-N word-substitution packs; uqload switched
+    # to a plain Dean Edwards `eval(function(p,a,c,k,e,d)…)` block whose payload
+    # hides `file:"https://strm13.uqload.vc/…/master.m3u8?t=…"`. Without this
+    # second unpacker the row looked unplayable even though the page carries a
+    # perfectly valid signed HLS (this is the reader that kept failing).
+    if "eval(function(p,a,c,k,e,d)" in text and "master.m3u8" not in haystack:
+        try:
+            unpacked = unpack_dean_edwards(text)
+        except Exception:
+            unpacked = ""
+        if unpacked:
+            haystack = unpacked + "\n" + haystack
+
+    # Modern layout : a signed fsvid-family HLS `…/.urlset/master.m3u8?t=…`
+    # (served with the embed's Origin). Legacy : sources:[{file:"…mp4"}].
+    for pattern in (
+        r'file:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"',
+        r'sources:\s*\[\s*"([^"]+)"',
+        r'(https?://[^\s"\']+\.m3u8[^\s"\']*)',
+        r'(https?://[^\s"\']+\.mp4[^\s"\']*)',
+    ):
+        match = re.search(pattern, haystack)
+        if match:
+            return match.group(1)
+    return None
+
+
 def get_hls_link_uqload(url: str, headers: dict) -> str:
     """
     Extract HLS link from uqload players.
@@ -323,96 +452,42 @@ def get_hls_link_uqload(url: str, headers: dict) -> str:
     ref = headers.get("Referer") or headers.get("referer") or ""
     if ref and host not in ref:
         page_headers["Referer"] = ref
-    page_url = url.replace("embed-", "")
 
-    def _looks_like_player(t: str) -> bool:
-        return ("master.m3u8" in t or "eval(function(p,a,c,k,e,d)" in t)
+    for page_url in _uqload_page_candidates(url):
+        response = _fetch_uqload_page(page_url, page_headers)
+        if response is None:
+            continue
+        text = getattr(response, "text", "") or ""
+        if embed_is_placeholder(text):
+            return None  # locked / deleted file: the row must not look playable
+        if not _uqload_looks_like_player(text):
+            continue
+        candidate = _uqload_stream_from_page(text)
+        if not candidate:
+            continue
 
-    # One-shot request first: the shared scraper session carries Cloudflare /
-    # premium cookies for this host, and uqload then serves a shorter
-    # "premium" page with no player at all (20 KB vs the 38 KB real embed).
-    # A clean session with the embedder's Referer gets the real page.
-    response = None
-    try:
-        response = requests.get(page_url, headers=page_headers or None,
-                                impersonate="chrome", timeout=(8, 25))
-    except Exception:
-        response = None
-    if response is None or not _looks_like_player(
-            getattr(response, "text", "") or ""):
-        # The clean request did not carry a player (premium/anti-bot page):
-        # let the Cloudflare-aware cascade try, and keep whichever answer
-        # actually contains one.
-        try:
-            fallback = _get(page_url, headers=page_headers, impersonate="chrome")
-        except Exception:
-            fallback = None
-        if fallback is not None:
-            if response is None or _looks_like_player(
-                    getattr(fallback, "text", "") or ""):
-                response = fallback
-    if response is None:
-        return None
-    response.raise_for_status()
+        # uqload always serves a signed fsvid-family HLS, so it gets the same
+        # Referer/Cookie treatment as fsvid (some edges 403 otherwise). It also
+        # sometimes answers with a ~30 s ad/preview placeholder instead of the
+        # episode: the duration probe below rejects it so the caller falls back
+        # to another player, and the text says why (it also runs in the ad
+        # check).
+        set_stream_headers(candidate, {
+            "Referer": f"https://{host}/",
+            "Origin": f"https://{host}",
+        })
 
-    text = response.text
-    if embed_is_placeholder(text):
-        return None  # locked / deleted file: the row must not look playable
-    # uqload now ships the player JS packed (dean-edwards). Unpack first.
-    try:
-        code = deobfuscate(text)
-    except Exception:
-        code = text
-    haystack = (code or "") + "\n" + text
-    # `deobfuscate()` covers the base-N word-substitution packs; uqload switched
-    # to a plain Dean Edwards `eval(function(p,a,c,k,e,d)…)` block whose payload
-    # hides `file:"https://strm13.uqload.vc/…/master.m3u8?t=…"`. Without this
-    # second unpacker the row looked unplayable even though the page carries a
-    # perfectly valid signed HLS (this is the reader that kept failing).
-    if "eval(function(p,a,c,k,e,d)" in text and "master.m3u8" not in haystack:
-        try:
-            unpacked = unpack_dean_edwards(text)
-        except Exception:
-            unpacked = ""
-        if unpacked:
-            haystack = unpacked + "\n" + haystack
+        # Some uqload embeds answer with a ~30 s ad/preview placeholder instead
+        # of the episode. It still looks like a valid HLS master and would
+        # otherwise play. Probe the media playlist's total EXTINF and reject
+        # clearly-too-short streams so the caller falls back to another player.
+        if ".m3u8" in candidate:
+            duration = _hls_duration_seconds(candidate, headers)
+            if duration is not None and duration < 90:
+                return None
+        return candidate
 
-    # Modern layout : a signed fsvid-family HLS `…/.urlset/master.m3u8?t=…`
-    # (served with the embed's Origin). Legacy : sources:[{file:"…mp4"}].
-    candidate = None
-    for pat in (
-        r'file:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"',
-        r'sources:\s*\[\s*"([^"]+)"',
-        r'(https?://[^\s"\']+\.m3u8[^\s"\']*)',
-        r'(https?://[^\s"\']+\.mp4[^\s"\']*)',
-    ):
-        m = re.search(pat, haystack)
-        if m:
-            candidate = m.group(1)
-            break
-
-    if not candidate:
-        return None  # graceful : caller shows 'try another player'
-
-    # uqload always serves a signed fsvid-family HLS, so it gets the same
-    # Referer/Cookie treatment as fsvid (some edges 403 otherwise). It also
-    # sometimes answers with a ~30 s ad/preview instead of the episode: the
-    # duration probe below rejects it so the caller falls back to another
-    # player, and the text says why (it also runs in the ad check).
-    set_stream_headers(candidate, {
-        "Referer": f"https://{host}/",
-        "Origin": f"https://{host}",
-    })
-
-    # Some uqload embeds answer with a ~30 s ad/preview placeholder instead of
-    # the episode. It still looks like a valid HLS master and would otherwise
-    # play. Probe the media playlist's total EXTINF and reject clearly-too-short
-    # streams so the caller falls back to another player.
-    if ".m3u8" in candidate:
-        dur = _hls_duration_seconds(candidate, headers)
-        if dur is not None and dur < 90:
-            return None
-    return candidate
+    return None  # graceful : caller shows 'try another player'
 
 
 def _hls_duration_seconds(url: str, headers: dict = None,
@@ -919,7 +994,13 @@ def get_hls_link_dood(url: str, headers: dict, player_host: str = None) -> str |
     host = player_host or url_host
     if not host:
         return None
-    h.setdefault("Referer", f"https://{host}/")
+    # DoodStream accepts only its OWN domain (or no Referer) and answers a
+    # 38-byte "Video embed restricted for this domain" page — with HTTP 200 —
+    # for any other source domain (coflix.ac, french-stream.net…). The caller's
+    # Referer is the SOURCE page, so it must be OVERRIDDEN, not kept: leaving
+    # it made every dood row fall back to "no player found".
+    h["Referer"] = f"https://{host}/"
+    h.pop("Origin", None)
     resp = _get(url, headers=h, impersonate="chrome")
     try:
         resp.raise_for_status()
@@ -978,6 +1059,12 @@ _OFFLINE_HOST_MARKERS = (
     # countries (HK/ID/IR/TR/…) AND from here, on every path — the host is
     # gone, so Anime-Sama's "Lecteur 1" on many series can never play.
     "oneupload",
+    # 2026-11-24 audit : every wishonly.site /e/ embed served to coflix (two
+    # different titles, three file ids) answers the 38-byte stub "Video embed
+    # restricted for this domain" with HTTP 200 — with the source Referer, its
+    # own Referer, or none at all. The extractor type is right; the file host
+    # simply refuses third-party embedding, so the row could never play.
+    "wishonly",
 )
 
 

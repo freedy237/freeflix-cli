@@ -126,29 +126,32 @@ def handle_papystreaming():
         ]
         labels = [r["title"] + (f" ({r['year']})" if r["year"] else "") for r in results]
 
-        idx = select_with_preview(
-            labels, f"{icon('tv')} {t('Search Results:')}", previews
-        )
-        if idx >= len(results):  # Esc / Back
-            continue  # → search input (pre-filled, no refetch)
-        sel = results[idx]
-
-        is_movie = sel["media_type"] == "movie"
-        season = episode = None
-        with crumb(sel["title"]):
-            if not is_movie:
-                season, episode = _pick_season_episode(sel["title"], sel["year"])
-                if season is None:  # backed out of the season list
-                    continue  # → search input
-
-            _flow_goldenms_stream(
-                title=sel["title"],
-                tmdb_id=sel["tmdb_id"],
-                imdb_id="",
-                year=sel["year"] or None,
-                season=season,
-                episode=episode,
-                is_movie=is_movie,
-                logo_url=sel["poster"],
+        # Results stay a real level: backing out of the season/stream menus
+        # returns here (one level up), not to the search prompt.
+        while True:  # ── Results level ──
+            idx = select_with_preview(
+                labels, f"{icon('tv')} {t('Search Results:')}", previews
             )
-        # Back at the stream menu → search input again.
+            if idx >= len(results):  # Esc / Back
+                break  # → search input (pre-filled, no refetch)
+            sel = results[idx]
+
+            is_movie = sel["media_type"] == "movie"
+            season = episode = None
+            with crumb(sel["title"]):
+                if not is_movie:
+                    season, episode = _pick_season_episode(sel["title"], sel["year"])
+                    if season is None:  # backed out of the season list
+                        continue  # → results list (one level up)
+
+                _flow_goldenms_stream(
+                    title=sel["title"],
+                    tmdb_id=sel["tmdb_id"],
+                    imdb_id="",
+                    year=sel["year"] or None,
+                    season=season,
+                    episode=episode,
+                    is_movie=is_movie,
+                    logo_url=sel["poster"],
+                )
+            # Back at the stream menu → results list again (one level up).

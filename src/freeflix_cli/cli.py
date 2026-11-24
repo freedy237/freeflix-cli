@@ -44,14 +44,27 @@ def _version() -> str:
         return "dev"
 
 
+# Extra --doctor flags. Kept as a plain technical block (commands + short
+# English hints, same register as the report itself): they would need FR keys
+# in i18n.py, which is outside this change's write scope.
+_DOCTOR_HELP = (
+    "  freeflix --doctor --sources       live-test every source (search + players)",
+    "  freeflix --doctor --players       resolve real players + probe first segment",
+    "  freeflix --doctor --report [file] write a shareable .txt report",
+    "  freeflix --doctor --json          machine-readable report on stdout",
+    "  freeflix --doctor --upload        also upload the report as a secret Gist",
+    "  freeflix --doctor --no-network    skip network probes (fast, offline)",
+)
+
+
 def print_help():
     from .i18n import t
     print(t("freeflix — terminal streaming for movies / series / anime\n"))
     print(f"  freeflix           {t('launch the TUI')}")
     print(f"  freeflix --setup   {t('re-run setup : anime + interface language, then deps')}")
     print(f"  freeflix --doctor  {t('run system diagnostic')}")
-    print(f"  freeflix --doctor --sources  {t('live-test every source (search + resolve)')}")
-    print(f"  freeflix --doctor --upload  {t('diagnostic + upload to Gist')}")
+    for _doctor_line in _DOCTOR_HELP:
+        print(_doctor_line)
     print(f"  freeflix --verbose {t('print DEBUG to the console (also always logged)')}")
     print(f"  freeflix --scan-notifications  {t('run the daily new-episode scan (used by the scheduler)')}")
     print(f"  freeflix --version {t('print the installed version')}")
@@ -70,12 +83,14 @@ def main():
     if args & {"--version", "-V"}:
         print(_version())
         return 0
-    if args & {"--help", "-h"}:
-        print_help()
-        return 0
+    # --doctor first: `freeflix --doctor --help` must print the doctor flags,
+    # not the general help (the user is already in a diagnostic context).
     if args & {"--doctor", "-D"}:
         from .doctor import cli_doctor
         return cli_doctor()
+    if args & {"--help", "-h"}:
+        print_help()
+        return 0
     if "--scan-notifications" in args:
         # Frozen builds cannot run `freeflix.exe -m freeflix_cli.notifications`
         # (that started the TUI). The scheduler calls this flag instead.

@@ -268,39 +268,27 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
                     selected_lang = langs[lang_idx]
                 episodes = season.episodes[selected_lang]
 
-                start_ep_idx, found = 0, False
+                # Default cursor on the episode AniList says comes next.
+                start_ep_idx = 0
                 for i, ep in enumerate(episodes):
                     m = re.search(r"(\d+)", ep.title)
                     if m and int(m.group(1)) == next_episode_num:
-                        start_ep_idx, found = i, True
+                        start_ep_idx = i
                         break
-                if not found:
-                    print_warning(
-                        f"{t('Could not automatically find Episode')} {next_episode_num}. "
-                        f"{t('Please select:')}"
-                    )
-                    chosen = select_from_list(
-                        [e.title for e in episodes] + [t("← Back")],
-                        f"{icon('tv')} {t('Select Episode:')}",
-                        clear_on_back=False, inline=True,
-                    )
-                    if chosen >= len(episodes):
-                        break  # → language
-                    start_ep_idx = chosen
-                else:
-                    print_success(
-                        f"{t('Found Episode')} {next_episode_num}: "
-                        f"{episodes[start_ep_idx].title}"
-                    )
 
-                completed = False
+                # Auto-continues like before, but every exit from the player
+                # list now lands on the EPISODE list — one level up — instead
+                # of jumping to the language menu (Back) or straight home
+                # (end of playback). Back stack:
+                # players → episodes → language → season → results.
                 ep_idx = start_ep_idx
-                while True:  # ── Episode / play level ──
+                while True:  # ── Play level (auto-continues) ──
                     selected_episode = episodes[ep_idx]
 
                     def _anilist_update(ep=selected_episode):
                         m = re.search(r"(\d+)", ep.title)
-                        if m and anilist_client.update_progress(media_id, int(m.group(1))):
+                        if m and anilist_client.update_progress(
+                                media_id, int(m.group(1))):
                             print_success(t("AniList updated!"))
 
                     success = play_episode_flow(
@@ -314,18 +302,25 @@ def _anilist_anime_sama_flow(media_title, romaji_title, media_id, next_episode_n
                         headers={"Referer": anime_sama.website_origin},
                         anilist_callback=_anilist_update,
                     )
-                    if not success:
-                        break  # → language menu
-                    if ep_idx + 1 < len(episodes) and select_from_list(
-                        [t("Yes"), t("No")],
-                        f"{t('Play next:')} {episodes[ep_idx + 1].title} ?",
-                        clear_on_back=False, inline=True,
-                    ) == 0:
+                    if success and ep_idx + 1 < len(episodes) and \
+                            select_from_list(
+                                [t("Yes"), t("No")],
+                                f"{t('Play next:')} {episodes[ep_idx + 1].title} ?",
+                                clear_on_back=False, inline=True,
+                            ) == 0:
                         ep_idx += 1
                         continue
-                    completed = True
-                    break
-                if completed:
-                    return  # playback finished → leave the provider
+
+                    # Back from the players, or the episode finished: show the
+                    # episode list (one level up) so the flow stays coherent.
+                    chosen = select_from_list(
+                        [e.title for e in episodes] + [t("← Back")],
+                        f"{icon('tv')} {t('Select Episode:')}",
+                        default_index=min(ep_idx, len(episodes) - 1),
+                        clear_on_back=False, inline=True,
+                    )
+                    if chosen >= len(episodes):
+                        break  # → language (one level up)
+                    ep_idx = chosen
                 if len(langs) == 1:
                     break  # single language → season menu
