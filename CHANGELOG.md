@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.7.1
+
+- **Les binaires Windows de la 2.7.0 n'ont pas pu être publiés** : la
+  vérification des données embarquées lisait la liste d'archive PyInstaller
+  avec le séparateur POSIX (`freeflix_cli/data/…`), alors que Windows
+  l'imprime comme un `repr` Python avec des doubles antislashs
+  (`'freeflix_cli\\data\\clubs.json'`) et des CRLF. Résultat : un binaire
+  parfaitement constitué était déclaré « données manquantes », et les assets
+  Windows/macOS de la 2.7.0 n'ont jamais été attachés. Le vérificateur
+  normalise désormais la liste (antislashs → `/`, séparateurs doublés
+  compactés, `\r` retirés) et passe un chemin `cygpath` à l'outil d'archive ;
+  un test rejoue une liste au format Windows sur le vrai script.
+- **CI Windows réparée** : un test de `--doctor` cherchait `chafa` en
+  minuscules dans la commande de correction, alors que Windows affiche
+  `winget install --id hpjansson.Chafa …`. La comparaison est insensible à la
+  casse.
+- **Preuve de bout en bout** : le workflow « Standalone binaries » valide
+  maintenant les 3 OS (Linux, Windows, macOS) et confirme que l'exe Windows
+  embarque `clubs.json`, `channel_logos.json`, `source_portal.jsonc` et
+  `selectors.jsonc` — la parité avec l'installation `pip` est vérifiée avant
+  chaque release.
+- **Match vérifié en réel** : 19 événements, 4 flux par match, tous joignables.
+  `Multi` se décode directement ; `HD`/`SD`/`Low` passent par le remux ffmpeg
+  de l'application (les playlists pointent vers des segments déguisés `.pdf`,
+  refusés par le démultiplexeur HLS natif de mpv) — vérifié : 6 s de H.264/AAC
+  décodés sans erreur sur HD et SD. Le même chemin est utilisé sous Windows
+  (pipe ffmpeg → mpv, ou relais MPEG-TS → VLC).
+
 ## 2.7.0
 
 - **Le binaire Windows n'est plus une version « au rabais »**. Le `.exe`
